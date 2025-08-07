@@ -2399,12 +2399,11 @@ def create_advanced_notifications_menu(user_id) -> types.InlineKeyboardMarkup:
     markup = types.InlineKeyboardMarkup(row_width=2)
     
     markup.row(
-        create_animated_button("🔔 تحديد نوع الإشعارات", "notification_types", "🔔"),
-        create_animated_button("⏰ توقيت الإشعارات", "notification_timing", "⏰")
+        create_animated_button("⏰ توقيت الإشعارات", "notification_timing", "⏰"),
+        create_animated_button("🎯 نسبة النجاح المطلوبة", "success_threshold", "🎯")
     )
     
     markup.row(
-        create_animated_button("🎯 نسبة النجاح المطلوبة", "success_threshold", "🎯"),
         create_animated_button("📋 سجل الإشعارات", "notification_logs", "📋")
     )
     
@@ -2414,36 +2413,7 @@ def create_advanced_notifications_menu(user_id) -> types.InlineKeyboardMarkup:
     
     return markup
 
-def create_notification_types_menu(user_id) -> types.InlineKeyboardMarkup:
-    """إنشاء قائمة تحديد أنواع الإشعارات"""
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    settings = get_user_advanced_notification_settings(user_id)
-    
-    # الأنواع الستة للإشعارات
-    notification_types = [
-        ('support_alerts', '🟢 إشعارات مستوى الدعم'),
-        ('breakout_alerts', '🔴 إشعارات اختراق المستويات'),
-        ('trading_signals', '⚡ إشارات التداول (صفقات)'),
-        ('economic_news', '📰 الأخبار الاقتصادية'),
-        ('candlestick_patterns', '🕯️ أنماط الشموع'),
-        ('volume_alerts', '📊 إشعارات حجم التداول')
-    ]
-    
-    for setting_key, display_name in notification_types:
-        is_enabled = settings.get(setting_key, True)
-        button_text = f"✅ {display_name}" if is_enabled else f"⚪ {display_name}"
-        markup.row(
-            types.InlineKeyboardButton(
-                button_text, 
-                callback_data=f"toggle_notification_{setting_key}"
-            )
-        )
-    
-    markup.row(
-        create_animated_button("🔙 العودة لإعدادات التنبيهات", "advanced_notifications_settings", "🔙")
-    )
-    
-    return markup
+
 
 def create_success_threshold_menu(user_id) -> types.InlineKeyboardMarkup:
     """إنشاء قائمة تحديد نسبة النجاح"""
@@ -2957,57 +2927,46 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         # مصدر البيانات
         data_source = analysis.get('source', 'MT5 + Gemini AI') if analysis else 'تحليل متقدم'
         
-        # بناء رسالة محسنة مستوحاة من التحليل اليدوي
+        # بناء رسالة إشعار مقصرة مشابهة للتحليل اليدوي
         action_emoji = "🟢" if action == 'BUY' else "🔴" if action == 'SELL' else "🟡"
         
-        message = f"""
-🚨 **إشارة تداول آلية** {emoji}
+        message = f"""🚀 **إشعار تداول** {emoji}
 
-📊 **معلومات الرمز:**
-• **الرمز:** {symbol}
-• **الاسم:** {symbol_info['name']}
-• **النوع:** {symbol_info.get('type', 'مالي')}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💱 {symbol} | {symbol_info['name']} {emoji}
+📡 مصدر البيانات: {data_source}
+💰 السعر الحالي: {current_price:,.5f} 
+⏰ وقت التحليل: {formatted_time}
 
-{action_emoji} **التوصية:** {action}
-💪 **قوة الإشارة:** {success_rate:.1f}%
-🧠 **المصدر:** {data_source}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ إشارة التداول الرئيسية
 
-💰 **البيانات السعرية:**"""
+{action_emoji} نوع الصفقة: {action}
+📍 سعر الدخول المقترح: {current_price:,.5f}"""
         
-        if current_price and current_price > 0:
-            message += f"\n• **السعر الحالي:** ${current_price:.5f}"
+        if target and target > 0:
+            profit_pct = ((target/current_price-1)*100) if current_price > 0 else 0
+            message += f"\n🎯 الهدف: {target:,.5f} ({profit_pct:+.1f}%)"
+        
+        if stop_loss and stop_loss > 0:
+            loss_pct = ((stop_loss/current_price-1)*100) if current_price > 0 else 0
+            message += f"\n🛑 وقف الخسارة: {stop_loss:,.5f} ({loss_pct:+.1f}%)"
             
-            if target and target > 0:
-                profit_pct = ((target/current_price-1)*100) if current_price > 0 else 0
-                message += f"\n• **الهدف:** ${target:.5f} ({profit_pct:+.1f}%)"
-            
-            if stop_loss and stop_loss > 0:
-                loss_pct = ((stop_loss/current_price-1)*100) if current_price > 0 else 0
-                message += f"\n• **وقف الخسارة:** ${stop_loss:.5f} ({loss_pct:+.1f}%)"
-        else:
-            message += "\n• السعر: غير متوفر حالياً"
-
         message += f"""
+✅ نسبة نجاح الصفقة: {success_rate:.0f}%
 
-👤 **سياق المستخدم:**
-• **نمط التداول:** {'⚡ سكالبينغ سريع' if trading_mode == 'scalping' else '📈 تداول طويل الأمد'}
-• **رأس المال:** ${capital:,.0f}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 توصيات إدارة المخاطر
 
-💡 **التوصية المخصصة:**
-• **حجم الصفقة المقترح:** ${position_size:.0f}
-• **نسبة من رأس المال:** {(position_size/capital*100):.1f}%
-• **نسبة المخاطرة:** {risk_description}
+💡 حجم المركز المقترح:
+• {'للسكالبينغ: 0.01 لوت (مخاطرة منخفضة)' if trading_mode == 'scalping' else 'للمدى الطويل: 0.005 لوت (مخاطرة محافظة)'}
 
-🧠 **تحليل الذكاء الاصطناعي:**
-{analysis.get('ai_analysis', 'تحليل فني متقدم باستخدام الذكاء الاصطناعي') if analysis else 'تحليل فني متقدم'}
+⚠️ تحذيرات هامة:
+• راقب الأحجام عند نقاط الدخول
+• فعّل وقف الخسارة فور الدخول
 
-🕐 **معلومات التحديث:**
-• **التوقيت:** {formatted_time}
-• **المصدر:** مراقبة آلية v1.2.0
-
-───────────────────────
-🤖 **بوت التداول v1.2.0 - إشعار ذكي مخصص**
-        """
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 **بوت التداول v1.2.0 - إشعار ذكي**"""
         
         # إنشاء أزرار التقييم
         markup = create_feedback_buttons(trade_id) if trade_id else None
@@ -6046,36 +6005,7 @@ def handle_advanced_notifications_settings(call):
         logger.error(f"[ERROR] خطأ في إعدادات التنبيهات المتقدمة: {e}")
         bot.answer_callback_query(call.id, "حدث خطأ في عرض الإعدادات", show_alert=True)
 
-@bot.callback_query_handler(func=lambda call: call.data == "notification_types")
-def handle_notification_types(call):
-    """معالج تحديد أنواع الإشعارات"""
-    try:
-        user_id = call.from_user.id
-        settings = get_user_advanced_notification_settings(user_id)
-        
-        enabled_count = sum(1 for key in ['support_alerts', 'breakout_alerts', 'trading_signals', 
-                                        'economic_news', 'candlestick_patterns', 'volume_alerts'] if settings.get(key, True))
-        
-        message_text = f"""
-🔔 **تحديد أنواع الإشعارات**
 
-📊 **المفعل حالياً:** {enabled_count}/6 أنواع
-
-اضغط على النوع لتفعيله/إلغائه:
-✅ = مفعل | ⚪ = غير مفعل
-        """
-        
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=message_text,
-            parse_mode='Markdown',
-            reply_markup=create_notification_types_menu(user_id)
-        )
-        
-    except Exception as e:
-        logger.error(f"[ERROR] خطأ في تحديد أنواع الإشعارات: {e}")
-        bot.answer_callback_query(call.id, "حدث خطأ", show_alert=True)
 
 @bot.callback_query_handler(func=lambda call: call.data == "success_threshold")
 def handle_success_threshold(call):
@@ -6107,32 +6037,7 @@ def handle_success_threshold(call):
         logger.error(f"[ERROR] خطأ في تحديد نسبة النجاح: {e}")
         bot.answer_callback_query(call.id, "حدث خطأ", show_alert=True)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("toggle_notification_"))
-def handle_toggle_notification(call):
-    """معالج تبديل نوع التنبيه"""
-    try:
-        logger.debug(f"[DEBUG] تم استدعاء معالج toggle_notification مع البيانات: {call.data}")
-        user_id = call.from_user.id
-        setting_key = call.data.replace("toggle_notification_", "")
-        logger.debug(f"[DEBUG] setting_key المستخرج: {setting_key}")
-        
-        settings = get_user_advanced_notification_settings(user_id)
-        current_value = settings.get(setting_key, True)
-        new_value = not current_value
-        
-        update_user_advanced_notification_setting(user_id, setting_key, new_value)
-        
-        status = "تم تفعيل" if new_value else "تم إلغاء"
-        display_name = get_notification_display_name(setting_key)
-        
-        bot.answer_callback_query(call.id, f"✅ {status} {display_name}")
-        
-        # تحديث القائمة
-        handle_notification_types(call)
-        
-    except Exception as e:
-        logger.error(f"[ERROR] خطأ في تبديل التنبيه: {e}")
-        bot.answer_callback_query(call.id, "حدث خطأ", show_alert=True)
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("set_threshold_"))
 def handle_set_threshold(call):
