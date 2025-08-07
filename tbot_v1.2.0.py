@@ -2947,8 +2947,12 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
             logger.info(f"[SUCCESS] تم الحصول على تحليل Gemini جديد للإشعار - الرمز {symbol}")
         except Exception as ai_error:
             logger.warning(f"[WARNING] فشل تحليل Gemini للإشعار - الرمز {symbol}: {ai_error}")
+        
+        # التأكد من أن fresh_analysis هو dictionary صحيح
+        if not fresh_analysis or not isinstance(fresh_analysis, dict):
+            logger.warning(f"[WARNING] تحليل Gemini غير صحيح، استخدام التحليل الاحتياطي للرمز {symbol}")
             # استخدام التحليل الموجود أو إنشاء تحليل بديل
-            fresh_analysis = analysis or {
+            fresh_analysis = analysis if analysis and isinstance(analysis, dict) else {
                 'action': action,
                 'confidence': success_rate,
                 'reasoning': [f'إشعار تداول آلي للرمز {symbol}'],
@@ -2960,9 +2964,43 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
             }
         
         # استخدام نفس دالة التنسيق المستخدمة في التحليل اليدوي
-        message = gemini_analyzer.format_comprehensive_analysis_v120(
-            symbol, symbol_info, price_data, fresh_analysis, user_id
-        )
+        try:
+            message = gemini_analyzer.format_comprehensive_analysis_v120(
+                symbol, symbol_info, price_data, fresh_analysis, user_id
+            )
+        except Exception as format_error:
+            logger.error(f"[ERROR] فشل في تنسيق رسالة الإشعار للرمز {symbol}: {format_error}")
+            # رجوع للرسالة البسيطة في حالة الخطأ
+            action_emoji = "🟢" if action == 'BUY' else "🔴" if action == 'SELL' else "🟡"
+            message = f"""🚨 **إشعار تداول آلي** {emoji}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💱 {symbol} | {symbol_info['name']} {emoji}
+📡 مصدر البيانات: {data_source}
+💰 السعر الحالي: {current_price:,.5f} 
+⏰ وقت التحليل: {formatted_time}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ إشارة التداول الرئيسية
+
+{action_emoji} نوع الصفقة: {action}
+✅ نسبة نجاح الصفقة: {success_rate:.0f}%
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 **بوت التداول v1.2.0 - إشعار ذكي**"""
+            # إرسال الرسالة البسيطة مباشرة
+            try:
+                bot.send_message(
+                    chat_id=user_id,
+                    text=message,
+                    parse_mode='Markdown',
+                    reply_markup=markup
+                )
+                frequency_manager.record_notification_sent(user_id, symbol)
+                logger.info(f"📨 تم إرسال إشعار بسيط للمستخدم {user_id} للرمز {symbol}")
+            except Exception as send_error:
+                logger.error(f"[ERROR] فشل في إرسال الإشعار البسيط: {send_error}")
+            return  # إنهاء الدالة مبكراً في حالة الخطأ
         
         # إضافة عنوان للإشعار ليميزه عن التحليل اليدوي
         message = f"🚨 **إشعار تداول آلي** {emoji}\n\n" + message
