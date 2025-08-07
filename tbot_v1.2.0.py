@@ -5536,8 +5536,14 @@ def handle_stop_monitoring(call):
     user_id = call.from_user.id
     
     try:
-        # إيقاف المراقبة
+        # إيقاف المراقبة للمستخدم
         user_monitoring_active[user_id] = False
+        
+        # إزالة المستخدم من القاموس إذا لم يعد نشطاً
+        if user_id in user_monitoring_active:
+            del user_monitoring_active[user_id]
+        
+        logger.info(f"[STOP] تم إيقاف المراقبة للمستخدم {user_id}")
         
         # رسالة تأكيد
         bot.answer_callback_query(call.id, "⏹️ تم إيقاف المراقبة الآلية")
@@ -5563,6 +5569,43 @@ def handle_stop_monitoring(call):
     except Exception as e:
         logger.error(f"خطأ في إيقاف المراقبة للمستخدم {user_id}: {str(e)}")
         bot.answer_callback_query(call.id, "❌ حدث خطأ في إيقاف المراقبة")
+
+@bot.callback_query_handler(func=lambda call: call.data == "clear_symbols")
+def handle_clear_symbols(call):
+    """معالج مسح جميع الرموز المحددة"""
+    user_id = call.from_user.id
+    
+    try:
+        # مسح جميع الرموز المحددة للمستخدم
+        user_selected_symbols[user_id] = []
+        
+        logger.info(f"[CLEAR] تم مسح جميع الرموز للمستخدم {user_id}")
+        
+        # رسالة تأكيد
+        bot.answer_callback_query(call.id, "🗑️ تم مسح جميع الرموز المحددة")
+        
+        # تحديث القائمة
+        trading_mode = get_user_trading_mode(user_id)
+        trading_mode_display = "⚡ سكالبينغ سريع" if trading_mode == 'scalping' else "📈 تداول طويل المدى"
+        is_monitoring = user_monitoring_active.get(user_id, False)
+        status = "🟢 نشطة" if is_monitoring else "🔴 متوقفة"
+        
+        bot.edit_message_text(
+            f"📡 **المراقبة الآلية**\n\n"
+            f"📊 **نمط التداول:** {trading_mode_display}\n"
+            f"📈 **الحالة:** {status}\n"
+            f"🎯 **الرموز المختارة:** 0\n"
+            f"🔗 **مصدر البيانات:** MetaTrader5 + Gemini AI\n\n"
+            "تعتمد المراقبة على إعدادات التنبيهات ونمط التداول المحدد.",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=create_auto_monitoring_menu(user_id),
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        logger.error(f"خطأ في مسح الرموز للمستخدم {user_id}: {str(e)}")
+        bot.answer_callback_query(call.id, "❌ حدث خطأ في مسح الرموز")
 
 # ===== معالجات نمط التداول =====
 @bot.callback_query_handler(func=lambda call: call.data == "trading_mode_settings")
