@@ -2927,34 +2927,26 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         # مصدر البيانات
         data_source = analysis.get('source', 'MT5 + Gemini AI') if analysis else 'تحليل متقدم'
         
-        # استخدام نفس دالة التحليل اليدوي للإشعارات
-        # تحضير البيانات المطلوبة للدالة
-        price_data = {
-            'last': current_price,
-            'bid': current_price,
-            'ask': current_price,
-            'time': datetime.now()
-        }
-        
-        # إنشاء تحليل محاكي للإشعار
-        notification_analysis = {
-            'action': action,
-            'confidence': success_rate,
-            'reasoning': [f'إشعار تداول آلي للرمز {symbol}'],
-            'ai_analysis': analysis.get('ai_analysis', f'تحليل ذكي آلي للرمز {symbol} بنسبة نجاح {success_rate:.1f}%') if analysis else f'إشعار تداول آلي - {symbol}',
-            'source': data_source,
-            'symbol': symbol,
-            'timestamp': datetime.now(),
-            'price_data': price_data
-        }
-        
-        # استخدام دالة التحليل الشامل الموجودة
-        message = gemini_analyzer.format_comprehensive_analysis_v120(
-            symbol, symbol_info, price_data, notification_analysis, user_id
+        # بناء رسالة إشعار محسنة بناءً على إعدادات المستخدم
+        # باستخدام نفس تنسيق التحليل اليدوي ولكن مخصص للإشعارات
+        message = format_notification_message(
+            user_id=user_id,
+            symbol=symbol, 
+            symbol_info=symbol_info,
+            action=action,
+            current_price=current_price,
+            success_rate=success_rate,
+            target=target,
+            stop_loss=stop_loss,
+            trading_mode=trading_mode,
+            capital=capital,
+            position_size=position_size,
+            risk_description=risk_description,
+            analysis=analysis,
+            data_source=data_source,
+            formatted_time=formatted_time,
+            emoji=emoji
         )
-        
-        # إضافة عنوان للإشعار
-        message = f"🚨 **إشعار تداول آلي** {emoji}\n\n" + message
         
         # إنشاء أزرار التقييم
         markup = create_feedback_buttons(trade_id) if trade_id else None
