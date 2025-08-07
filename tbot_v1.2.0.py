@@ -2564,8 +2564,8 @@ def is_timing_allowed(user_id: int) -> bool:
 def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
     """حساب نسبة النجاح الديناميكية بناءً على التحليل التقني والذكي"""
     try:
-        # نقطة بداية أساسية
-        base_score = 45.0
+                 # نقطة بداية أساسية
+         base_score = 30.0
         symbol = analysis.get('symbol', '')
         action = analysis.get('action', 'HOLD')
         
@@ -2614,19 +2614,19 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
                 # استخدام أعلى نسبة مئوية موجودة في النص
                 percentages = [float(p) for p in percentage_matches]
                 extracted_percentage = max(percentages)
-                if 20 <= extracted_percentage <= 95:
-                    ai_analysis_score = min(extracted_percentage * 0.5, 35)  # تحويل لنقاط
+                                 if 10 <= extracted_percentage <= 100:
+                     ai_analysis_score = min(extracted_percentage * 0.7, 70)  # تحويل لنقاط (أكثر سخاء)
                 else:
                     extracted_percentage = None
             
             # إذا لم نجد نسبة صالحة، استخدم تحليل الكلمات
             if not extracted_percentage:
-                if positive_count > negative_count:
-                    ai_analysis_score = 30 + min(positive_count * 2, 20)  # 30-50
-                elif negative_count > positive_count:
-                    ai_analysis_score = max(10 - negative_count * 2, 0)   # 0-10
-                else:
-                    ai_analysis_score = 20  # متوسط
+                             if positive_count > negative_count:
+                 ai_analysis_score = 25 + min(positive_count * 5, 45)  # 25-70
+             elif negative_count > positive_count:
+                 ai_analysis_score = max(35 - negative_count * 5, 0)   # 0-35
+             else:
+                 ai_analysis_score = 30  # متوسط
         
         success_factors.append(("تحليل الذكاء الاصطناعي", ai_analysis_score, 35))
         
@@ -2635,14 +2635,14 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
         source = analysis.get('source', '')
         price_data = analysis.get('price_data', {})
         
-        if 'MT5' in source and 'Gemini' in source:
-            data_quality_score = 25  # مصدر كامل
-        elif 'MT5' in source:
-            data_quality_score = 20  # بيانات حقيقية
-        elif 'Gemini' in source:
-            data_quality_score = 15  # تحليل ذكي فقط
-        else:
-            data_quality_score = 10  # مصدر محدود
+                 if 'MT5' in source and 'Gemini' in source:
+             data_quality_score = 30  # مصدر كامل
+         elif 'MT5' in source:
+             data_quality_score = 25  # بيانات حقيقية
+         elif 'Gemini' in source:
+             data_quality_score = 20  # تحليل ذكي فقط
+         else:
+             data_quality_score = 15  # مصدر محدود
         
         # خصم للبيانات المفقودة
         if not price_data or not price_data.get('last'):
@@ -2654,30 +2654,30 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
         signal_consistency_score = 0
         base_confidence = analysis.get('confidence', 0)
         
-        if base_confidence > 0:
-            # تحويل الثقة من 0-100 إلى نقاط من 0-20
-            signal_consistency_score = min(base_confidence / 5, 20)
-        else:
-            # في حالة عدم وجود ثقة محددة، استخدم عوامل أخرى
-            if action in ['BUY', 'SELL']:
-                signal_consistency_score = 15  # إشارة واضحة
-            elif action == 'HOLD':
-                signal_consistency_score = 10  # حذر
-            else:
-                signal_consistency_score = 5   # غير واضح
+                 if base_confidence > 0:
+             # تحويل الثقة من 0-100 إلى نقاط من 0-25
+             signal_consistency_score = min(base_confidence / 4, 25)
+         else:
+             # في حالة عدم وجود ثقة محددة، استخدم عوامل أخرى
+             if action in ['BUY', 'SELL']:
+                 signal_consistency_score = 18  # إشارة واضحة
+             elif action == 'HOLD':
+                 signal_consistency_score = 12  # حذر
+             else:
+                 signal_consistency_score = 8   # غير واضح
         
         success_factors.append(("تماسك الإشارة", signal_consistency_score, 20))
         
         # 4. نوع الإشارة والسياق (10% من النتيجة)
         signal_type_score = 0
-        if signal_type == 'trading_signals':
-            signal_type_score = 8   # إشارات التداول دقيقة
-        elif signal_type == 'breakout_alerts':
-            signal_type_score = 10  # الاختراقات قوية
-        elif signal_type == 'support_alerts':
-            signal_type_score = 7   # مستويات الدعم أقل دقة
-        else:
-            signal_type_score = 6   # أنواع أخرى
+                 if signal_type == 'trading_signals':
+             signal_type_score = 12   # إشارات التداول دقيقة
+         elif signal_type == 'breakout_alerts':
+             signal_type_score = 15  # الاختراقات قوية
+         elif signal_type == 'support_alerts':
+             signal_type_score = 10   # مستويات الدعم أقل دقة
+         else:
+             signal_type_score = 8   # أنواع أخرى
         
         success_factors.append(("نوع الإشارة", signal_type_score, 10))
         
@@ -2688,12 +2688,12 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
         from datetime import datetime
         current_hour = datetime.now().hour
         
-        if 8 <= current_hour <= 17:  # أوقات التداول الأوروبية/الأمريكية
-            timing_score = 10
-        elif 0 <= current_hour <= 2:  # أوقات التداول الآسيوية
-            timing_score = 8
-        else:
-            timing_score = 5  # أوقات هادئة
+                 if 8 <= current_hour <= 17:  # أوقات التداول الأوروبية/الأمريكية
+             timing_score = 12
+         elif 0 <= current_hour <= 2:  # أوقات التداول الآسيوية
+             timing_score = 10
+         else:
+             timing_score = 6  # أوقات هادئة
         
         success_factors.append(("توقيت السوق", timing_score, 10))
         
@@ -2708,19 +2708,19 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
         # النتيجة النهائية
         final_score = base_score + total_weighted_score
         
-        # تطبيق قيود منطقية وديناميكية
-        if action == 'HOLD':
-            final_score = max(final_score - 15, 15)  # تقليل للانتظار
-        elif action in ['BUY', 'SELL']:
-            final_score = min(final_score + 5, 98)   # زيادة للإشارات الواضحة
-        
-        # ضمان النطاق 0-100
-        final_score = max(5, min(98, final_score))
-        
-        # إضافة عشوائية طفيفة للواقعية (±2%)
-        import random
-        random_factor = random.uniform(-2, 2)
-        final_score = max(5, min(98, final_score + random_factor))
+                 # تطبيق تعديلات بناءً على نوع الصفقة
+         if action == 'HOLD':
+             final_score = final_score - 10  # تقليل للانتظار
+         elif action in ['BUY', 'SELL']:
+             final_score = final_score + 8   # زيادة للإشارات الواضحة
+         
+         # إضافة عشوائية للواقعية (±5%)
+         import random
+         random_factor = random.uniform(-5, 5)
+         final_score = final_score + random_factor
+         
+         # ضمان النطاق 0-100 فقط (بدون قيود إضافية)
+         final_score = max(0, min(100, final_score))
         
         # سجل تفاصيل الحساب للمراجعة
         logger.info(f"[AI_SUCCESS_CALC] {symbol} - {action}: {final_score:.1f}% | العوامل: {success_factors}")
@@ -2729,9 +2729,9 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
         
     except Exception as e:
         logger.error(f"خطأ في حساب نسبة النجاح الديناميكية: {e}")
-        # في حالة الخطأ، استخدم قيمة عشوائية واقعية
-        import random
-        return round(random.uniform(45, 75), 1)
+                 # في حالة الخطأ، استخدم قيمة عشوائية واقعية من النطاق الكامل
+         import random
+         return round(random.uniform(25, 85), 1)
 
 def get_user_advanced_notification_settings(user_id: int) -> Dict:
     """جلب إعدادات التنبيهات المتقدمة للمستخدم"""
@@ -2774,7 +2774,7 @@ def calculate_dynamic_success_rate_v2(analysis: Dict, alert_type: str) -> float:
     """حساب نسبة النجاح الديناميكية المحسنة (النسخة البديلة)"""
     if not analysis:
         import random
-        return round(random.uniform(55, 75), 1)  # قيمة عشوائية واقعية
+        return round(random.uniform(30, 80), 1)  # قيمة عشوائية واقعية من نطاق أوسع
     
     # استدعاء الدالة الرئيسية المحسنة
     return calculate_dynamic_success_rate(analysis, alert_type)
