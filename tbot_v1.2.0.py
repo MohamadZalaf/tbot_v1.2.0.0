@@ -2927,46 +2927,34 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         # مصدر البيانات
         data_source = analysis.get('source', 'MT5 + Gemini AI') if analysis else 'تحليل متقدم'
         
-        # بناء رسالة إشعار مقصرة مشابهة للتحليل اليدوي
-        action_emoji = "🟢" if action == 'BUY' else "🔴" if action == 'SELL' else "🟡"
+        # استخدام نفس دالة التحليل اليدوي للإشعارات
+        # تحضير البيانات المطلوبة للدالة
+        price_data = {
+            'last': current_price,
+            'bid': current_price,
+            'ask': current_price,
+            'time': datetime.now()
+        }
         
-        message = f"""🚀 **إشعار تداول** {emoji}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-💱 {symbol} | {symbol_info['name']} {emoji}
-📡 مصدر البيانات: {data_source}
-💰 السعر الحالي: {current_price:,.5f} 
-⏰ وقت التحليل: {formatted_time}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-⚡ إشارة التداول الرئيسية
-
-{action_emoji} نوع الصفقة: {action}
-📍 سعر الدخول المقترح: {current_price:,.5f}"""
+        # إنشاء تحليل محاكي للإشعار
+        notification_analysis = {
+            'action': action,
+            'confidence': success_rate,
+            'reasoning': [f'إشعار تداول آلي للرمز {symbol}'],
+            'ai_analysis': analysis.get('ai_analysis', f'تحليل ذكي آلي للرمز {symbol} بنسبة نجاح {success_rate:.1f}%') if analysis else f'إشعار تداول آلي - {symbol}',
+            'source': data_source,
+            'symbol': symbol,
+            'timestamp': datetime.now(),
+            'price_data': price_data
+        }
         
-        if target and target > 0:
-            profit_pct = ((target/current_price-1)*100) if current_price > 0 else 0
-            message += f"\n🎯 الهدف: {target:,.5f} ({profit_pct:+.1f}%)"
+        # استخدام دالة التحليل الشامل الموجودة
+        message = gemini_analyzer.format_comprehensive_analysis_v120(
+            symbol, symbol_info, price_data, notification_analysis, user_id
+        )
         
-        if stop_loss and stop_loss > 0:
-            loss_pct = ((stop_loss/current_price-1)*100) if current_price > 0 else 0
-            message += f"\n🛑 وقف الخسارة: {stop_loss:,.5f} ({loss_pct:+.1f}%)"
-            
-        message += f"""
-✅ نسبة نجاح الصفقة: {success_rate:.0f}%
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-📋 توصيات إدارة المخاطر
-
-💡 حجم المركز المقترح:
-• {'للسكالبينغ: 0.01 لوت (مخاطرة منخفضة)' if trading_mode == 'scalping' else 'للمدى الطويل: 0.005 لوت (مخاطرة محافظة)'}
-
-⚠️ تحذيرات هامة:
-• راقب الأحجام عند نقاط الدخول
-• فعّل وقف الخسارة فور الدخول
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-🤖 **بوت التداول v1.2.0 - إشعار ذكي**"""
+        # إضافة عنوان للإشعار
+        message = f"🚨 **إشعار تداول آلي** {emoji}\n\n" + message
         
         # إنشاء أزرار التقييم
         markup = create_feedback_buttons(trade_id) if trade_id else None
