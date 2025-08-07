@@ -2927,26 +2927,45 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         # مصدر البيانات
         data_source = analysis.get('source', 'MT5 + Gemini AI') if analysis else 'تحليل متقدم'
         
-        # بناء رسالة إشعار محسنة بناءً على إعدادات المستخدم
-        # باستخدام نفس تنسيق التحليل اليدوي ولكن مخصص للإشعارات
-        message = format_notification_message(
-            user_id=user_id,
-            symbol=symbol, 
-            symbol_info=symbol_info,
-            action=action,
-            current_price=current_price,
-            success_rate=success_rate,
-            target=target,
-            stop_loss=stop_loss,
-            trading_mode=trading_mode,
-            capital=capital,
-            position_size=position_size,
-            risk_description=risk_description,
-            analysis=analysis,
-            data_source=data_source,
-            formatted_time=formatted_time,
-            emoji=emoji
+        # استخدام نفس طريقة التحليل اليدوي للإشعارات
+        # جلب البيانات الحقيقية من MT5
+        price_data = mt5_manager.get_live_price(symbol)
+        if not price_data:
+            logger.warning(f"[WARNING] فشل في جلب البيانات الحقيقية للإشعار - الرمز {symbol}")
+            # استخدام البيانات المتوفرة
+            price_data = {
+                'last': current_price,
+                'bid': current_price,
+                'ask': current_price,
+                'time': datetime.now()
+            }
+        
+        # إجراء تحليل جديد مع Gemini AI للإشعار
+        fresh_analysis = None
+        try:
+            fresh_analysis = gemini_analyzer.analyze_market_data_with_retry(symbol, price_data, user_id)
+            logger.info(f"[SUCCESS] تم الحصول على تحليل Gemini جديد للإشعار - الرمز {symbol}")
+        except Exception as ai_error:
+            logger.warning(f"[WARNING] فشل تحليل Gemini للإشعار - الرمز {symbol}: {ai_error}")
+            # استخدام التحليل الموجود أو إنشاء تحليل بديل
+            fresh_analysis = analysis or {
+                'action': action,
+                'confidence': success_rate,
+                'reasoning': [f'إشعار تداول آلي للرمز {symbol}'],
+                'ai_analysis': f'إشعار تداول آلي - نسبة النجاح {success_rate:.1f}%',
+                'source': data_source,
+                'symbol': symbol,
+                'timestamp': datetime.now(),
+                'price_data': price_data
+            }
+        
+        # استخدام نفس دالة التنسيق المستخدمة في التحليل اليدوي
+        message = gemini_analyzer.format_comprehensive_analysis_v120(
+            symbol, symbol_info, price_data, fresh_analysis, user_id
         )
+        
+        # إضافة عنوان للإشعار ليميزه عن التحليل اليدوي
+        message = f"🚨 **إشعار تداول آلي** {emoji}\n\n" + message
         
         # إنشاء أزرار التقييم
         markup = create_feedback_buttons(trade_id) if trade_id else None
@@ -3186,6 +3205,7 @@ def handle_analyze_symbols_callback(message):
         logger.error(f"[ERROR] خطأ في التحليل اليدوي: {e}")
 
 @bot.message_handler(func=lambda message: message.text == "📊 التحليل اليدوي")
+@require_authentication
 def handle_manual_analysis_keyboard(message):
     """معالج زر التحليل اليدوي من الكيبورد"""
     handle_analyze_symbols_callback(message)
@@ -3225,6 +3245,7 @@ def handle_auto_monitoring_callback(message):
         logger.error(f"[ERROR] خطأ في المراقبة الآلية: {e}")
 
 @bot.message_handler(func=lambda message: message.text == "📡 المراقبة الآلية")
+@require_authentication
 def handle_auto_monitoring_keyboard(message):
     """معالج زر المراقبة الآلية من الكيبورد"""
     handle_auto_monitoring_callback(message)
@@ -3425,12 +3446,14 @@ def handle_my_stats_keyboard(message):
     handle_my_stats_callback(message)
 
 @bot.message_handler(func=lambda message: message.text == "⚙️ الإعدادات")
+@require_authentication
 def handle_settings_keyboard(message):
     """معالج زر الإعدادات من الكيبورد"""
     handle_settings_callback(message)
 
 
 @bot.message_handler(func=lambda message: message.text == "❓ المساعدة")
+@require_authentication
 def handle_help_keyboard(message):
     """معالج زر المساعدة من الكيبورد"""
     handle_help_main_callback(message)
