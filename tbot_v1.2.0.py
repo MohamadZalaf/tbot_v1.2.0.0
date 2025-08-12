@@ -828,8 +828,8 @@ class MT5Manager:
                 logger.warning(f"[WARNING] MT5 غير متصل - لا يمكن حساب المؤشرات لـ {symbol}")
                 return None
             
-            # جلب البيانات التاريخية (100 شمعة للمؤشرات)
-            df = self.get_market_data(symbol, mt5.TIMEFRAME_M15, 100)
+            # جلب البيانات اللحظية والتاريخية الحديثة (بيانات M5 للحصول على تحديثات أسرع)
+            df = self.get_market_data(symbol, mt5.TIMEFRAME_M5, 200)  # M5 للبيانات اللحظية الأكثر دقة
             if df is None or len(df) < 20:
                 logger.warning(f"[WARNING] بيانات غير كافية لحساب المؤشرات لـ {symbol}")
                 return None
