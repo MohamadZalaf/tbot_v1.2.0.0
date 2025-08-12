@@ -1061,7 +1061,23 @@ class MT5Manager:
             
             # معلومات السعر الحالي
             indicators['current_price'] = df['close'].iloc[-1]
-            indicators['price_change_pct'] = ((df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2] * 100) if len(df) >= 2 else 0
+            
+            # حساب التغير اليومي الصحيح - مقارنة مع بداية اليوم
+            try:
+                # جلب بيانات يومية للحصول على سعر الافتتاح اليومي
+                daily_df = self.get_market_data(symbol, mt5.TIMEFRAME_D1, 2)
+                if daily_df is not None and len(daily_df) >= 1:
+                    today_open = daily_df['open'].iloc[-1]  # افتتاح اليوم
+                    current_price = indicators['current_price']
+                    daily_change_pct = ((current_price - today_open) / today_open * 100)
+                    indicators['price_change_pct'] = daily_change_pct
+                else:
+                    # في حالة فشل جلب البيانات اليومية، استخدم مقارنة بسيطة
+                    indicators['price_change_pct'] = ((df['close'].iloc[-1] - df['close'].iloc[-10]) / df['close'].iloc[-10] * 100) if len(df) >= 10 else 0
+            except Exception as e:
+                logger.warning(f"[WARNING] فشل في حساب التغير اليومي لـ {symbol}: {e}")
+                # استخدام حساب بديل
+                indicators['price_change_pct'] = ((df['close'].iloc[-1] - df['close'].iloc[-10]) / df['close'].iloc[-10] * 100) if len(df) >= 10 else 0
             
             # ===== كشف التقاطعات للمتوسطات المتحركة =====
             ma_crossovers = []
@@ -2040,8 +2056,8 @@ class GeminiAnalyzer:
                 matches = re.findall(pattern, text, re.IGNORECASE | re.UNICODE)
                 if matches:
                     success_rate = float(matches[-1])  # أخذ آخر نتيجة
-                    # التأكد من أن النسبة في النطاق المطلوب
-                    if 10 <= success_rate <= 95:
+                    # التأكد من أن النسبة في النطاق المطلوب (نطاق أوسع للمرونة)
+                    if 1 <= success_rate <= 100:
                         logger.info(f"[AI_SUCCESS_EXTRACT] تم استخراج نسبة نجاح من AI: {success_rate}%")
                         return success_rate
             
@@ -2221,13 +2237,67 @@ class GeminiAnalyzer:
                 target2 = current_price * 1.03
                 stop_loss = current_price * 0.985
             
-            # حساب النقاط
-            points1 = abs(target1 - entry_price) * 10000 if entry_price else 0
-            points2 = abs(target2 - entry_price) * 10000 if entry_price else 0
-            stop_points = abs(entry_price - stop_loss) * 10000 if entry_price else 0
+            # حساب النقاط بطريقة صحيحة ومنطقية
+            def calculate_points_for_symbol(price_diff, symbol):
+                """حساب النقاط بناءً على نوع الرمز"""
+                if symbol.startswith(('EUR', 'GBP', 'AUD', 'NZD')):
+                    # أزواج العملات الرئيسية - النقطة = 0.0001
+                    return abs(price_diff) * 10000
+                elif symbol.startswith(('USD/JPY', 'EUR/JPY', 'GBP/JPY')):
+                    # أزواج الين - النقطة = 0.01
+                    return abs(price_diff) * 100
+                elif symbol.startswith(('XAU', 'XAG')):
+                    # المعادن النفيسة - النقطة = 0.1
+                    return abs(price_diff) * 10
+                elif symbol.startswith(('BTC', 'ETH')):
+                    # العملات الرقمية - النقطة = 1.0
+                    return abs(price_diff)
+                else:
+                    # افتراضي للرموز الأخرى
+                    return abs(price_diff) * 100
             
-            # حساب نسبة المخاطرة/المكافأة
-            risk_reward_ratio = (points1 / stop_points) if stop_points > 0 else 1.0
+            points1 = calculate_points_for_symbol(target1 - entry_price, symbol) if entry_price else 0
+            points2 = calculate_points_for_symbol(target2 - entry_price, symbol) if entry_price else 0
+            stop_points = calculate_points_for_symbol(entry_price - stop_loss, symbol) if entry_price else 0
+            
+            # حساب نسبة المخاطرة/المكافأة بطريقة صحيحة ومفهومة
+            if stop_points > 0:
+                risk_reward_ratio = points1 / stop_points  # المكافأة مقسومة على المخاطرة
+                # التأكد من أن النسبة منطقية
+                if risk_reward_ratio < 0.5:
+                    risk_reward_ratio = 0.5  # حد أدنى للمخاطرة
+                elif risk_reward_ratio > 10:
+                    risk_reward_ratio = 10   # حد أعلى للمخاطرة
+            else:
+                risk_reward_ratio = 1.0
+            
+            # حساب نسبة المخاطرة كنسبة مئوية من رأس المال
+            user_capital = get_user_capital(user_id) if user_id else 1000
+            potential_loss_usd = 0
+            potential_profit_usd = 0
+            
+            try:
+                # تقدير الخسارة والربح المحتمل بالدولار
+                if symbol.startswith(('EUR', 'GBP', 'AUD', 'NZD')):
+                    # أزواج العملات الرئيسية - حجم اللوت الصغير
+                    lot_size = min(user_capital / 10000, 0.1)  # لوت صغير حسب رأس المال
+                    potential_loss_usd = (stop_points / 10000) * lot_size * 100000  # حساب الخسارة
+                    potential_profit_usd = (points1 / 10000) * lot_size * 100000   # حساب الربح
+                elif symbol.startswith(('XAU', 'XAG')):
+                    # المعادن النفيسة
+                    lot_size = min(user_capital / 1000, 1.0)
+                    potential_loss_usd = (stop_points / 10) * lot_size * 10
+                    potential_profit_usd = (points1 / 10) * lot_size * 10
+                else:
+                    # تقدير عام
+                    potential_loss_usd = user_capital * 0.02  # 2% من رأس المال
+                    potential_profit_usd = potential_loss_usd * risk_reward_ratio
+            except:
+                potential_loss_usd = user_capital * 0.02
+                potential_profit_usd = potential_loss_usd * risk_reward_ratio
+            
+            # نسبة المخاطرة كنسبة مئوية من رأس المال
+            risk_percentage = (potential_loss_usd / user_capital) * 100 if user_capital > 0 else 2.0
             
             # حساب التغيير اليومي الحقيقي
             price_change_pct = indicators.get('price_change_pct', 0)
@@ -2266,6 +2336,8 @@ class GeminiAnalyzer:
             message += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
             message += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
             message += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
+            message += f"💰 المخاطرة المقدرة: {risk_percentage:.1f}% من رأس المال (${potential_loss_usd:.0f})\n"
+            message += f"💵 الربح المتوقع: ${potential_profit_usd:.0f}\n"
             message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -3338,10 +3410,10 @@ def calculate_dynamic_success_rate_v2(analysis: Dict, alert_type: str) -> float:
     return calculate_dynamic_success_rate(analysis, alert_type)
 
 def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
-    """حساب نسبة النجاح الذكية بناءً على تحليل شامل للعوامل المختلفة"""
+    """حساب نسبة النجاح الذكية بناءً على تحليل شامل للعوامل المختلفة - ديناميكية 0-100%"""
     try:
-        # البدء بنسبة أساسية
-        base_score = 50.0
+        # البدء بنسبة أساسية متغيرة حسب ظروف السوق
+        base_score = 45.0  # نقطة بداية محايدة
         
         # العوامل المؤثرة على نسبة النجاح
         confidence_factors = []
@@ -3498,8 +3570,8 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
         # النتيجة النهائية
         final_score = base_score + total_weighted_score
         
-        # تطبيق قيود منطقية
-        final_score = max(10, min(95, final_score))  # بين 10% و 95%
+        # تطبيق قيود منطقية مع نطاق أوسع
+        final_score = max(5, min(98, final_score))  # بين 5% و 98% للمرونة الكاملة
         
         # تطبيق عوامل تصحيحية بناءً على نوع الصفقة
         if action == 'HOLD':
