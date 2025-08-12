@@ -837,10 +837,14 @@ class MT5Manager:
             indicators = {}
             
             # المتوسطات المتحركة
+            if len(df) >= 9:
+                indicators['ma_9'] = ta.trend.sma_indicator(df['close'], window=9).iloc[-1]
             if len(df) >= 10:
                 indicators['ma_10'] = ta.trend.sma_indicator(df['close'], window=10).iloc[-1]
             if len(df) >= 20:
                 indicators['ma_20'] = ta.trend.sma_indicator(df['close'], window=20).iloc[-1]
+            if len(df) >= 21:
+                indicators['ma_21'] = ta.trend.sma_indicator(df['close'], window=21).iloc[-1]
             if len(df) >= 50:
                 indicators['ma_50'] = ta.trend.sma_indicator(df['close'], window=50).iloc[-1]
             
@@ -876,28 +880,123 @@ class MT5Manager:
                 else:
                     indicators['macd_interpretation'] = 'محايد'
             
-            # حجم التداول
+            # حجم التداول - تحليل متقدم
             indicators['current_volume'] = df['tick_volume'].iloc[-1]
             if len(df) >= 20:
                 indicators['avg_volume'] = df['tick_volume'].rolling(window=20).mean().iloc[-1]
                 indicators['volume_ratio'] = indicators['current_volume'] / indicators['avg_volume']
                 
-                if indicators['volume_ratio'] > 1.5:
-                    indicators['volume_interpretation'] = 'حجم عالي'
+                # حجم التداول لآخر 5 فترات للمقارنة
+                indicators['volume_trend_5'] = df['tick_volume'].tail(5).mean()
+                indicators['volume_trend_10'] = df['tick_volume'].tail(10).mean()
+                
+                # Volume Moving Average (VMA)
+                indicators['volume_ma_9'] = df['tick_volume'].rolling(window=9).mean().iloc[-1]
+                indicators['volume_ma_21'] = df['tick_volume'].rolling(window=21).mean().iloc[-1] if len(df) >= 21 else indicators['avg_volume']
+                
+                # Volume Rate of Change
+                if len(df) >= 10:
+                    indicators['volume_roc'] = ((indicators['current_volume'] - df['tick_volume'].iloc[-10]) / df['tick_volume'].iloc[-10]) * 100
+                
+                # تفسير حجم التداول المتقدم
+                volume_signals = []
+                if indicators['volume_ratio'] > 2.0:
+                    volume_signals.append('حجم عالي جداً - اهتمام قوي')
+                elif indicators['volume_ratio'] > 1.5:
+                    volume_signals.append('حجم عالي - نشاط متزايد')
+                elif indicators['volume_ratio'] < 0.3:
+                    volume_signals.append('حجم منخفض جداً - ضعف اهتمام')
                 elif indicators['volume_ratio'] < 0.5:
-                    indicators['volume_interpretation'] = 'حجم منخفض'
+                    volume_signals.append('حجم منخفض - نشاط محدود')
                 else:
-                    indicators['volume_interpretation'] = 'حجم طبيعي'
+                    volume_signals.append('حجم طبيعي')
+                
+                # تحليل اتجاه حجم التداول
+                if indicators['volume_trend_5'] > indicators['volume_trend_10'] * 1.2:
+                    volume_signals.append('حجم في ازدياد')
+                elif indicators['volume_trend_5'] < indicators['volume_trend_10'] * 0.8:
+                    volume_signals.append('حجم في انخفاض')
+                
+                # Volume-Price Analysis (VPA)
+                price_change = indicators.get('price_change_pct', 0)
+                if abs(price_change) > 0.5 and indicators['volume_ratio'] > 1.5:
+                    volume_signals.append('تأكيد قوي للحركة السعرية')
+                elif abs(price_change) > 0.5 and indicators['volume_ratio'] < 0.8:
+                    volume_signals.append('ضعف في تأكيد الحركة السعرية')
+                
+                indicators['volume_interpretation'] = ' | '.join(volume_signals)
+                indicators['volume_strength'] = 'قوي' if indicators['volume_ratio'] > 1.5 else 'متوسط' if indicators['volume_ratio'] > 0.8 else 'ضعيف'
             
-            # Stochastic
+            # Stochastic Oscillator - تحليل متقدم
             if len(df) >= 14:
                 stoch_k = ta.momentum.stoch(df['high'], df['low'], df['close'])
                 stoch_d = ta.momentum.stoch_signal(df['high'], df['low'], df['close'])
                 
+                current_k = stoch_k.iloc[-1] if not pd.isna(stoch_k.iloc[-1]) else 50
+                current_d = stoch_d.iloc[-1] if not pd.isna(stoch_d.iloc[-1]) else 50
+                previous_k = stoch_k.iloc[-2] if len(stoch_k) >= 2 and not pd.isna(stoch_k.iloc[-2]) else current_k
+                previous_d = stoch_d.iloc[-2] if len(stoch_d) >= 2 and not pd.isna(stoch_d.iloc[-2]) else current_d
+                
                 indicators['stochastic'] = {
-                    'k': stoch_k.iloc[-1] if not pd.isna(stoch_k.iloc[-1]) else 50,
-                    'd': stoch_d.iloc[-1] if not pd.isna(stoch_d.iloc[-1]) else 50
+                    'k': current_k,
+                    'd': current_d,
+                    'k_previous': previous_k,
+                    'd_previous': previous_d
                 }
+                
+                # كشف التقاطعات
+                stoch_signals = []
+                
+                # تقاطع صاعد: %K يقطع %D من الأسفل
+                if previous_k <= previous_d and current_k > current_d:
+                    stoch_signals.append('تقاطع صاعد - إشارة شراء محتملة')
+                    indicators['stochastic']['crossover'] = 'bullish'
+                # تقاطع هابط: %K يقطع %D من الأعلى
+                elif previous_k >= previous_d and current_k < current_d:
+                    stoch_signals.append('تقاطع هابط - إشارة بيع محتملة')
+                    indicators['stochastic']['crossover'] = 'bearish'
+                else:
+                    indicators['stochastic']['crossover'] = 'none'
+                
+                # تحليل مناطق ذروة الشراء والبيع
+                if current_k > 80 and current_d > 80:
+                    stoch_signals.append('ذروة شراء قوية - احتمالية تصحيح')
+                    indicators['stochastic']['zone'] = 'strong_overbought'
+                elif current_k > 70:
+                    stoch_signals.append('ذروة شراء - مراقبة إشارات البيع')
+                    indicators['stochastic']['zone'] = 'overbought'
+                elif current_k < 20 and current_d < 20:
+                    stoch_signals.append('ذروة بيع قوية - احتمالية ارتداد')
+                    indicators['stochastic']['zone'] = 'strong_oversold'
+                elif current_k < 30:
+                    stoch_signals.append('ذروة بيع - مراقبة إشارات الشراء')
+                    indicators['stochastic']['zone'] = 'oversold'
+                else:
+                    stoch_signals.append('منطقة محايدة')
+                    indicators['stochastic']['zone'] = 'neutral'
+                
+                # تحليل قوة الإشارة
+                k_d_diff = abs(current_k - current_d)
+                if k_d_diff < 5:
+                    stoch_signals.append('الخطوط متقاربة - انتظار إشارة واضحة')
+                    indicators['stochastic']['strength'] = 'weak'
+                elif k_d_diff > 20:
+                    stoch_signals.append('الخطوط متباعدة - إشارة قوية')
+                    indicators['stochastic']['strength'] = 'strong'
+                else:
+                    indicators['stochastic']['strength'] = 'moderate'
+                
+                # تحليل الاتجاه
+                if current_k > current_d and current_k > 50:
+                    stoch_signals.append('اتجاه صاعد')
+                    indicators['stochastic']['trend'] = 'bullish'
+                elif current_k < current_d and current_k < 50:
+                    stoch_signals.append('اتجاه هابط')
+                    indicators['stochastic']['trend'] = 'bearish'
+                else:
+                    indicators['stochastic']['trend'] = 'neutral'
+                
+                indicators['stochastic_interpretation'] = ' | '.join(stoch_signals)
             
             # البولنجر باندز
             if len(df) >= 20:
@@ -929,27 +1028,159 @@ class MT5Manager:
             indicators['current_price'] = df['close'].iloc[-1]
             indicators['price_change_pct'] = ((df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2] * 100) if len(df) >= 2 else 0
             
-            # تحديد الاتجاه العام
+            # ===== كشف التقاطعات للمتوسطات المتحركة =====
+            ma_crossovers = []
+            
+            # تقاطعات MA 9 و MA 21
+            if 'ma_9' in indicators and 'ma_21' in indicators and len(df) >= 22:
+                ma_9_prev = ta.trend.sma_indicator(df['close'], window=9).iloc[-2]
+                ma_21_prev = ta.trend.sma_indicator(df['close'], window=21).iloc[-2]
+                
+                # التقاطع الذهبي (Golden Cross) - MA9 يقطع MA21 من الأسفل
+                if ma_9_prev <= ma_21_prev and indicators['ma_9'] > indicators['ma_21']:
+                    ma_crossovers.append('تقاطع ذهبي MA9/MA21 - إشارة شراء قوية')
+                    indicators['ma_9_21_crossover'] = 'golden'
+                # تقاطع الموت (Death Cross) - MA9 يقطع MA21 من الأعلى
+                elif ma_9_prev >= ma_21_prev and indicators['ma_9'] < indicators['ma_21']:
+                    ma_crossovers.append('تقاطع الموت MA9/MA21 - إشارة بيع قوية')
+                    indicators['ma_9_21_crossover'] = 'death'
+                else:
+                    indicators['ma_9_21_crossover'] = 'none'
+            
+            # تقاطعات MA 10 و MA 20
+            if 'ma_10' in indicators and 'ma_20' in indicators and len(df) >= 21:
+                ma_10_prev = ta.trend.sma_indicator(df['close'], window=10).iloc[-2]
+                ma_20_prev = ta.trend.sma_indicator(df['close'], window=20).iloc[-2]
+                
+                if ma_10_prev <= ma_20_prev and indicators['ma_10'] > indicators['ma_20']:
+                    ma_crossovers.append('تقاطع ذهبي MA10/MA20 - إشارة شراء')
+                    indicators['ma_10_20_crossover'] = 'golden'
+                elif ma_10_prev >= ma_20_prev and indicators['ma_10'] < indicators['ma_20']:
+                    ma_crossovers.append('تقاطع الموت MA10/MA20 - إشارة بيع')
+                    indicators['ma_10_20_crossover'] = 'death'
+                else:
+                    indicators['ma_10_20_crossover'] = 'none'
+            
+            # تقاطعات السعر مع المتوسطات
+            current_price = indicators['current_price']
+            price_ma_signals = []
+            
+            if 'ma_9' in indicators:
+                if len(df) >= 2:
+                    prev_price = df['close'].iloc[-2]
+                    if prev_price <= indicators.get('ma_9', 0) and current_price > indicators['ma_9']:
+                        price_ma_signals.append('السعر يخترق MA9 صعوداً')
+                    elif prev_price >= indicators.get('ma_9', 0) and current_price < indicators['ma_9']:
+                        price_ma_signals.append('السعر يخترق MA9 هبوطاً')
+            
+            if price_ma_signals:
+                indicators['price_ma_crossover'] = ' | '.join(price_ma_signals)
+            
+            # ===== تحليل التقاطعات المتعددة =====
+            all_crossovers = []
+            
+            # جمع إشارات MACD
+            if 'macd_interpretation' in indicators and 'صعود' in indicators['macd_interpretation']:
+                all_crossovers.append('MACD صاعد')
+            elif 'macd_interpretation' in indicators and 'هبوط' in indicators['macd_interpretation']:
+                all_crossovers.append('MACD هابط')
+            
+            # جمع إشارات Stochastic
+            if 'stochastic' in indicators and indicators['stochastic'].get('crossover') == 'bullish':
+                all_crossovers.append('Stochastic صاعد')
+            elif 'stochastic' in indicators and indicators['stochastic'].get('crossover') == 'bearish':
+                all_crossovers.append('Stochastic هابط')
+            
+            # جمع إشارات المتوسطات المتحركة
+            if ma_crossovers:
+                all_crossovers.extend(ma_crossovers)
+            
+            indicators['crossover_summary'] = ' | '.join(all_crossovers) if all_crossovers else 'لا توجد تقاطعات مهمة'
+            
+            # تحديد الاتجاه العام المحسن
             trend_signals = []
+            
+            # إشارات المتوسطات المتحركة
+            if 'ma_9' in indicators and 'ma_21' in indicators:
+                if indicators['ma_9'] > indicators['ma_21']:
+                    trend_signals.append('صعود')
+                else:
+                    trend_signals.append('هبوط')
+            
             if 'ma_10' in indicators and 'ma_20' in indicators:
                 if indicators['ma_10'] > indicators['ma_20']:
                     trend_signals.append('صعود')
                 else:
                     trend_signals.append('هبوط')
             
+            # إشارات RSI
             if 'rsi' in indicators:
                 if indicators['rsi'] > 50:
                     trend_signals.append('صعود')
                 else:
                     trend_signals.append('هبوط')
             
-            # تحديد الاتجاه الغالب
-            if trend_signals.count('صعود') > trend_signals.count('هبوط'):
-                indicators['overall_trend'] = 'صاعد'
-            elif trend_signals.count('هبوط') > trend_signals.count('صعود'):
-                indicators['overall_trend'] = 'هابط'
+            # إشارات MACD
+            if 'macd' in indicators:
+                if indicators['macd']['macd'] > indicators['macd']['signal']:
+                    trend_signals.append('صعود')
+                else:
+                    trend_signals.append('هبوط')
+            
+            # إشارات Stochastic
+            if 'stochastic' in indicators:
+                if indicators['stochastic']['k'] > indicators['stochastic']['d'] and indicators['stochastic']['k'] > 50:
+                    trend_signals.append('صعود')
+                elif indicators['stochastic']['k'] < indicators['stochastic']['d'] and indicators['stochastic']['k'] < 50:
+                    trend_signals.append('هبوط')
+            
+            # تحديد الاتجاه الغالب مع قوة الإشارة
+            bullish_count = trend_signals.count('صعود')
+            bearish_count = trend_signals.count('هبوط')
+            total_signals = len(trend_signals)
+            
+            if bullish_count > bearish_count:
+                strength = 'قوي' if bullish_count >= total_signals * 0.75 else 'متوسط' if bullish_count >= total_signals * 0.6 else 'ضعيف'
+                indicators['overall_trend'] = f'صاعد ({strength})'
+                indicators['trend_strength'] = bullish_count / total_signals if total_signals > 0 else 0.5
+            elif bearish_count > bullish_count:
+                strength = 'قوي' if bearish_count >= total_signals * 0.75 else 'متوسط' if bearish_count >= total_signals * 0.6 else 'ضعيف'
+                indicators['overall_trend'] = f'هابط ({strength})'
+                indicators['trend_strength'] = bearish_count / total_signals if total_signals > 0 else 0.5
             else:
                 indicators['overall_trend'] = 'محايد'
+                indicators['trend_strength'] = 0.5
+            
+            # حفظ التقاطعات الجديدة في النظام التاريخي
+            current_price = indicators['current_price']
+            
+            # كشف وحفظ تقاطعات المتوسطات المتحركة
+            if indicators.get('ma_9_21_crossover') == 'golden':
+                crossover_tracker.save_crossover_event(symbol, 'ma_golden_9_21', indicators, current_price)
+            elif indicators.get('ma_9_21_crossover') == 'death':
+                crossover_tracker.save_crossover_event(symbol, 'ma_death_9_21', indicators, current_price)
+            
+            if indicators.get('ma_10_20_crossover') == 'golden':
+                crossover_tracker.save_crossover_event(symbol, 'ma_golden_10_20', indicators, current_price)
+            elif indicators.get('ma_10_20_crossover') == 'death':
+                crossover_tracker.save_crossover_event(symbol, 'ma_death_10_20', indicators, current_price)
+            
+            # كشف وحفظ تقاطعات MACD
+            if 'macd_interpretation' in indicators:
+                if 'صعود' in indicators['macd_interpretation'] and 'تقاطع' not in indicators.get('last_macd_signal', ''):
+                    crossover_tracker.save_crossover_event(symbol, 'macd_bullish', indicators, current_price)
+                    indicators['last_macd_signal'] = 'bullish_crossover'
+                elif 'هبوط' in indicators['macd_interpretation'] and 'تقاطع' not in indicators.get('last_macd_signal', ''):
+                    crossover_tracker.save_crossover_event(symbol, 'macd_bearish', indicators, current_price)
+                    indicators['last_macd_signal'] = 'bearish_crossover'
+            
+            # كشف وحفظ تقاطعات Stochastic
+            if 'stochastic' in indicators:
+                stoch_crossover = indicators['stochastic'].get('crossover')
+                if stoch_crossover == 'bullish':
+                    crossover_tracker.save_crossover_event(symbol, 'stoch_bullish', indicators, current_price)
+                elif stoch_crossover == 'bearish':
+                    crossover_tracker.save_crossover_event(symbol, 'stoch_bearish', indicators, current_price)
             
             logger.info(f"[OK] تم حساب المؤشرات الفنية لـ {symbol} - الاتجاه: {indicators['overall_trend']}")
             
@@ -966,6 +1197,168 @@ class MT5Manager:
 
 # إنشاء مثيل مدير MT5
 mt5_manager = MT5Manager()
+
+# ===== نظام تتبع التقاطعات التاريخية =====
+class CrossoverTracker:
+    """نظام تتبع وتحليل التقاطعات التاريخية لتحسين دقة التنبؤات"""
+    
+    def __init__(self):
+        self.crossover_history_file = os.path.join(DATA_DIR, 'crossover_history.json')
+        self.crossover_performance_file = os.path.join(DATA_DIR, 'crossover_performance.json')
+        self.ensure_files_exist()
+    
+    def ensure_files_exist(self):
+        """التأكد من وجود ملفات التتبع"""
+        for file_path in [self.crossover_history_file, self.crossover_performance_file]:
+            if not os.path.exists(file_path):
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump([], f)
+    
+    def save_crossover_event(self, symbol: str, crossover_type: str, indicators: dict, current_price: float):
+        """حفظ حدث تقاطع جديد"""
+        try:
+            crossover_event = {
+                'symbol': symbol,
+                'timestamp': datetime.now().isoformat(),
+                'type': crossover_type,  # 'ma_golden', 'ma_death', 'macd_bullish', 'macd_bearish', 'stoch_bullish', 'stoch_bearish'
+                'price_at_crossover': current_price,
+                'indicators': {
+                    'ma_9': indicators.get('ma_9'),
+                    'ma_21': indicators.get('ma_21'),
+                    'rsi': indicators.get('rsi'),
+                    'volume_ratio': indicators.get('volume_ratio'),
+                    'trend_strength': indicators.get('trend_strength'),
+                    'macd': indicators.get('macd', {}),
+                    'stochastic': indicators.get('stochastic', {})
+                },
+                'market_conditions': {
+                    'volume_strength': indicators.get('volume_strength'),
+                    'overall_trend': indicators.get('overall_trend'),
+                    'crossover_summary': indicators.get('crossover_summary')
+                }
+            }
+            
+            # قراءة التاريخ الحالي
+            with open(self.crossover_history_file, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+            
+            # إضافة الحدث الجديد
+            history.append(crossover_event)
+            
+            # الاحتفاظ بآخر 1000 حدث فقط
+            if len(history) > 1000:
+                history = history[-1000:]
+            
+            # حفظ التاريخ المحدث
+            with open(self.crossover_history_file, 'w', encoding='utf-8') as f:
+                json.dump(history, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"[CROSSOVER] تم حفظ تقاطع {crossover_type} للرمز {symbol}")
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في حفظ تقاطع: {e}")
+    
+    def update_crossover_performance(self, symbol: str, crossover_id: str, outcome: str, price_change_pct: float):
+        """تحديث أداء التقاطعات بناءً على النتائج الفعلية"""
+        try:
+            performance_data = {
+                'symbol': symbol,
+                'crossover_id': crossover_id,
+                'outcome': outcome,  # 'success', 'failure', 'neutral'
+                'price_change_pct': price_change_pct,
+                'evaluation_time': datetime.now().isoformat()
+            }
+            
+            with open(self.crossover_performance_file, 'r', encoding='utf-8') as f:
+                performance_history = json.load(f)
+            
+            performance_history.append(performance_data)
+            
+            # الاحتفاظ بآخر 500 تقييم
+            if len(performance_history) > 500:
+                performance_history = performance_history[-500:]
+            
+            with open(self.crossover_performance_file, 'w', encoding='utf-8') as f:
+                json.dump(performance_history, f, indent=2, ensure_ascii=False)
+                
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في تحديث أداء التقاطع: {e}")
+    
+    def get_crossover_success_rate(self, crossover_type: str, symbol: str = None) -> float:
+        """حساب معدل نجاح نوع معين من التقاطعات"""
+        try:
+            with open(self.crossover_performance_file, 'r', encoding='utf-8') as f:
+                performance_history = json.load(f)
+            
+            # فلترة البيانات حسب النوع والرمز
+            filtered_data = []
+            for record in performance_history:
+                if symbol and record.get('symbol') != symbol:
+                    continue
+                # يمكن إضافة فلترة حسب نوع التقاطع هنا
+                filtered_data.append(record)
+            
+            if not filtered_data:
+                return 0.65  # معدل افتراضي
+            
+            success_count = sum(1 for record in filtered_data if record.get('outcome') == 'success')
+            total_count = len(filtered_data)
+            
+            success_rate = success_count / total_count if total_count > 0 else 0.65
+            return min(max(success_rate, 0.3), 0.95)  # تحديد النطاق بين 30% و 95%
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في حساب معدل نجاح التقاطع: {e}")
+            return 0.65
+    
+    def get_recent_crossovers(self, symbol: str, hours: int = 24) -> list:
+        """جلب التقاطعات الحديثة لرمز معين"""
+        try:
+            with open(self.crossover_history_file, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+            
+            cutoff_time = datetime.now() - timedelta(hours=hours)
+            recent_crossovers = []
+            
+            for event in history:
+                if event.get('symbol') == symbol:
+                    event_time = datetime.fromisoformat(event['timestamp'])
+                    if event_time > cutoff_time:
+                        recent_crossovers.append(event)
+            
+            return sorted(recent_crossovers, key=lambda x: x['timestamp'], reverse=True)
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في جلب التقاطعات الحديثة: {e}")
+            return []
+    
+    def analyze_crossover_patterns(self, symbol: str) -> dict:
+        """تحليل أنماط التقاطعات لرمز معين"""
+        try:
+            recent_crossovers = self.get_recent_crossovers(symbol, hours=168)  # أسبوع
+            
+            if not recent_crossovers:
+                return {'pattern': 'insufficient_data', 'strength': 0.5}
+            
+            # تحليل الأنماط
+            crossover_types = [event['type'] for event in recent_crossovers]
+            
+            # البحث عن أنماط متتالية
+            pattern_analysis = {
+                'recent_count': len(recent_crossovers),
+                'dominant_type': max(set(crossover_types), key=crossover_types.count) if crossover_types else None,
+                'pattern_strength': len(recent_crossovers) / 10.0,  # قوة النمط حسب عدد التقاطعات
+                'last_crossover': recent_crossovers[0] if recent_crossovers else None
+            }
+            
+            return pattern_analysis
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في تحليل أنماط التقاطعات: {e}")
+            return {'pattern': 'error', 'strength': 0.5}
+
+# إنشاء مثيل متتبع التقاطعات
+crossover_tracker = CrossoverTracker()
 
 # ===== كلاس تحليل Gemini AI =====
 class GeminiAnalyzer:
@@ -1015,33 +1408,85 @@ class GeminiAnalyzer:
             technical_data = mt5_manager.calculate_technical_indicators(symbol)
             technical_analysis = ""
             
+            # جلب البيانات التاريخية للتقاطعات
+            crossover_patterns = crossover_tracker.analyze_crossover_patterns(symbol)
+            recent_crossovers = crossover_tracker.get_recent_crossovers(symbol, hours=48)
+            
+            crossover_history_context = ""
+            if recent_crossovers:
+                crossover_history_context = f"""
+                
+                📊 سجل التقاطعات الحديثة للرمز {symbol} (آخر 48 ساعة):
+                """
+                for i, crossover in enumerate(recent_crossovers[:5]):  # أحدث 5 تقاطعات
+                    crossover_time = datetime.fromisoformat(crossover['timestamp']).strftime('%Y-%m-%d %H:%M')
+                    crossover_history_context += f"""
+                - {crossover_time}: {crossover['type']} عند سعر {crossover['price_at_crossover']:.5f}"""
+                
+                crossover_history_context += f"""
+                
+                🔍 تحليل أنماط التقاطعات:
+                - عدد التقاطعات الحديثة: {crossover_patterns.get('recent_count', 0)}
+                - النمط السائد: {crossover_patterns.get('dominant_type', 'غير محدد')}
+                - قوة النمط: {crossover_patterns.get('pattern_strength', 0):.2f}
+                """
+            
             if technical_data and technical_data.get('indicators'):
                 indicators = technical_data['indicators']
                 technical_analysis = f"""
                 
-                المؤشرات الفنية الحقيقية (محسوبة من البيانات التاريخية):
-                - المتوسط المتحرك 10: {indicators.get('ma_10', 'غير متوفر'):.5f}
-                - المتوسط المتحرك 20: {indicators.get('ma_20', 'غير متوفر'):.5f}
-                - المتوسط المتحرك 50: {indicators.get('ma_50', 'غير متوفر'):.5f}
+                🎯 المؤشرات الفنية الحقيقية المتقدمة (محسوبة من البيانات التاريخية):
+                
+                📈 المتوسطات المتحركة والتقاطعات:
+                - MA 9: {indicators.get('ma_9', 'غير متوفر'):.5f}
+                - MA 10: {indicators.get('ma_10', 'غير متوفر'):.5f}
+                - MA 20: {indicators.get('ma_20', 'غير متوفر'):.5f}
+                - MA 21: {indicators.get('ma_21', 'غير متوفر'):.5f}
+                - MA 50: {indicators.get('ma_50', 'غير متوفر'):.5f}
+                - تقاطع MA9/MA21: {indicators.get('ma_9_21_crossover', 'لا يوجد')}
+                - تقاطع MA10/MA20: {indicators.get('ma_10_20_crossover', 'لا يوجد')}
+                - تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
+                
+                📊 مؤشرات الزخم:
                 - RSI: {indicators.get('rsi', 'غير متوفر'):.2f} ({indicators.get('rsi_interpretation', 'غير محدد')})
                 - MACD: {indicators.get('macd', {}).get('macd', 'غير متوفر'):.5f}
                 - MACD Signal: {indicators.get('macd', {}).get('signal', 'غير متوفر'):.5f}
                 - MACD Histogram: {indicators.get('macd', {}).get('histogram', 'غير متوفر'):.5f}
                 - تفسير MACD: {indicators.get('macd_interpretation', 'غير محدد')}
-                - حجم التداول الحالي: {indicators.get('current_volume', 'غير متوفر')}
+                
+                🎢 Stochastic Oscillator المتقدم:
+                - %K: {indicators.get('stochastic', {}).get('k', 'غير متوفر'):.2f}
+                - %D: {indicators.get('stochastic', {}).get('d', 'غير متوفر'):.2f}
+                - تقاطع Stochastic: {indicators.get('stochastic', {}).get('crossover', 'لا يوجد')}
+                - منطقة التداول: {indicators.get('stochastic', {}).get('zone', 'غير محدد')}
+                - قوة الإشارة: {indicators.get('stochastic', {}).get('strength', 'غير محدد')}
+                - اتجاه Stochastic: {indicators.get('stochastic', {}).get('trend', 'غير محدد')}
+                - تفسير Stochastic: {indicators.get('stochastic_interpretation', 'غير محدد')}
+                
+                📊 تحليل حجم التداول المتقدم:
+                - الحجم الحالي: {indicators.get('current_volume', 'غير متوفر')}
                 - متوسط الحجم: {indicators.get('avg_volume', 'غير متوفر')}
                 - نسبة الحجم: {indicators.get('volume_ratio', 'غير متوفر'):.2f}
+                - VMA 9: {indicators.get('volume_ma_9', 'غير متوفر'):.0f}
+                - VMA 21: {indicators.get('volume_ma_21', 'غير متوفر'):.0f}
+                - Volume ROC: {indicators.get('volume_roc', 'غير متوفر'):.2f}%
+                - قوة الحجم: {indicators.get('volume_strength', 'غير محدد')}
                 - تفسير الحجم: {indicators.get('volume_interpretation', 'غير محدد')}
-                - Stochastic %K: {indicators.get('stochastic', {}).get('k', 'غير متوفر'):.2f}
-                - Stochastic %D: {indicators.get('stochastic', {}).get('d', 'غير متوفر'):.2f}
+                
+                📍 مستويات الدعم والمقاومة:
+                - مقاومة: {indicators.get('resistance', 'غير متوفر'):.5f}
+                - دعم: {indicators.get('support', 'غير متوفر'):.5f}
                 - Bollinger Upper: {indicators.get('bollinger', {}).get('upper', 'غير متوفر'):.5f}
                 - Bollinger Middle: {indicators.get('bollinger', {}).get('middle', 'غير متوفر'):.5f}
                 - Bollinger Lower: {indicators.get('bollinger', {}).get('lower', 'غير متوفر'):.5f}
                 - تفسير Bollinger: {indicators.get('bollinger_interpretation', 'غير محدد')}
-                - مقاومة: {indicators.get('resistance', 'غير متوفر'):.5f}
-                - دعم: {indicators.get('support', 'غير متوفر'):.5f}
+                
+                🎯 ملخص التحليل المتقدم:
                 - الاتجاه العام: {indicators.get('overall_trend', 'غير محدد')}
+                - قوة الاتجاه: {indicators.get('trend_strength', 0.5):.2f}
+                - ملخص التقاطعات: {indicators.get('crossover_summary', 'لا توجد')}
                 - تغيير السعر %: {indicators.get('price_change_pct', 0):.2f}%
+                - السعر الحالي: {indicators.get('current_price', 0):.5f}
                 """
             else:
                 technical_analysis = """
@@ -1154,6 +1599,7 @@ class GeminiAnalyzer:
             - مصدر البيانات: {data_source}
             - الوقت: {price_data.get('time', 'الآن')}
             {technical_analysis}
+            {crossover_history_context}
             {symbol_type_context}
             {user_context}
             {trading_mode_instructions}
@@ -1200,9 +1646,13 @@ class GeminiAnalyzer:
             - MACD تحت Signal + سالب: نقاط البيع = 8/10
             - تقاطع حديث: نقاط إضافية = +2
             
-            **ج) المتوسطات المتحركة:**
-            - السعر فوق MA10 > MA20 > MA50: نقاط الشراء = 9/10
-            - السعر تحت MA10 < MA20 < MA50: نقاط البيع = 9/10
+            **ج) المتوسطات المتحركة والتقاطعات المتقدمة:**
+            - السعر فوق MA9 > MA21 > MA50: نقاط الشراء = 9/10
+            - السعر تحت MA9 < MA21 < MA50: نقاط البيع = 9/10
+            - تقاطع ذهبي MA9/MA21: نقاط الشراء = 8/10 + نقاط إضافية للقوة
+            - تقاطع الموت MA9/MA21: نقاط البيع = 8/10 + نقاط إضافية للقوة
+            - تقاطع السعر مع MA9 صعوداً: نقاط الشراء = 7/10
+            - تقاطع السعر مع MA9 هبوطاً: نقاط البيع = 7/10
             - ترتيب مختلط: نقاط = 3-5/10 حسب القوة
             
             **د) مستويات الدعم والمقاومة:**
@@ -1215,9 +1665,65 @@ class GeminiAnalyzer:
             - نماذج استمرارية: +1 نقطة
             - تأكيد النموذج بالحجم: +1 نقطة إضافية
             
-            **و) تحليل الـ ATR والتقلبات:**
+            **و) مؤشر Stochastic Oscillator المتقدم:**
+            - تقاطع صاعد %K/%D في منطقة ذروة البيع (<30): نقاط الشراء = 9/10
+            - تقاطع هابط %K/%D في منطقة ذروة الشراء (>70): نقاط البيع = 9/10
+            - تقاطع صاعد %K/%D في المنطقة المحايدة: نقاط الشراء = 6/10
+            - تقاطع هابط %K/%D في المنطقة المحايدة: نقاط البيع = 6/10
+            - %K و %D في ذروة بيع قوية (<20): نقاط الشراء = 8/10
+            - %K و %D في ذروة شراء قوية (>80): نقاط البيع = 8/10
+            - قوة الإشارة (تباعد الخطوط >20): نقاط إضافية = +2
+            - ضعف الإشارة (تقارب الخطوط <5): نقاط = -1
+            
+            **ز) تحليل حجم التداول المتطور:**
+            - حجم عالي جداً (>2x متوسط) مع حركة سعرية قوية: نقاط = +3
+            - حجم عالي (>1.5x متوسط) مع تأكيد الاتجاه: نقاط = +2
+            - حجم منخفض (<0.5x متوسط) مع حركة سعرية: نقاط = -2
+            - Volume ROC موجب قوي (>50%): نقاط = +2
+            - Volume ROC سالب قوي (<-50%): نقاط = -1
+            - تحليل VPA (Volume Price Analysis): تأكيد/ضعف الحركة = ±1
+            
+            **ح) تحليل الـ ATR والتقلبات:**
             - ATR منخفض = استقرار: +1 نقطة
             - ATR مرتفع جداً = مخاطرة: -2 نقاط
+            
+            **🎯 تحليل التقاطعات المتعددة والإشارات المتزامنة:**
+            
+            **التقاطعات عالية القوة (نقاط مضاعفة):**
+            - تقاطع ذهبي MA9/MA21 + تقاطع صاعد MACD + تقاطع صاعد Stochastic: نقاط الشراء = 15/10 (إشارة قوية جداً)
+            - تقاطع الموت MA9/MA21 + تقاطع هابط MACD + تقاطع هابط Stochastic: نقاط البيع = 15/10 (إشارة قوية جداً)
+            
+            **التقاطعات متوسطة القوة:**
+            - تقاطعان متفقان من ثلاثة: نقاط = 8/10
+            - تقاطع واحد قوي مع تأكيد حجم عالي: نقاط = 7/10
+            
+            **التضارب في التقاطعات (تقليل النقاط):**
+            - تقاطع صاعد MA مع تقاطع هابط MACD: نقاط = 3/10 (إشارة ضعيفة)
+            - تقاطع صاعد Stochastic مع تقاطع هابط MA: نقاط = 3/10 (إشارة ضعيفة)
+            - جميع التقاطعات متضاربة: نقاط = 1/10 (تجنب التداول)
+            
+            **تحليل التوقيت للتقاطعات:**
+            - تقاطع حديث (آخر 1-3 شمعات): نقاط إضافية = +2
+            - تقاطع قديم (أكثر من 10 شمعات): نقاط = -1
+            - تقاطع في بداية تكونه: نقاط = +1 (مراقبة)
+            
+            **تأكيد التقاطعات بالحجم والسعر:**
+            - تقاطع مع حجم عالي (>1.5x) وحركة سعرية قوية: نقاط إضافية = +3
+            - تقاطع مع حجم منخفض (<0.8x): نقاط = -2
+            - تقاطع مع كسر مستوى دعم/مقاومة: نقاط إضافية = +2
+            
+            **ملخص قوة الإشارة الإجمالية:**
+            - 3 تقاطعات متفقة + حجم عالي = إشارة استثنائية (95%+ نجاح متوقع)
+            - 2 تقاطعات متفقة + تأكيد = إشارة قوية (85%+ نجاح متوقع)
+            - 1 تقاطع قوي + تأكيدات = إشارة متوسطة (75%+ نجاح متوقع)
+            - تضارب في التقاطعات = تجنب التداول (أقل من 60% نجاح)
+            
+            **🔍 استخدام البيانات التاريخية للتقاطعات:**
+            - راجع سجل التقاطعات الحديثة المرفق لفهم سلوك الرمز
+            - إذا كان هناك نمط سائد من التقاطعات الناجحة، أعط وزناً إضافياً (+5-10%)
+            - إذا كانت التقاطعات الحديثة فاشلة، قلل الثقة (-5-15%)
+            - التقاطعات المتكررة في اتجاه واحد تشير لقوة الاتجاه
+            - غياب التقاطعات الحديثة قد يشير لفترة استقرار أو تردد
             
             ## 🔍 STEP 2: تحليل ظروف السوق
             
