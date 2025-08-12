@@ -2404,31 +2404,9 @@ class GeminiAnalyzer:
                     message += f"• مقاومة: {resistance_level:.5f}\n"
                     message += f"• دعم: {support_level:.5f}\n\n"
                 
-                # تحليل حجم التداول
-                volume_status = indicators.get('volume_interpretation')
-                volume_ratio = indicators.get('volume_ratio')
-                if volume_status and volume_ratio:
-                    message += "📈 تحليل حجم التداول:\n"
-                    message += f"• الحالة: {volume_status} ({volume_ratio:.1f}x)\n"
-                    if volume_ratio > 1.5:
-                        message += "• تفسير: حجم تداول عالي يدل على اهتمام قوي\n"
-                    elif volume_ratio < 0.5:
-                        message += "• تفسير: حجم تداول منخفض - حذر من الحركات الوهمية\n"
-                    else:
-                        message += "• تفسير: حجم تداول طبيعي\n"
-                    message += "\n"
+
                 
-                # تحليل البولنجر باندز إذا متوفر
-                bollinger = indicators.get('bollinger', {})
-                if bollinger.get('upper') and bollinger.get('lower'):
-                    message += "🎯 تحليل البولنجر باندز:\n"
-                    message += f"• النطاق العلوي: {bollinger['upper']:.5f}\n"
-                    message += f"• النطاق الأوسط: {bollinger['middle']:.5f}\n"
-                    message += f"• النطاق السفلي: {bollinger['lower']:.5f}\n"
-                    bollinger_interp = indicators.get('bollinger_interpretation', '')
-                    if bollinger_interp:
-                        message += f"• التفسير: {bollinger_interp}\n"
-                    message += "\n"
+
             
             message += "⚠️ تحذيرات هامة:\n"
             message += "• راقب الأحجام عند نقاط الدخول\n"
@@ -2449,7 +2427,7 @@ class GeminiAnalyzer:
             message += f"🎯 دقة النظام: {ai_success_rate:.1f}% ({success_rate_source})\n"
             message += f"⚡ مصدر البيانات: MetaTrader5 + Gemini AI Analysis\n"
             
-            analysis_mode = "يدوي شامل"
+            analysis_mode = "ذكي آلي"
             trading_mode_display = "وضع السكالبينغ" if trading_mode == "scalping" else "وضع المدى الطويل"
             message += f"🤖 نوع التحليل: {analysis_mode} | {trading_mode_display}\n\n"
             
