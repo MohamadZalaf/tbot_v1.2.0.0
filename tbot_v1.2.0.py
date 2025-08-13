@@ -2448,51 +2448,289 @@ class GeminiAnalyzer:
             # التحقق من وجود تحذيرات
             has_warning = analysis.get('warning') or not indicators or confidence == 0
             
-            # بناء الرسالة المختصرة والمركزة
-            message = "🚀 **إشارة تداول ذكية**\n\n"
+            # بناء الرسالة باستخدام تنسيق التحليل اليدوي الأصلي مع تحسينات v1.2.0
+            message = "🚀 **تحليل شامل متقدم**\n\n"
             
             # إضافة تحذير إذا كانت البيانات محدودة
             if has_warning:
-                message += "⚠️ **تحذير:** البيانات محدودة - تداول بحذر!\n\n"
+                message += "⚠️ **تحذير مهم:** البيانات أو التحليل محدود - لا تتداول بناءً على هذه المعلومات!\n\n"
             
-            # نوع الصفقة والعملة
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            
+            # معلومات الرمز الأساسية مع مصدر البيانات
             message += f"💱 **{symbol}** | {symbol_info['name']} {symbol_info['emoji']}\n"
-            message += f"💰 **السعر اللحظي:** {current_price:,.5f}\n"
             
-            # المقاومة والدعم
-            resistance = indicators.get('resistance', current_price * 1.02) if indicators else current_price * 1.02
-            support = indicators.get('support', current_price * 0.98) if indicators else current_price * 0.98
-            message += f"🔺 **مقاومة:** {resistance:.5f}\n"
-            message += f"🔻 **دعم:** {support:.5f}\n\n"
+            # إضافة مصدر البيانات بوضوح
+            data_source = analysis.get('data_source', 'MetaTrader5')
+            source_emoji = {
+                'binance_websocket': '🚀 Binance (لحظي)',
+                'tradingview': '📊 TradingView',
+                'yahoo': '🔗 Yahoo Finance',
+                'coingecko': '🦎 CoinGecko',
+                'MetaTrader5': '🔗 MetaTrader5 (لحظي - بيانات حقيقية)',
+                'بيانات طوارئ': '⚠️ بيانات طوارئ'
+            }.get(data_source, f'📡 {data_source}')
             
-            # التوصية
-            message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            if action == 'BUY':
-                message += f"🟢 **التوصية: شراء** | نجاح {ai_success_rate:.0f}%\n"
-            elif action == 'SELL':
-                message += f"🔴 **التوصية: بيع** | نجاح {ai_success_rate:.0f}%\n"
+            message += f"📡 **مصدر البيانات:** {source_emoji}\n"
+            
+            if current_price > 0:
+                message += f"💰 **السعر الحالي:** {current_price:,.5f}\n"
             else:
-                message += f"🟡 **التوصية: انتظار** | نجاح {ai_success_rate:.0f}%\n"
-            
-            # تفاصيل التوصية
-            message += "\n📋 **تفاصيل التوصية:**\n"
-            message += f"📍 سعر الدخول: {entry_price:,.5f}\n"
-            message += f"🛑 ستوب لوس: {stop_loss:,.5f}\n"
-            message += f"🎯 تيك بروفيت: {target1:,.5f}\n"
-            message += f"📊 النقاط المستهدفة: {points1:.0f} نقطة\n"
-            
-            
-            # الأخبار القريبة
-            message += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            message += "📰 **الأخبار القريبة:**\n"
-            
-            # جلب الأخبار المحسنة
-            news = self.get_symbol_news(symbol)
-            message += f"{news}\n"
+                message += f"💰 **السعر الحالي:** --\n"
+                
+            if price_change_pct != 0:
+                change_emoji = "📈" if price_change_pct > 0 else "📉"
+                message += f"{change_emoji} **التغيير اليومي:** {daily_change}\n"
+            else:
+                message += f"➡️ **التغيير اليومي:** --\n"
+                
+            # الوقت المحلي
+            message += f"⏰ **وقت التحليل:** {formatted_time}\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            message += f"⏰ {formatted_time} | 🤖 تحليل ذكي آلي"
+            
+            # إشارة التداول الرئيسية
+            message += "⚡ **إشارة التداول الرئيسية**\n\n"
+            
+            # نوع الصفقة
+            if action == 'BUY':
+                message += f"🟢 **نوع الصفقة:** شراء (BUY)\n"
+            elif action == 'SELL':
+                message += f"🔴 **نوع الصفقة:** بيع (SELL)\n"
+            else:
+                message += f"🟡 **نوع الصفقة:** انتظار (HOLD)\n"
+            
+            if entry_price and entry_price > 0:
+                message += f"📍 **سعر الدخول المقترح:** {entry_price:,.5f}\n"
+            
+            # الأهداف
+            if target1 and target1 > 0:
+                message += f"🎯 **الهدف الأول:** {target1:,.5f}"
+                if points1 > 0:
+                    message += f" ({points1:.0f} نقطة)\n"
+                else:
+                    message += "\n"
+            
+            if target2 and target2 > 0:
+                message += f"🎯 **الهدف الثاني:** {target2:,.5f}"
+                if points2 > 0:
+                    message += f" ({points2:.0f} نقطة)\n"
+                else:
+                    message += "\n"
+            
+            # وقف الخسارة
+            if stop_loss and stop_loss > 0:
+                message += f"🛑 **وقف الخسارة:** {stop_loss:,.5f}"
+                if stop_points > 0:
+                    message += f" ({stop_points:.0f} نقطة)\n"
+                else:
+                    message += "\n"
+            
+            # حساب نسبة المخاطرة/المكافأة
+            if entry_price and target1 and stop_loss:
+                profit = abs(target1 - entry_price)
+                risk = abs(entry_price - stop_loss)
+                if risk > 0:
+                    ratio = profit / risk
+                    message += f"📊 **نسبة المخاطرة/المكافأة:** 1:{ratio:.1f}\n"
+            
+            # نسبة النجاح من AI
+            message += f"✅ **نسبة نجاح الصفقة:** {ai_success_rate:.0f}% ({success_rate_source})\n\n"
+            
+            # شروط الدخول من AI
+            reasoning = analysis.get('reasoning', [])
+            if reasoning:
+                message += f"🟨 **شرط الدخول (AI):**\n"
+                for reason in reasoning[:2]:  # أول سببين فقط
+                    message += f"↘️ {reason}\n"
+                message += "\n"
+            
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            
+            # التحليل الفني المتقدم
+            message += "🔧 **التحليل الفني المتقدم**\n\n"
+            
+            # المؤشرات الفنية
+            message += "📈 **المؤشرات الفنية:**\n"
+            
+            if indicators:
+                # RSI
+                rsi = indicators.get('rsi')
+                if rsi and rsi > 0:
+                    if rsi > 70:
+                        rsi_status = "ذروة شراء"
+                    elif rsi < 30:
+                        rsi_status = "ذروة بيع"
+                    else:
+                        rsi_status = "محايد"
+                    message += f"• RSI: {rsi:.1f} ({rsi_status})\n"
+                else:
+                    message += f"• RSI: --\n"
+                
+                # MACD
+                macd_data = indicators.get('macd', {})
+                if macd_data and macd_data.get('macd') is not None:
+                    macd_value = macd_data.get('macd', 0)
+                    if macd_value > 0:
+                        message += f"• MACD: {macd_value:.4f} (إشارة شراء قوية)\n"
+                    elif macd_value < 0:
+                        message += f"• MACD: {macd_value:.4f} (إشارة بيع قوية)\n"
+                    else:
+                        message += f"• MACD: {macd_value:.4f} (محايد)\n"
+                else:
+                    message += f"• MACD: --\n"
+                
+                # المتوسطات المتحركة
+                ma10 = indicators.get('ma_10')
+                if ma10 and ma10 > 0:
+                    if current_price > ma10:
+                        position = "السعر فوقه"
+                    elif current_price < ma10:
+                        position = "السعر تحته"
+                    else:
+                        position = "السعر عنده"
+                    message += f"• MA10: {ma10:.5f} ({position})\n"
+                else:
+                    message += f"• MA10: --\n"
+                    
+                ma50 = indicators.get('ma_50')
+                if ma50 and ma50 > 0:
+                    if ma50 > current_price:
+                        message += f"• MA50: {ma50:.5f} (مقاومة)\n"
+                    else:
+                        message += f"• MA50: {ma50:.5f} (دعم)\n"
+                else:
+                    message += f"• MA50: --\n"
+                
+                # مستويات الدعم والمقاومة
+                resistance_level = indicators.get('resistance')
+                support_level = indicators.get('support')
+                if resistance_level and support_level:
+                    message += "\n🟢 **مستويات الدعم:**\n"
+                    message += f"• دعم قوي: {support_level:.5f}\n"
+                    message += "\n🔴 **مستويات المقاومة:**\n"
+                    message += f"• مقاومة فورية: {resistance_level:.5f}\n"
+                
+                # تحليل حجم التداول
+                volume_status = indicators.get('volume_interpretation')
+                volume_ratio = indicators.get('volume_ratio')
+                if volume_status and volume_ratio:
+                    message += "\n📊 **تحليل الحجم:**\n"
+                    message += f"• الحالة: {volume_status} ({volume_ratio:.1f}x)\n"
+                    if volume_ratio > 1.5:
+                        message += "• تفسير: حجم تداول عالي يدل على اهتمام قوي\n"
+                    elif volume_ratio < 0.5:
+                        message += "• تفسير: حجم تداول منخفض - حذر من الحركات الوهمية\n"
+                    else:
+                        message += "• تفسير: حجم تداول طبيعي\n"
+                
+                # تحليل البولنجر باندز إذا متوفر
+                bollinger = indicators.get('bollinger', {})
+                if bollinger.get('upper') and bollinger.get('lower'):
+                    message += "\n🎯 **تحليل البولنجر باندز:**\n"
+                    message += f"• النطاق العلوي: {bollinger['upper']:.5f}\n"
+                    message += f"• النطاق الأوسط: {bollinger['middle']:.5f}\n"
+                    message += f"• النطاق السفلي: {bollinger['lower']:.5f}\n"
+                    bollinger_interp = indicators.get('bollinger_interpretation', '')
+                    if bollinger_interp:
+                        message += f"• التفسير: {bollinger_interp}\n"
+                
+            else:
+                message += f"• RSI: --\n"
+                message += f"• MACD: --\n"
+                message += f"• MA10: --\n"
+                message += f"• MA50: --\n"
+            
+            message += "\n"
+            
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            
+            # توصيات إدارة المخاطر
+            message += "📋 **توصيات إدارة المخاطر**\n\n"
+            
+            # حجم المركز المقترح حسب وضع التداول
+            message += "💡 **حجم المركز المقترح:**\n"
+            if trading_mode == "scalping":
+                message += "• للسكالبينغ: 0.01 لوت (مخاطرة منخفضة)\n"
+            else:
+                message += "• للمدى الطويل: 0.005 لوت (مخاطرة محافظة)\n"
+            
+            # تحذيرات عامة
+            message += "\n⚠️ **تحذيرات هامة:**\n"
+            message += "• راقب الأحجام عند نقاط الدخول\n"
+            message += "• فعّل وقف الخسارة فور الدخول\n"
+            if indicators.get('overall_trend'):
+                trend = indicators['overall_trend']
+                message += f"• الاتجاه العام: {trend}\n"
+            
+            # إضافة تحذير خاص إذا كان التحليل محدود
+            if has_warning:
+                message += "• 🚨 تحذير: التحليل محدود - لا تتخذ قرارات تداول بناءً عليه\n"
+                message += "• 🛡️ تأكد من تشغيل MT5 والـ AI للحصول على تحليل كامل\n"
+            
+            message += "\n"
+            
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            
+            # إحصائيات النظام
+            message += "📊 **إحصائيات النظام**\n"
+            message += f"🎯 **دقة النظام:** {ai_success_rate:.1f}% ({success_rate_source})\n"
+            
+            # مصدر البيانات
+            message += f"⚡ **مصدر البيانات:** {source_emoji}\n"
+            
+            # نوع التحليل والوضع
+            analysis_mode = "يدوي شامل"
+            trading_mode_display = "السكالبينغ" if trading_mode == "scalping" else "المدى الطويل"
+            message += f"🤖 **نوع التحليل:** {analysis_mode} | وضع {trading_mode_display}\n\n"
+            
+            # تحليل الذكاء الاصطناعي محفوظ في الخلفية للاستخدام الداخلي فقط
+            # تم حذف عرض التحليل المطول لتحسين سرعة الاستجابة وتقليل طول الرسالة
+            
+            # إضافة توصيات متقدمة بناءً على المؤشرات
+            if indicators:
+                message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                message += "💡 **توصيات متقدمة**\n\n"
+                
+                # توصيات بناءً على RSI
+                rsi = indicators.get('rsi', 0)
+                if rsi > 0:
+                    if rsi > 70:
+                        message += "🔴 RSI يشير لذروة شراء - فكر في البيع أو انتظار تصحيح\n"
+                    elif rsi < 30:
+                        message += "🟢 RSI يشير لذروة بيع - فرصة شراء محتملة\n"
+                    else:
+                        message += "🟡 RSI في منطقة محايدة - راقب الاختراقات\n"
+                
+                # توصيات بناءً على MACD
+                macd_data = indicators.get('macd', {})
+                if macd_data.get('macd') is not None and macd_data.get('signal') is not None:
+                    if macd_data['macd'] > macd_data['signal']:
+                        message += "📈 MACD إيجابي - إشارة صعود قوية\n"
+                    else:
+                        message += "📉 MACD سلبي - إشارة هبوط محتملة\n"
+                
+                # توصيات بناءً على المتوسطات المتحركة
+                ma10 = indicators.get('ma_10', 0)
+                ma20 = indicators.get('ma_20', 0)
+                if ma10 > 0 and ma20 > 0:
+                    if ma10 > ma20:
+                        message += "⬆️ المتوسطات تدعم الاتجاه الصاعد\n"
+                    else:
+                        message += "⬇️ المتوسطات تدعم الاتجاه الهابط\n"
+                
+                message += "\n"
+            
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            
+            # الأخبار الاقتصادية في النهاية
+            message += "📰 **تحديث إخباري:**\n"
+            
+            # جلب الأخبار المتعلقة بالرمز
+            news = self.get_symbol_news(symbol)
+            message += f"{news}\n\n"
+            
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━"
             
             return message
             
