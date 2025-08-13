@@ -21,6 +21,8 @@ BOT_PASSWORD = 'tra12345678'
 
 # مفتاح Google Gemini AI (احصل عليه من https://ai.google.dev)
 GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY_HERE'
+# قائمة مفاتيح بديلة للتبديل التلقائي عند حدود RPD/Quota
+GEMINI_API_KEYS = [GEMINI_API_KEY, 'YOUR_SECOND_GEMINI_API_KEY_IF_ANY']
 
 # ===== إعدادات MetaTrader5 =====
 
@@ -43,7 +45,7 @@ MAX_DAILY_ALERTS = 50
 # ===== إعدادات Gemini AI =====
 
 # نموذج Gemini المستخدم
-GEMINI_MODEL = 'gemini-2.5-flash'  # خيارات: 'gemini-2.5-flash', 'gemini-1.5-pro'
+GEMINI_MODEL = 'gemini-2.0-flash'  # خيارات: 'gemini-2.0-flash', 'gemini-1.5-pro'
 
 # إعدادات توليد المحتوى
 GEMINI_GENERATION_CONFIG = {
@@ -72,6 +74,15 @@ GEMINI_SAFETY_SETTINGS = [
         "threshold": "BLOCK_MEDIUM_AND_ABOVE"
     }
 ]
+
+# حدود جلسة المحادثة والسياق
+GEMINI_CONTEXT_TOKEN_LIMIT = 120000
+GEMINI_CONTEXT_NEAR_LIMIT_RATIO = 0.85
+GEMINI_ROTATE_ON_RATE_LIMIT = True
+
+# حفظ سجلات المحادثة لكل رمز
+SAVE_CHAT_LOGS = True
+CHAT_LOG_RETENTION_DAYS = 7
 
 # ===== إعدادات التحليل =====
 

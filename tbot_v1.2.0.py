@@ -53,13 +53,25 @@ try:
     from config import (
         BOT_TOKEN, BOT_PASSWORD, GEMINI_API_KEY,
         DEFAULT_NOTIFICATION_SETTINGS, AVAILABLE_TIMEZONES,
-        DEFAULT_CAPITAL_OPTIONS, TRADING_MODE_SETTINGS
+        DEFAULT_CAPITAL_OPTIONS, TRADING_MODE_SETTINGS,
+        GEMINI_MODEL, GEMINI_GENERATION_CONFIG, GEMINI_SAFETY_SETTINGS,
+        GEMINI_API_KEYS, GEMINI_CONTEXT_TOKEN_LIMIT, GEMINI_CONTEXT_NEAR_LIMIT_RATIO,
+        GEMINI_ROTATE_ON_RATE_LIMIT, SAVE_CHAT_LOGS, CHAT_LOG_RETENTION_DAYS
     )
 except ImportError:
     # إعدادات احتياطية في حالة عدم وجود ملف config.py
     BOT_TOKEN = 'YOUR_BOT_TOKEN_HERE'
     BOT_PASSWORD = 'tra12345678'
     GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY_HERE'
+    GEMINI_API_KEYS = [GEMINI_API_KEY]
+    GEMINI_MODEL = 'gemini-2.0-flash'
+    GEMINI_GENERATION_CONFIG = {'temperature': 0.7, 'top_p': 0.8, 'top_k': 40, 'max_output_tokens': 1024}
+    GEMINI_SAFETY_SETTINGS = []
+    GEMINI_CONTEXT_TOKEN_LIMIT = 120000
+    GEMINI_CONTEXT_NEAR_LIMIT_RATIO = 0.85
+    GEMINI_ROTATE_ON_RATE_LIMIT = True
+    SAVE_CHAT_LOGS = True
+    CHAT_LOG_RETENTION_DAYS = 7
     DEFAULT_NOTIFICATION_SETTINGS = {}
     AVAILABLE_TIMEZONES = {}
     DEFAULT_CAPITAL_OPTIONS = [1000, 5000, 10000]
@@ -206,12 +218,108 @@ logger = logging.getLogger(__name__)
 
 # تهيئة Gemini
 try:
-    genai.configure(api_key=GEMINI_API_KEY)
+    initial_key = GEMINI_API_KEYS[0] if 'GEMINI_API_KEYS' in globals() and GEMINI_API_KEYS else GEMINI_API_KEY
+    genai.configure(api_key=initial_key)
     GEMINI_AVAILABLE = True
     logger.info("[OK] تم تهيئة Gemini AI بنجاح")
 except Exception as e:
     GEMINI_AVAILABLE = False
     logger.error(f"[ERROR] فشل تهيئة Gemini AI: {e}")
+ 
+# مدير مفاتيح Gemini للتبديل التلقائي عند حدود RPD/Quota
+class GeminiKeyManager:
+    def __init__(self, api_keys: List[str]):
+        self.api_keys = [k for k in api_keys if k]
+        self.lock = threading.Lock()
+        self.index = 0
+
+    def get_current_key(self) -> Optional[str]:
+        with self.lock:
+            if not self.api_keys:
+                return None
+            return self.api_keys[self.index]
+
+    def rotate_key(self) -> Optional[str]:
+        with self.lock:
+            if not self.api_keys:
+                return None
+            self.index = (self.index + 1) % len(self.api_keys)
+            new_key = self.api_keys[self.index]
+            try:
+                genai.configure(api_key=new_key)
+                logger.info("[GEMINI] تم تبديل مفتاح API تلقائياً بسبب حدود RPD/Quota")
+            except Exception as e:
+                logger.error(f"[GEMINI] فشل تبديل المفتاح: {e}")
+            return new_key
+
+# مدير جلسات المحادثة لكل رمز مع حد السياق وتجديد تلقائي
+class ChatSessionManager:
+    def __init__(self, model_name: str, generation_config: dict, safety_settings: list, key_manager: GeminiKeyManager):
+        self.model_name = model_name
+        self.generation_config = generation_config
+        self.safety_settings = safety_settings
+        self.key_manager = key_manager
+        self.sessions: Dict[str, Any] = {}
+        self.session_tokens: Dict[str, int] = {}
+        self.lock = threading.Lock()
+
+    def _create_session(self, symbol: str):
+        api_key = self.key_manager.get_current_key()
+        if api_key:
+            genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(self.model_name, generation_config=self.generation_config, safety_settings=self.safety_settings)
+        chat = model.start_chat(history=[])
+        self.sessions[symbol] = chat
+        self.session_tokens[symbol] = 0
+        return chat
+
+    def reset_session(self, symbol: str):
+        with self.lock:
+            return self._create_session(symbol)
+
+    def _should_rollover(self, symbol: str) -> bool:
+        used = self.session_tokens.get(symbol, 0)
+        return used >= int(GEMINI_CONTEXT_TOKEN_LIMIT * GEMINI_CONTEXT_NEAR_LIMIT_RATIO)
+
+    def get_chat(self, symbol: str):
+        with self.lock:
+            if symbol not in self.sessions or self._should_rollover(symbol):
+                return self._create_session(symbol)
+            return self.sessions[symbol]
+
+    def record_usage(self, symbol: str, input_tokens: int, output_tokens: int):
+        with self.lock:
+            used = self.session_tokens.get(symbol, 0)
+            self.session_tokens[symbol] = used + int(input_tokens or 0) + int(output_tokens or 0)
+
+# تهيئة مديري المفاتيح والجلسات
+try:
+    gemini_key_manager = GeminiKeyManager(GEMINI_API_KEYS if 'GEMINI_API_KEYS' in globals() else [GEMINI_API_KEY])
+    chat_session_manager = ChatSessionManager(GEMINI_MODEL, GEMINI_GENERATION_CONFIG, GEMINI_SAFETY_SETTINGS, gemini_key_manager)
+except Exception as _e:
+    logger.warning(f"[GEMINI] لم يتم تهيئة مديري المفاتيح/الجلسات: {_e}")
+
+# مهمة خلفية لتنظيف سجلات الدردشة القديمة
+def _cleanup_chat_logs(retention_days: int):
+    try:
+        cutoff = datetime.now() - timedelta(days=retention_days)
+        for fname in os.listdir(CHAT_LOGS_DIR):
+            fpath = os.path.join(CHAT_LOGS_DIR, fname)
+            try:
+                if os.path.isfile(fpath):
+                    mtime = datetime.fromtimestamp(os.path.getmtime(fpath))
+                    if mtime < cutoff:
+                        os.remove(fpath)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+if 'SAVE_CHAT_LOGS' in globals() and SAVE_CHAT_LOGS:
+    try:
+        _cleanup_chat_logs(CHAT_LOG_RETENTION_DAYS)
+    except Exception:
+        pass
 
 # ===== نظام إدارة المستخدمين =====
 user_sessions = {}  # تتبع جلسات المستخدمين
@@ -261,9 +369,10 @@ user_timezones = {}  # المناطق الزمنية للمستخدمين
 DATA_DIR = "trading_data"
 FEEDBACK_DIR = os.path.join(DATA_DIR, "user_feedback")
 TRADE_LOGS_DIR = os.path.join(DATA_DIR, "trade_logs")
+CHAT_LOGS_DIR = os.path.join(DATA_DIR, "chat_logs")
 
 # إنشاء المجلدات إذا لم تكن موجودة
-for directory in [DATA_DIR, FEEDBACK_DIR, TRADE_LOGS_DIR]:
+for directory in [DATA_DIR, FEEDBACK_DIR, TRADE_LOGS_DIR, CHAT_LOGS_DIR]:
     os.makedirs(directory, exist_ok=True)
 
 # رسائل تحذير للمكتبات المفقودة
@@ -1419,8 +1528,8 @@ class GeminiAnalyzer:
         self.model = None
         if GEMINI_AVAILABLE:
             try:
-                self.model = genai.GenerativeModel('gemini-2.5-flash')
-                logger.info("[OK] تم تهيئة محلل Gemini بنجاح")
+                self.model = genai.GenerativeModel(GEMINI_MODEL, generation_config=GEMINI_GENERATION_CONFIG, safety_settings=GEMINI_SAFETY_SETTINGS)
+                logger.info(f"[OK] تم تهيئة محلل Gemini بنجاح - النموذج: {GEMINI_MODEL}")
             except Exception as e:
                 logger.error(f"[ERROR] فشل في تهيئة محلل Gemini: {e}")
     
@@ -1902,9 +2011,35 @@ class GeminiAnalyzer:
             **🔥 تذكر:** أنت تعمل كخبير احترافي في غرفة تداول مؤسسية. المصداقية والدقة أهم من التفاؤل. المتداول يعتمد على تحليلك في اتخاذ قرارات مالية مهمة جداً!
             """
             
-            # إرسال الطلب لـ Gemini
-            response = self.model.generate_content(prompt)
-            analysis_text = response.text
+            # إرسال الطلب لـ Gemini باستخدام جلسة دردشة لكل رمز
+            chat = chat_session_manager.get_chat(symbol)
+            response = None
+            try:
+                response = chat.send_message(prompt)
+            except Exception as rate_e:
+                if GEMINI_ROTATE_ON_RATE_LIMIT and ("429" in str(rate_e) or "rate" in str(rate_e).lower() or "quota" in str(rate_e).lower()):
+                    gemini_key_manager.rotate_key()
+                    chat = chat_session_manager.reset_session(symbol)
+                    response = chat.send_message(prompt)
+                else:
+                    raise
+            analysis_text = getattr(response, 'text', '') or (response.candidates[0].content.parts[0].text if getattr(response, 'candidates', None) else '')
+            try:
+                # حساب تقريبي لاستهلاك الرموز
+                input_tokens = len(prompt) // 3
+                output_tokens = len(analysis_text) // 3
+                chat_session_manager.record_usage(symbol, input_tokens, output_tokens)
+            except Exception:
+                pass
+
+            # حفظ سجل المحادثة اختيارياً
+            if 'SAVE_CHAT_LOGS' in globals() and SAVE_CHAT_LOGS:
+                try:
+                    log_path = os.path.join(CHAT_LOGS_DIR, f"{symbol}_{datetime.now().strftime('%Y%m%d')}.log")
+                    with open(log_path, 'a', encoding='utf-8') as lf:
+                        lf.write("\n\n" + "="*20 + f"\n[{datetime.now()}] PROMPT:\n" + prompt + "\n\nRESPONSE:\n" + analysis_text + "\n")
+                except Exception as _log_e:
+                    logger.debug(f"[CHAT_LOG] تجاهل خطأ حفظ السجل: {_log_e}")
             
             # استخراج التوصية من النص
             recommendation = self._extract_recommendation(analysis_text)
@@ -1931,6 +2066,13 @@ class GeminiAnalyzer:
             
         except Exception as e:
             logger.error(f"[ERROR] خطأ في تحليل Gemini للرمز {symbol}: {e}")
+            # على أخطاء RPD/Quota جرّب تبديل المفتاح مرة أخيرة
+            if GEMINI_ROTATE_ON_RATE_LIMIT and ("429" in str(e) or "rate" in str(e).lower() or "quota" in str(e).lower()):
+                try:
+                    gemini_key_manager.rotate_key()
+                    chat_session_manager.reset_session(symbol)
+                except Exception:
+                    pass
             return self._fallback_analysis(symbol, price_data)
     
     def _load_training_context(self, symbol: str) -> str:
@@ -3047,8 +3189,8 @@ def is_timing_allowed(user_id: int) -> bool:
 def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
     """حساب نسبة النجاح الديناميكية بناءً على التحليل التقني والذكي"""
     try:
-                 # نقطة بداية أساسية
-         base_score = 30.0
+        # نقطة بداية أساسية
+        base_score = 30.0
         symbol = analysis.get('symbol', '')
         action = analysis.get('action', 'HOLD')
         
@@ -3097,19 +3239,19 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
                 # استخدام أعلى نسبة مئوية موجودة في النص
                 percentages = [float(p) for p in percentage_matches]
                 extracted_percentage = max(percentages)
-                                 if 10 <= extracted_percentage <= 100:
-                     ai_analysis_score = min(extracted_percentage * 0.7, 70)  # تحويل لنقاط (أكثر سخاء)
+                if 10 <= extracted_percentage <= 100:
+                    ai_analysis_score = min(extracted_percentage * 0.7, 70)  # تحويل لنقاط (أكثر سخاء)
                 else:
                     extracted_percentage = None
             
             # إذا لم نجد نسبة صالحة، استخدم تحليل الكلمات
             if not extracted_percentage:
-                             if positive_count > negative_count:
-                 ai_analysis_score = 25 + min(positive_count * 5, 45)  # 25-70
-             elif negative_count > positive_count:
-                 ai_analysis_score = max(35 - negative_count * 5, 0)   # 0-35
-             else:
-                 ai_analysis_score = 30  # متوسط
+                if positive_count > negative_count:
+                    ai_analysis_score = 25 + min(positive_count * 5, 45)  # 25-70
+                elif negative_count > positive_count:
+                    ai_analysis_score = max(35 - negative_count * 5, 0)   # 0-35
+                else:
+                    ai_analysis_score = 30  # متوسط
         
         success_factors.append(("تحليل الذكاء الاصطناعي", ai_analysis_score, 35))
         
@@ -3118,14 +3260,14 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
         source = analysis.get('source', '')
         price_data = analysis.get('price_data', {})
         
-                 if 'MT5' in source and 'Gemini' in source:
-             data_quality_score = 30  # مصدر كامل
-         elif 'MT5' in source:
-             data_quality_score = 25  # بيانات حقيقية
-         elif 'Gemini' in source:
-             data_quality_score = 20  # تحليل ذكي فقط
-         else:
-             data_quality_score = 15  # مصدر محدود
+        if 'MT5' in source and 'Gemini' in source:
+            data_quality_score = 30  # مصدر كامل
+        elif 'MT5' in source:
+            data_quality_score = 25  # بيانات حقيقية
+        elif 'Gemini' in source:
+            data_quality_score = 20  # تحليل ذكي فقط
+        else:
+            data_quality_score = 15  # مصدر محدود
         
         # خصم للبيانات المفقودة
         if not price_data or not price_data.get('last'):
@@ -3137,30 +3279,30 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
         signal_consistency_score = 0
         base_confidence = analysis.get('confidence', 0)
         
-                 if base_confidence > 0:
-             # تحويل الثقة من 0-100 إلى نقاط من 0-25
-             signal_consistency_score = min(base_confidence / 4, 25)
-         else:
-             # في حالة عدم وجود ثقة محددة، استخدم عوامل أخرى
-             if action in ['BUY', 'SELL']:
-                 signal_consistency_score = 18  # إشارة واضحة
-             elif action == 'HOLD':
-                 signal_consistency_score = 12  # حذر
-             else:
-                 signal_consistency_score = 8   # غير واضح
+        if base_confidence > 0:
+            # تحويل الثقة من 0-100 إلى نقاط من 0-25
+            signal_consistency_score = min(base_confidence / 4, 25)
+        else:
+            # في حالة عدم وجود ثقة محددة، استخدم عوامل أخرى
+            if action in ['BUY', 'SELL']:
+                signal_consistency_score = 18  # إشارة واضحة
+            elif action == 'HOLD':
+                signal_consistency_score = 12  # حذر
+            else:
+                signal_consistency_score = 8   # غير واضح
         
         success_factors.append(("تماسك الإشارة", signal_consistency_score, 20))
         
         # 4. نوع الإشارة والسياق (10% من النتيجة)
         signal_type_score = 0
-                 if signal_type == 'trading_signals':
-             signal_type_score = 12   # إشارات التداول دقيقة
-         elif signal_type == 'breakout_alerts':
-             signal_type_score = 15  # الاختراقات قوية
-         elif signal_type == 'support_alerts':
-             signal_type_score = 10   # مستويات الدعم أقل دقة
-         else:
-             signal_type_score = 8   # أنواع أخرى
+        if signal_type == 'trading_signals':
+            signal_type_score = 12   # إشارات التداول دقيقة
+        elif signal_type == 'breakout_alerts':
+            signal_type_score = 15  # الاختراقات قوية
+        elif signal_type == 'support_alerts':
+            signal_type_score = 10   # مستويات الدعم أقل دقة
+        else:
+            signal_type_score = 8   # أنواع أخرى
         
         success_factors.append(("نوع الإشارة", signal_type_score, 10))
         
@@ -3171,12 +3313,12 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
         from datetime import datetime
         current_hour = datetime.now().hour
         
-                 if 8 <= current_hour <= 17:  # أوقات التداول الأوروبية/الأمريكية
-             timing_score = 12
-         elif 0 <= current_hour <= 2:  # أوقات التداول الآسيوية
-             timing_score = 10
-         else:
-             timing_score = 6  # أوقات هادئة
+        if 8 <= current_hour <= 17:  # أوقات التداول الأوروبية/الأمريكية
+            timing_score = 12
+        elif 0 <= current_hour <= 2:  # أوقات التداول الآسيوية
+            timing_score = 10
+        else:
+            timing_score = 6  # أوقات هادئة
         
         success_factors.append(("توقيت السوق", timing_score, 10))
         
@@ -3191,19 +3333,19 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
         # النتيجة النهائية
         final_score = base_score + total_weighted_score
         
-                 # تطبيق تعديلات بناءً على نوع الصفقة
-         if action == 'HOLD':
-             final_score = final_score - 10  # تقليل للانتظار
-         elif action in ['BUY', 'SELL']:
-             final_score = final_score + 8   # زيادة للإشارات الواضحة
-         
-         # إضافة عشوائية للواقعية (±5%)
-         import random
-         random_factor = random.uniform(-5, 5)
-         final_score = final_score + random_factor
-         
-         # ضمان النطاق 0-100 فقط (بدون قيود إضافية)
-         final_score = max(0, min(100, final_score))
+        # تطبيق تعديلات بناءً على نوع الصفقة
+        if action == 'HOLD':
+            final_score = final_score - 10  # تقليل للانتظار
+        elif action in ['BUY', 'SELL']:
+            final_score = final_score + 8   # زيادة للإشارات الواضحة
+        
+        # إضافة عشوائية للواقعية (±5%)
+        import random
+        random_factor = random.uniform(-5, 5)
+        final_score = final_score + random_factor
+        
+        # ضمان النطاق 0-100 فقط (بدون قيود إضافية)
+        final_score = max(0, min(100, final_score))
         
         # سجل تفاصيل الحساب للمراجعة
         logger.info(f"[AI_SUCCESS_CALC] {symbol} - {action}: {final_score:.1f}% | العوامل: {success_factors}")
@@ -3212,9 +3354,9 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
         
     except Exception as e:
         logger.error(f"خطأ في حساب نسبة النجاح الديناميكية: {e}")
-                 # في حالة الخطأ، استخدم قيمة عشوائية واقعية من النطاق الكامل
-         import random
-         return round(random.uniform(25, 85), 1)
+        # في حالة الخطأ، استخدم قيمة عشوائية واقعية من النطاق الكامل
+        import random
+        return round(random.uniform(25, 85), 1)
 
 def get_user_advanced_notification_settings(user_id: int) -> Dict:
     """جلب إعدادات التنبيهات المتقدمة للمستخدم"""
