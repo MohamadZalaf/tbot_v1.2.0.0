@@ -995,7 +995,7 @@ class MT5Manager:
                     latest = data.iloc[-1]
                     current_time = datetime.now()
                     
-                    logger.warning(f"[WARNING] استخدام Yahoo Finance كمصدر بديل للرمز {symbol} - MT5 غير متصل")
+                    logger.debug(f"[OK] تم جلب البيانات من Yahoo Finance للرمز {symbol}")
                     data = {
                         'symbol': symbol,
                         'bid': latest['Close'] * 0.9995,  # تقدير سعر الشراء
@@ -1004,8 +1004,7 @@ class MT5Manager:
                         'volume': latest['Volume'],
                         'time': current_time,
                         'spread': latest['Close'] * 0.001,
-                        'source': 'Yahoo Finance (مصدر بديل - MT5 غير متصل)',
-                        'data_source': 'Yahoo Finance (مصدر بديل - MT5 غير متصل)'
+                        'source': 'Yahoo Finance (مصدر بديل)'
                     }
                     # حفظ في الكاش
                     cache_price_data(symbol, data)
@@ -2700,14 +2699,17 @@ class GeminiAnalyzer:
             # معلومات الرمز الأساسية مع مصدر البيانات
             message += f"💱 **{symbol}** | {symbol_info['name']} {symbol_info['emoji']}\n"
             
-            # إضافة مصدر البيانات بوضوح
-            data_source = analysis.get('data_source', 'MetaTrader5')
+            # إضافة مصدر البيانات بوضوح - الحصول عليه من price_data مباشرة
+            data_source = price_data.get('source', 'MetaTrader5')
             source_emoji = {
                 'binance_websocket': '🚀 Binance (لحظي)',
                 'tradingview': '📊 TradingView',
                 'yahoo': '🔗 Yahoo Finance',
                 'coingecko': '🦎 CoinGecko',
                 'MetaTrader5': '🔗 MetaTrader5 (لحظي - بيانات حقيقية)',
+                'MetaTrader5 (مصدر أساسي)': '🔗 MetaTrader5 (لحظي - بيانات حقيقية)',
+                'Yahoo Finance (مصدر بديل)': '🔗 Yahoo Finance',
+                'Yahoo Finance (مصدر بديل - MT5 غير متصل)': '⚠️ Yahoo Finance (مصدر بديل - MT5 غير متصل)',
                 'بيانات طوارئ': '⚠️ بيانات طوارئ'
             }.get(data_source, f'📡 {data_source}')
             
