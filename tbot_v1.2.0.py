@@ -2978,120 +2978,152 @@ class GeminiAnalyzer:
                             target2 = target2 or current_price * (1 + percentage_move * 2)
                             stop_loss = stop_loss or current_price * (1 - percentage_move * 0.5)
             
-            # حساب النقاط بدقة حسب نوع الرمز مع مراعاة رأس المال والمخاطر
-            def calculate_points_accurately(price_diff, symbol, capital=None, current_price=None):
-                """حساب النقاط بدقة حسب نوع الرمز مع مراعاة رأس المال والمخاطر - محسن بالذكاء الاصطناعي"""
-                if not price_diff or price_diff == 0:
-                    return 0
+            # دوال حساب النقاط الصحيحة حسب المعادلات المالية الدقيقة
+            def get_asset_type_and_pip_size(symbol):
+                """تحديد نوع الأصل وحجم النقطة بدقة"""
+                symbol = symbol.upper()
                 
-                # الحصول على رأس المال الفعلي
-                if capital is None:
-                    capital = get_user_capital(user_id) if user_id else 1000
-                
-                # حساب النقاط الأساسية حسب نوع الرمز - أكثر دقة
-                base_points = 0
-                
-                # تصنيف أكثر دقة للرموز المالية
+                # 💱 الفوركس
                 if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
                     if any(symbol.endswith(yen) for yen in ['JPY']):
-                        # أزواج الين - دقة أعلى
-                        base_points = abs(price_diff) * 100
+                        return 'forex_jpy', 0.01  # أزواج الين
                     else:
-                        # العملات الرئيسية - حساب محسن
-                        base_points = abs(price_diff) * 10000
-                        
-                # المعادن النفيسة - تحسين الحساب
-                elif any(symbol.startswith(metal) for metal in ['XAU', 'XAG', 'GOLD', 'SILVER']):
-                    if 'XAU' in symbol or 'GOLD' in symbol:
-                        base_points = abs(price_diff) * 10  # الذهب
-                    else:
-                        base_points = abs(price_diff) * 50  # الفضة والمعادن الأخرى
-                        
-                # العملات الرقمية - حساب ديناميكي
-                elif any(symbol.startswith(crypto) for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
+                        return 'forex_major', 0.0001  # الأزواج الرئيسية
+                
+                # 🪙 المعادن النفيسة
+                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+                    return 'metals', 0.01  # النقطة = 0.01
+                
+                # 🪙 العملات الرقمية
+                elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
                     if 'BTC' in symbol:
-                        base_points = abs(price_diff) * 0.1  # البيتكوين
-                    elif 'ETH' in symbol:
-                        base_points = abs(price_diff) * 1    # الإيثريوم
+                        return 'crypto_btc', 1.0  # البيتكوين - نقطة = 1 دولار
                     else:
-                        base_points = abs(price_diff) * 10   # العملات الرقمية الأخرى
-                        
-                # المؤشرات والأسهم - تصنيف محسن
+                        return 'crypto_alt', 0.01  # العملات الأخرى
+                
+                # 📈 الأسهم
+                elif any(symbol.startswith(stock) for stock in ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN']):
+                    return 'stocks', 1.0  # النقطة = 1 دولار
+                
+                # 📉 المؤشرات
                 elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER', 'SPX']):
-                    base_points = abs(price_diff) * 1
+                    return 'indices', 1.0  # النقطة = 1 وحدة
+                
                 else:
-                    # افتراضي للرموز الأخرى - تحسين التخمين
-                    base_points = abs(price_diff) * 100
-                
-                # تطبيق تحليل ذكي لتعديل النقاط بناءً على رأس المال والسوق
-                if capital and current_price and base_points > 0:
-                    # حساب قيمة النقطة الواحدة بالدولار - أكثر دقة
-                    pip_value = calculate_pip_value_smart(symbol, current_price)
-                    
-                    # نسبة المخاطرة الديناميكية بناءً على رأس المال
-                    if capital >= 50000:
-                        risk_percentage = 0.015  # 1.5% للحسابات الكبيرة
-                    elif capital >= 10000:
-                        risk_percentage = 0.02   # 2% للحسابات المتوسطة
-                    elif capital >= 5000:
-                        risk_percentage = 0.025  # 2.5% للحسابات الصغيرة
-                    else:
-                        risk_percentage = 0.03   # 3% للحسابات الصغيرة جداً
-                    
-                    max_loss_amount = capital * risk_percentage
-                    
-                    # تحديد النقاط المناسبة بناءً على إدارة المخاطر الذكية
-                    if pip_value > 0:
-                        max_safe_points = max_loss_amount / pip_value
-                        
-                        # تطبيق حدود ذكية بناءً على تحليل السوق
-                        if base_points > max_safe_points * 4:  # نقاط عالية جداً
-                            base_points = max_safe_points * 2.5  # تقليل للأمان
-                        elif base_points > max_safe_points * 2:  # نقاط عالية
-                            base_points = max_safe_points * 1.8  # تقليل متوسط
-                        
-                        # تعديل إضافي بناءً على قوة الإشارة من AI
-                        if analysis and analysis.get('confidence'):
-                            confidence = analysis.get('confidence', 50)
-                            if confidence > 80:  # إشارة قوية جداً
-                                base_points = min(base_points * 1.2, max_safe_points * 3)
-                            elif confidence < 40:  # إشارة ضعيفة
-                                base_points = base_points * 0.7  # تقليل النقاط
-                
-                return max(0, base_points)  # ضمان عدم إرجاع قيم سالبة
+                    return 'unknown', 0.0001  # افتراضي
             
-            def calculate_pip_value_smart(symbol, current_price):
-                """حساب قيمة النقطة بطريقة ذكية ودقيقة"""
+            def calculate_pip_value(symbol, current_price, contract_size=100000):
+                """حساب قيمة النقطة باستخدام المعادلة الصحيحة"""
                 try:
-                    # أزواج العملات الرئيسية
-                    if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD']) and symbol.endswith('USD'):
-                        return 10  # قيمة ثابتة للعملات مقابل الدولار
-                    elif symbol.startswith('USD') and any(symbol.endswith(curr) for curr in ['JPY', 'CHF', 'CAD']):
-                        return 10 / current_price if current_price > 0 else 10
-                    elif any(symbol.startswith(cross) for cross in ['EUR', 'GBP']):
-                        return 10  # الأزواج المتقاطعة
+                    asset_type, pip_size = get_asset_type_and_pip_size(symbol)
                     
-                    # المعادن النفيسة
-                    elif 'XAU' in symbol or 'GOLD' in symbol:
-                        return 100  # الذهب
-                    elif 'XAG' in symbol or 'SILVER' in symbol:
-                        return 50   # الفضة
+                    if asset_type == 'forex_major':
+                        # قيمة النقطة = (حجم العقد × حجم النقطة) ÷ سعر الصرف
+                        return (contract_size * pip_size) / current_price if current_price > 0 else 10
                     
-                    # العملات الرقمية
-                    elif 'BTC' in symbol:
-                        return 10   # البيتكوين
-                    elif 'ETH' in symbol:
-                        return 10   # الإيثريوم
+                    elif asset_type == 'forex_jpy':
+                        # للين الياباني
+                        return (contract_size * pip_size) / current_price if current_price > 0 else 10
                     
-                    # المؤشرات
-                    elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100']):
-                        return 1    # المؤشرات الأمريكية
+                    elif asset_type == 'metals':
+                        # قيمة النقطة = حجم العقد × حجم النقطة
+                        return contract_size * pip_size  # 100 أونصة × 0.01 = 1 دولار
+                    
+                    elif asset_type == 'crypto_btc':
+                        # للبيتكوين - قيمة النقطة تعتمد على حجم الصفقة
+                        return contract_size / 100000  # تطبيع حجم العقد
+                    
+                    elif asset_type == 'crypto_alt':
+                        # للعملات الرقمية الأخرى
+                        return contract_size * pip_size
+                    
+                    elif asset_type == 'stocks':
+                        # قيمة النقطة = عدد الأسهم × 1 (كل نقطة = 1 دولار)
+                        # للأسهم، نحتاج لحساب عدد الأسهم الفعلي
+                        shares_count = max(1, contract_size / 5000)  # تحويل حجم العقد لعدد أسهم
+                        return shares_count  # كل نقطة × عدد الأسهم
+                    
+                    elif asset_type == 'indices':
+                        # حجم العقد (بالدولار لكل نقطة) - عادة 1-10 دولار
+                        return 5.0  # متوسط قيمة للمؤشرات
                     
                     else:
-                        return 10   # افتراضي
+                        return 10.0  # قيمة افتراضية
                         
-                except Exception:
-                    return 10  # قيمة افتراضية آمنة
+                except Exception as e:
+                    logger.error(f"خطأ في حساب قيمة النقطة: {e}")
+                    return 10.0
+            
+            def calculate_points_from_price_difference(price_diff, symbol):
+                """حساب عدد النقاط من فرق السعر"""
+                try:
+                    asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+                    
+                    if pip_size > 0:
+                        return abs(price_diff) / pip_size
+                    else:
+                        return 0
+                        
+                except Exception as e:
+                    logger.error(f"خطأ في حساب النقاط من فرق السعر: {e}")
+                    return 0
+            
+            def calculate_profit_loss(points, pip_value):
+                """حساب الربح أو الخسارة = عدد النقاط × قيمة النقطة"""
+                try:
+                    return points * pip_value
+                except Exception as e:
+                    logger.error(f"خطأ في حساب الربح/الخسارة: {e}")
+                    return 0
+            
+            def calculate_points_accurately(price_diff, symbol, capital=None, current_price=None):
+                """حساب النقاط بالمعادلات المالية الصحيحة"""
+                try:
+                    if not price_diff or price_diff == 0 or not current_price:
+                        return 0
+                    
+                    # الحصول على رأس المال
+                    if capital is None:
+                        capital = get_user_capital(user_id) if user_id else 1000
+                    
+                    # حساب عدد النقاط من فرق السعر
+                    points = calculate_points_from_price_difference(price_diff, symbol)
+                    
+                    # حساب قيمة النقطة
+                    pip_value = calculate_pip_value(symbol, current_price)
+                    
+                    # حساب الربح/الخسارة المتوقع
+                    potential_profit_loss = calculate_profit_loss(points, pip_value)
+                    
+                    # تطبيق إدارة المخاطر بناءً على رأس المال
+                    if capital > 0:
+                        # نسبة المخاطرة المناسبة حسب حجم الحساب
+                        if capital >= 100000:
+                            max_risk_percentage = 0.01  # 1% للحسابات الكبيرة جداً
+                        elif capital >= 50000:
+                            max_risk_percentage = 0.015  # 1.5% للحسابات الكبيرة
+                        elif capital >= 10000:
+                            max_risk_percentage = 0.02   # 2% للحسابات المتوسطة
+                        elif capital >= 5000:
+                            max_risk_percentage = 0.025  # 2.5% للحسابات الصغيرة
+                        else:
+                            max_risk_percentage = 0.03   # 3% للحسابات الصغيرة جداً
+                        
+                        max_risk_amount = capital * max_risk_percentage
+                        
+                        # تقليل النقاط إذا كانت المخاطرة عالية جداً
+                        if potential_profit_loss > max_risk_amount:
+                            adjustment_factor = max_risk_amount / potential_profit_loss
+                            points = points * adjustment_factor
+                            logger.info(f"تم تعديل النقاط للرمز {symbol} من {points/adjustment_factor:.1f} إلى {points:.1f} لإدارة المخاطر")
+                    
+                    return max(0, points)
+                    
+                except Exception as e:
+                    logger.error(f"خطأ في حساب النقاط للرمز {symbol}: {e}")
+                    return 0
+            
+
             
             # جلب رأس المال للمستخدم
             user_capital = get_user_capital(user_id) if user_id else 1000
