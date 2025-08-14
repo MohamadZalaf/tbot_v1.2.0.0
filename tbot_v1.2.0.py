@@ -165,15 +165,21 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             except Exception:
                 pass
 
-        header = f"🚨 **إشعار تداول آلي** {symbol_info['emoji']}\n\n"
-        body = "🚀 **إشارة تداول ذكية**\n\n"
+        header = f"🚨 *إشعار تداول آلي* {symbol_info['emoji']}\n\n"
+        body = "🚀 *إشارة تداول ذكية*\n\n"
         body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        body += f"💱 **{symbol}** | {symbol_info['name']} {symbol_info['emoji']}\n"
+        body += f"💱 *{symbol}* | {symbol_info['name']} {symbol_info['emoji']}\n"
 
         if current_price and current_price > 0:
-            body += f"💰 **السعر اللحظي:** {current_price:,.5f}\n"
+            body += f"💰 *السعر اللحظي:* {current_price:,.5f}\n"
         else:
-            body += f"❌ **السعر اللحظي:** فشل في جلب السعر\n"
+            # محاولة أخيرة لجلب السعر
+            retry_price_data = mt5_manager.get_live_price(symbol)
+            if retry_price_data and retry_price_data.get('last', 0) > 0:
+                current_price = retry_price_data['last']
+                body += f"💰 *السعر اللحظي:* {current_price:,.5f}\n"
+            else:
+                body += f"⚠️ *السعر اللحظي:* يرجى التأكد من اتصال MT5\n"
 
         # مستويات الدعم والمقاومة من MT5
         try:
@@ -189,28 +195,28 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                         resistance = technical['indicators'].get('resistance')
                         support = technical['indicators'].get('support')
             if resistance and resistance > 0:
-                body += f"🔺 **مقاومة:** {resistance:,.5f}\n"
+                body += f"🔺 *مقاومة:* {resistance:,.5f}\n"
             else:
-                body += f"🔺 **مقاومة:** --\n"
+                body += f"🔺 *مقاومة:* --\n"
             if support and support > 0:
-                body += f"🔻 **دعم:** {support:,.5f}\n"
+                body += f"🔻 *دعم:* {support:,.5f}\n"
             else:
-                body += f"🔻 **دعم:** --\n"
+                body += f"🔻 *دعم:* --\n"
         except Exception:
-            body += f"🔺 **مقاومة:** --\n"
-            body += f"🔻 **دعم:** --\n"
+            body += f"🔺 *مقاومة:* --\n"
+            body += f"🔻 *دعم:* --\n"
 
         body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 
         # نوع الصفقة
         if action == 'BUY':
-            body += "🟢 **التوصية:** شراء | نجاح "
+            body += "🟢 *التوصية:* شراء | نجاح "
         elif action == 'SELL':
-            body += "🔴 **التوصية:** بيع | نجاح "
+            body += "🔴 *التوصية:* بيع | نجاح "
         elif action == 'HOLD':
-            body += "🟡 **التوصية:** انتظار | نجاح "
+            body += "🟡 *التوصية:* انتظار | نجاح "
         else:
-            body += f"❌ **التوصية:** {action} | نجاح "
+            body += f"❌ *التوصية:* {action} | نجاح "
 
         # نسبة النجاح
         if confidence is not None and isinstance(confidence, (int, float)) and 0 <= confidence <= 100:
@@ -218,23 +224,34 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         else:
             body += f"فشل في تحديد النسبة\n\n"
 
-        body += "📋 **تفاصيل التوصية:**\n"
+        body += "📋 *تفاصيل التوصية:*\n"
 
         # قيم أساسية مختصرة بعد التصحيح
         if entry_price and entry_price > 0:
-            body += f"📍 **سعر الدخول:** {entry_price:,.5f}\n"
+            body += f"📍 *سعر الدخول:* {entry_price:,.5f}\n"
+        elif current_price and current_price > 0:
+            # استخدام السعر الحالي كسعر دخول افتراضي
+            body += f"📍 *سعر الدخول:* {current_price:,.5f} (حالي)\n"
         else:
-            body += f"❌ **سعر الدخول:** فشل في تحديد السعر\n"
+            body += f"⚠️ *سعر الدخول:* يحتاج تحديث السعر\n"
 
         if stop_loss and stop_loss > 0:
-            body += f"🛑 **ستوب لوس:** {stop_loss:,.5f}\n"
+            body += f"🛑 *ستوب لوس:* {stop_loss:,.5f}\n"
+        elif current_price and current_price > 0:
+            # حساب وقف خسارة افتراضي (0.5%)
+            default_sl = current_price * 0.995 if action == 'BUY' else current_price * 1.005
+            body += f"🛑 *ستوب لوس:* {default_sl:,.5f} (مقترح)\n"
         else:
-            body += f"❌ **ستوب لوس:** فشل في تحديد وقف الخسارة\n"
+            body += f"⚠️ *ستوب لوس:* يحتاج تحديد السعر\n"
 
         if target1 and target1 > 0:
-            body += f"🎯 **تيك بروفيت:** {target1:,.5f}\n"
+            body += f"🎯 *تيك بروفيت:* {target1:,.5f}\n"
+        elif current_price and current_price > 0:
+            # حساب هدف افتراضي (1%)
+            default_tp = current_price * 1.01 if action == 'BUY' else current_price * 0.99
+            body += f"🎯 *تيك بروفيت:* {default_tp:,.5f} (مقترح)\n"
         else:
-            body += f"❌ **تيك بروفيت:** فشل في تحديد الهدف\n"
+            body += f"⚠️ *تيك بروفيت:* يحتاج تحديد السعر\n"
 
         # عدد النقاط المستهدفة اعتماداً على القيم بعد التصحيح
         def _calc_points(price_diff: float, sym: str) -> float:
@@ -570,6 +587,17 @@ for directory in [DATA_DIR, FEEDBACK_DIR, TRADE_LOGS_DIR, CHAT_LOGS_DIR]:
 # رسائل تحذير للمكتبات المفقودة
 if not TIMEZONE_AVAILABLE:
     logger.warning("مكتبة pytz غير متوفرة - سيتم استخدام التوقيت المحلي فقط")
+
+# دالة مساعدة لمعالجة callback queries
+def safe_answer_callback_query(call, text, show_alert=False):
+    """دالة آمنة للرد على callback query مع معالجة timeout"""
+    try:
+        bot.answer_callback_query(call.id, text, show_alert=show_alert)
+    except Exception as callback_error:
+        if "query is too old" in str(callback_error) or "timeout" in str(callback_error).lower():
+            logger.debug(f"[DEBUG] تجاهل خطأ timeout في callback query: {text}")
+        else:
+            logger.warning(f"[WARNING] خطأ في callback query: {callback_error}")
 
 # ===== قواميس الرموز المالية المحدثة من v1.1.0 =====
 CURRENCY_PAIRS = {
@@ -2398,26 +2426,89 @@ class GeminiAnalyzer:
             return confidence
     
     def _extract_recommendation(self, text: str) -> str:
-        """استخراج التوصية من نص التحليل"""
+        """استخراج التوصية من نص التحليل - محسّن"""
+        if not text:
+            return 'HOLD'
+            
         text_lower = text.lower()
         
-        if any(word in text_lower for word in ['شراء', 'buy', 'صاعد', 'ارتفاع']):
+        # البحث عن كلمات محددة للشراء
+        buy_keywords = [
+            'شراء', 'buy', 'صاعد', 'ارتفاع', 'bullish', 'long', 
+            'توصية: شراء', 'recommendation: buy', 'التوصية: buy',
+            'اتجاه صاعد', 'uptrend', 'صعود', 'ايجابي', 'positive'
+        ]
+        
+        # البحث عن كلمات محددة للبيع
+        sell_keywords = [
+            'بيع', 'sell', 'هابط', 'انخفاض', 'bearish', 'short',
+            'توصية: بيع', 'recommendation: sell', 'التوصية: sell',
+            'اتجاه هابط', 'downtrend', 'هبوط', 'سلبي', 'negative'
+        ]
+        
+        # البحث عن كلمات الانتظار
+        hold_keywords = [
+            'انتظار', 'hold', 'wait', 'محايد', 'neutral', 'sideways',
+            'توصية: انتظار', 'recommendation: hold', 'التوصية: hold'
+        ]
+        
+        # عد الكلمات لكل اتجاه
+        buy_count = sum(1 for word in buy_keywords if word in text_lower)
+        sell_count = sum(1 for word in sell_keywords if word in text_lower)
+        hold_count = sum(1 for word in hold_keywords if word in text_lower)
+        
+        # اختيار التوصية بناءً على الأغلبية
+        if buy_count > sell_count and buy_count > hold_count:
             return 'BUY'
-        elif any(word in text_lower for word in ['بيع', 'sell', 'هابط', 'انخفاض']):
+        elif sell_count > buy_count and sell_count > hold_count:
+            return 'SELL'
+        elif buy_count > 0:
+            return 'BUY'  # في حالة التعادل، نفضل الشراء إذا وُجد
+        elif sell_count > 0:
             return 'SELL'
         else:
             return 'HOLD'
     
     def _extract_confidence(self, text: str) -> float:
-        """استخراج مستوى الثقة من نص التحليل - من AI فقط"""
+        """استخراج مستوى الثقة من نص التحليل - محسّن"""
+        if not text:
+            return 65  # قيمة افتراضية معقولة
+            
         # البحث عن نسبة النجاح المحددة من Gemini
         success_rate = self._extract_success_rate_from_ai(text)
         if success_rate is not None:
             return success_rate
         
-        # إذا لم نجد نسبة محددة من AI، نعيد None
-        # لا نستخدم قيم افتراضية أو ثابتة
-        return None
+        # إذا لم نجد نسبة محددة، نحاول استخراج أي رقم مع علامة %
+        import re
+        
+        # البحث عن أي رقم متبوع بعلامة %
+        percentage_matches = re.findall(r'(\d+(?:\.\d+)?)%', text)
+        if percentage_matches:
+            for match in reversed(percentage_matches):  # نبدأ من النهاية
+                try:
+                    confidence = float(match)
+                    if 40 <= confidence <= 95:  # نطاق معقول
+                        return confidence
+                except ValueError:
+                    continue
+        
+        # إذا لم نجد أي شيء، نعطي قيمة افتراضية بناءً على قوة التحليل
+        text_lower = text.lower()
+        
+        # تحليل قوة الإشارات في النص
+        strong_signals = ['قوي', 'strong', 'واضح', 'clear', 'مؤكد', 'confirmed']
+        weak_signals = ['ضعيف', 'weak', 'غير واضح', 'unclear', 'محتمل', 'possible']
+        
+        strong_count = sum(1 for signal in strong_signals if signal in text_lower)
+        weak_count = sum(1 for signal in weak_signals if signal in text_lower)
+        
+        if strong_count > weak_count:
+            return 75  # إشارة قوية
+        elif weak_count > strong_count:
+            return 55  # إشارة ضعيفة
+        else:
+            return 65  # متوسط
 
     def _extract_success_rate_from_ai(self, text: str) -> float:
         """استخراج نسبة النجاح المحددة من الذكاء الاصطناعي"""
@@ -3087,17 +3178,114 @@ class GeminiAnalyzer:
             return "❌ خطأ في إنشاء التحليل الشامل"
     
     def _fallback_analysis(self, symbol: str, price_data: Dict) -> Dict:
-        """تحليل احتياطي بسيط في حالة فشل Gemini"""
-        return {
-            'action': None,  # فشل في تحديد نوع الصفقة
-            'confidence': None,  # فشل في تحديد نسبة النجاح
-            'reasoning': ['❌ فشل في التحليل - Gemini غير متوفر'],
-            'ai_analysis': '❌ فشل في التحليل - لا توجد توصيات',
-            'source': 'Fallback Analysis',
-            'symbol': symbol,
-            'timestamp': datetime.now(),
-            'price_data': price_data
-        }
+        """تحليل احتياطي محسّن في حالة فشل Gemini - يعتمد على البيانات الأساسية"""
+        try:
+            current_price = price_data.get('last', price_data.get('bid', 0))
+            
+            # تحليل أساسي بسيط بناءً على البيانات المتوفرة
+            action = 'HOLD'  # افتراضي
+            confidence = 50   # متوسط
+            reasoning = []
+            
+            # محاولة الحصول على المؤشرات الفنية من MT5
+            technical_data = mt5_manager.calculate_technical_indicators(symbol)
+            
+            if technical_data and technical_data.get('indicators'):
+                indicators = technical_data['indicators']
+                
+                # تحليل RSI
+                rsi = indicators.get('rsi', 50)
+                if rsi < 30:
+                    action = 'BUY'
+                    confidence = 65
+                    reasoning.append('RSI يشير لذروة بيع - فرصة شراء محتملة')
+                elif rsi > 70:
+                    action = 'SELL'
+                    confidence = 65
+                    reasoning.append('RSI يشير لذروة شراء - فرصة بيع محتملة')
+                else:
+                    reasoning.append(f'RSI في المنطقة المحايدة ({rsi:.1f})')
+                
+                # تحليل MACD
+                macd_data = indicators.get('macd', {})
+                if macd_data.get('macd', 0) > macd_data.get('signal', 0):
+                    if action == 'BUY':
+                        confidence += 10
+                    reasoning.append('MACD إيجابي - اتجاه صاعد')
+                elif macd_data.get('macd', 0) < macd_data.get('signal', 0):
+                    if action == 'SELL':
+                        confidence += 10
+                    reasoning.append('MACD سلبي - اتجاه هابط')
+                
+                # تحليل المتوسطات المتحركة
+                ma_9 = indicators.get('ma_9', current_price)
+                ma_21 = indicators.get('ma_21', current_price)
+                
+                if current_price > ma_9 > ma_21:
+                    if action == 'BUY':
+                        confidence += 10
+                    reasoning.append('السعر فوق المتوسطات المتحركة - اتجاه صاعد')
+                elif current_price < ma_9 < ma_21:
+                    if action == 'SELL':
+                        confidence += 10
+                    reasoning.append('السعر تحت المتوسطات المتحركة - اتجاه هابط')
+                
+                ai_analysis = f"""
+🔍 تحليل تقني أساسي (بديل):
+
+📊 المؤشرات الرئيسية:
+• RSI: {rsi:.1f}
+• MACD: {macd_data.get('macd', 0):.5f}
+• MA9: {ma_9:.5f}
+• MA21: {ma_21:.5f}
+
+📈 التقييم: {action} بثقة {confidence}%
+                """
+            else:
+                reasoning = ['❌ لا توجد بيانات فنية كافية للتحليل']
+                ai_analysis = '❌ فشل في الحصول على البيانات الفنية من MT5'
+            
+            # تحديد سعر الدخول والأهداف بناءً على التحليل الأساسي
+            entry_price = current_price
+            if action == 'BUY':
+                target1 = current_price * 1.01  # هدف 1%
+                stop_loss = current_price * 0.995  # وقف خسارة 0.5%
+            elif action == 'SELL':
+                target1 = current_price * 0.99   # هدف 1%
+                stop_loss = current_price * 1.005  # وقف خسارة 0.5%
+            else:
+                target1 = current_price
+                stop_loss = current_price
+            
+            return {
+                'action': action,
+                'confidence': min(confidence, 75),  # حد أقصى 75% للتحليل البديل
+                'reasoning': reasoning,
+                'ai_analysis': ai_analysis,
+                'entry_price': entry_price,
+                'target1': target1,
+                'stop_loss': stop_loss,
+                'source': 'Technical Fallback Analysis',
+                'symbol': symbol,
+                'timestamp': datetime.now(),
+                'price_data': price_data
+            }
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في التحليل البديل: {e}")
+            return {
+                'action': 'HOLD',
+                'confidence': 50,
+                'reasoning': ['❌ فشل في التحليل - خطأ في النظام'],
+                'ai_analysis': '❌ فشل في التحليل - يرجى المحاولة لاحقاً',
+                'entry_price': price_data.get('last', price_data.get('bid', 0)),
+                'target1': price_data.get('last', price_data.get('bid', 0)),
+                'stop_loss': price_data.get('last', price_data.get('bid', 0)),
+                'source': 'Error Fallback',
+                'symbol': symbol,
+                'timestamp': datetime.now(),
+                'price_data': price_data
+            }
 
     def learn_from_feedback(self, trade_data: Dict, feedback: str) -> None:
         """تعلم من تقييمات المستخدم"""
@@ -6787,12 +6975,13 @@ def handle_start_monitoring(call):
         
         bot.send_message(
             call.message.chat.id,
-            f"▶️ **بدء المراقبة الآلية**\n\n"
+            f"▶️ *بدء المراقبة الآلية*\n\n"
             f"📊 نمط التداول: {trading_mode_display}\n"
             f"🎯 الرموز: {symbols_text}\n"
             f"⏰ بدء المراقبة: {datetime.now().strftime('%H:%M:%S')}\n"
             f"🔗 مصدر البيانات: MetaTrader5 + Gemini AI\n\n"
-            "سيتم إرسال التنبيهات عند رصد فرص تداول مناسبة! 📈"
+            "سيتم إرسال التنبيهات عند رصد فرص تداول مناسبة! 📈",
+            parse_mode='Markdown'
         )
         
     except Exception as e:
@@ -6814,8 +7003,14 @@ def handle_stop_monitoring(call):
         
         logger.info(f"[STOP] تم إيقاف المراقبة للمستخدم {user_id}")
         
-        # رسالة تأكيد
-        bot.answer_callback_query(call.id, "⏹️ تم إيقاف المراقبة الآلية")
+        # رسالة تأكيد مع معالجة timeout
+        try:
+            bot.answer_callback_query(call.id, "⏹️ تم إيقاف المراقبة الآلية")
+        except Exception as callback_error:
+            if "query is too old" in str(callback_error):
+                logger.debug(f"[DEBUG] تجاهل خطأ timeout في callback query: {callback_error}")
+            else:
+                logger.warning(f"[WARNING] خطأ في callback query: {callback_error}")
         
         # تحديث القائمة
         trading_mode = get_user_trading_mode(user_id)
@@ -6823,11 +7018,11 @@ def handle_stop_monitoring(call):
         selected_count = len(user_selected_symbols.get(user_id, []))
         
         bot.edit_message_text(
-            f"📡 **المراقبة الآلية**\n\n"
-            f"📊 **نمط التداول:** {trading_mode_display}\n"
-            f"📈 **الحالة:** 🔴 متوقفة\n"
-            f"🎯 **الرموز المختارة:** {selected_count}\n"
-            f"🔗 **مصدر البيانات:** MetaTrader5 + Gemini AI\n\n"
+            f"📡 *المراقبة الآلية*\n\n"
+            f"📊 *نمط التداول:* {trading_mode_display}\n"
+            f"📈 *الحالة:* 🔴 متوقفة\n"
+            f"🎯 *الرموز المختارة:* {selected_count}\n"
+            f"🔗 *مصدر البيانات:* MetaTrader5 + Gemini AI\n\n"
             "تعتمد المراقبة على إعدادات التنبيهات ونمط التداول المحدد.",
             call.message.chat.id,
             call.message.message_id,
@@ -6837,7 +7032,13 @@ def handle_stop_monitoring(call):
         
     except Exception as e:
         logger.error(f"خطأ في إيقاف المراقبة للمستخدم {user_id}: {str(e)}")
-        bot.answer_callback_query(call.id, "❌ حدث خطأ في إيقاف المراقبة")
+        try:
+            bot.answer_callback_query(call.id, "❌ حدث خطأ في إيقاف المراقبة")
+        except Exception as callback_error:
+            if "query is too old" in str(callback_error):
+                logger.debug(f"[DEBUG] تجاهل خطأ timeout في callback query: {callback_error}")
+            else:
+                logger.warning(f"[WARNING] خطأ في callback query: {callback_error}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "clear_symbols")
 def handle_clear_symbols(call):
