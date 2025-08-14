@@ -154,6 +154,66 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         else:
             body += f"❌ **R/R:** فشل في تحديد النسبة\n"
         
+        # مستويات الدعم والمقاومة من MT5
+        try:
+            technical = mt5_manager.calculate_technical_indicators(symbol)
+        except Exception as _te:
+            technical = None
+        # محاولة القراءة من البنية المرجعة: إما مباشرة أو داخل مفتاح 'indicators'
+        resistance = None
+        support = None
+        if technical:
+            if isinstance(technical, dict):
+                if 'resistance' in technical or 'support' in technical:
+                    resistance = technical.get('resistance')
+                    support = technical.get('support')
+                elif 'indicators' in technical and isinstance(technical['indicators'], dict):
+                    resistance = technical['indicators'].get('resistance')
+                    support = technical['indicators'].get('support')
+        if resistance and resistance > 0:
+            body += f"🔴 **مقاومة:** {resistance:,.5f}\n"
+        else:
+            body += f"❌ **مقاومة:** غير متاح\n"
+        if support and support > 0:
+            body += f"🟢 **دعم:** {support:,.5f}\n"
+        else:
+            body += f"❌ **دعم:** غير متاح\n"
+        
+        # عدد النقاط المستهدفة اعتماداً على قيم AI
+        def _calc_points(price_diff: float, sym: str) -> float:
+            try:
+                s = sym.upper()
+                if s.endswith('JPY'):
+                    return abs(price_diff) * 100
+                if s.startswith('XAU') or s.startswith('XAG'):
+                    return abs(price_diff) * 10
+                if s.startswith('BTC') or s.startswith('ETH'):
+                    return abs(price_diff)
+                # أزواج العملات الافتراضية
+                return abs(price_diff) * 10000
+            except Exception:
+                return 0.0
+        if entry_price and target1 and entry_price > 0 and target1 > 0:
+            points_target = _calc_points(target1 - entry_price, symbol)
+            if points_target > 0:
+                body += f"🎯 **عدد النقاط المستهدفة:** {points_target:.0f} نقطة\n"
+            else:
+                body += f"❌ **عدد النقاط المستهدفة:** فشل في الحساب\n"
+        else:
+            body += f"❌ **عدد النقاط المستهدفة:** فشل في تحديد القيم\n"
+        
+        # الأخبار القريبة (عناوين اقتصادية حقيقية من AI)
+        try:
+            news_text = gemini_analyzer.get_symbol_news(symbol)
+            if news_text:
+                news_lines = [ln for ln in news_text.split('\n') if ln.strip()]
+                if news_lines:
+                    body += "📰 **الأخبار القريبة:**\n"
+                    for ln in news_lines[:2]:
+                        body += f"{ln}\n"
+        except Exception:
+            body += "📰 **الأخبار القريبة:** غير متاحة حالياً\n"
+        
         body += f"⏰ {formatted_time}"
         
         return header + body
