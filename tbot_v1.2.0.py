@@ -363,7 +363,7 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         if target2:
             body += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
         body += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
-                body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
+        body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
         body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
         
         # الأخبار الاقتصادية
