@@ -2582,15 +2582,18 @@ class GeminiAnalyzer:
                 action = '❌ فشل في تحديد نوع الصفقة'
             
             if confidence is None or confidence < 0 or confidence > 100:
-                ai_success_rate = '❌ فشل في تحديد نسبة النجاح'
-                success_rate_source = "فشل في التحليل"
+                # في حالة فشل AI، نعطي قيمة رقمية منخفضة مع رسالة تحذير
+                ai_success_rate = 30  # نسبة منخفضة تشير للفشل
+                success_rate_source = "❌ فشل في التحليل - قيمة افتراضية"
             else:
                 ai_success_rate = confidence
                 success_rate_source = "محسوبة بالذكاء الاصطناعي"
-                if ai_success_rate < 20:
-                    success_rate_source = "منخفضة - تحذير"
-                elif ai_success_rate > 90:
-                    success_rate_source = "عالية جداً - تحقق مرة أخرى"
+                # التحقق من أن ai_success_rate رقم قبل المقارنة
+                if isinstance(ai_success_rate, (int, float)):
+                    if ai_success_rate < 20:
+                        success_rate_source = "منخفضة - تحذير"
+                    elif ai_success_rate > 90:
+                        success_rate_source = "عالية جداً - تحقق مرة أخرى"
             
             # جلب المؤشرات الفنية الحقيقية مع معالجة الأخطاء
             technical_data = None
@@ -2797,13 +2800,17 @@ class GeminiAnalyzer:
                 message += f"❌ **نسبة المخاطرة/المكافأة:** فشل في تحديد القيم المطلوبة\n"
             
             # نسبة النجاح من AI مع تصنيف الجودة
-            if isinstance(ai_success_rate, (int, float)):
-                quality = get_analysis_quality_classification(ai_success_rate)
-                quality_text = f"جودة {quality['level']} {quality['emoji']}"
-                warning_text = f" - {quality['warning']}" if quality['warning'] else ""
-                message += f"{quality['color']} **نسبة نجاح الصفقة:** {ai_success_rate:.0f}% ({quality_text}){warning_text}\n\n"
+            # ai_success_rate الآن دائماً رقم (إما من AI أو قيمة افتراضية)
+            quality = get_analysis_quality_classification(ai_success_rate)
+            quality_text = f"جودة {quality['level']} {quality['emoji']}"
+            warning_text = f" - {quality['warning']}" if quality['warning'] else ""
+            
+            # إضافة تحذير خاص إذا كان من قيمة افتراضية
+            if "فشل في التحليل" in success_rate_source:
+                message += f"🔴 **نسبة نجاح الصفقة:** {ai_success_rate:.0f}% ({success_rate_source})\n"
+                message += f"⚠️ **تحذير:** تم استخدام قيمة افتراضية - لا تعتمد على هذا التحليل\n\n"
             else:
-                message += f"❌ **نسبة نجاح الصفقة:** {ai_success_rate} ({success_rate_source})\n\n"
+                message += f"{quality['color']} **نسبة نجاح الصفقة:** {ai_success_rate:.0f}% ({quality_text}){warning_text}\n\n"
             
             # شروط الدخول من AI
             reasoning = analysis.get('reasoning', [])
@@ -2953,12 +2960,14 @@ class GeminiAnalyzer:
             
             # إحصائيات النظام
             message += "📊 **إحصائيات النظام**\n"
-            if isinstance(ai_success_rate, (int, float)):
-                quality = get_analysis_quality_classification(ai_success_rate)
-                quality_text = f"جودة {quality['level']} {quality['emoji']}"
-                message += f"🎯 **دقة النظام:** {ai_success_rate:.1f}% ({quality_text})\n"
+            # ai_success_rate الآن دائماً رقم
+            quality = get_analysis_quality_classification(ai_success_rate)
+            quality_text = f"جودة {quality['level']} {quality['emoji']}"
+            
+            if "فشل في التحليل" in success_rate_source:
+                message += f"❌ **دقة النظام:** {ai_success_rate:.1f}% ({success_rate_source})\n"
             else:
-                message += f"❌ **دقة النظام:** {ai_success_rate} ({success_rate_source})\n"
+                message += f"🎯 **دقة النظام:** {ai_success_rate:.1f}% ({quality_text})\n"
             
             # مصدر البيانات
             message += f"⚡ **مصدر البيانات:** {source_emoji}\n"
@@ -3012,10 +3021,16 @@ class GeminiAnalyzer:
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             
             # إضافة تحذيرات مخصصة حسب جودة التحليل
-            if isinstance(ai_success_rate, (int, float)):
-                quality = get_analysis_quality_classification(ai_success_rate)
-                
-                if ai_success_rate >= 80:
+            # ai_success_rate الآن دائماً رقم
+            quality = get_analysis_quality_classification(ai_success_rate)
+            
+            # تحذير خاص في حالة فشل AI
+            if "فشل في التحليل" in success_rate_source:
+                message += f"🚨 **تقييم الجودة:** فشل في تحليل الذكاء الاصطناعي\n"
+                message += "• 🛑 لا تتداول بناءً على هذا التحليل\n"
+                message += "• تحقق من اتصال الذكاء الاصطناعي وأعد المحاولة\n"
+                message += "• القيم المعروضة هي قيم افتراضية للمعلومات فقط\n\n"
+            elif ai_success_rate >= 80:
                     message += f"✅ **تقييم الجودة:** {quality['description']}\n"
                     message += "• يمكن الاعتماد على هذا التحليل بثقة عالية\n"
                     message += "• تأكد من تطبيق إدارة المخاطر السليمة\n\n"
@@ -4220,6 +4235,10 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         
         action = signal.get('action', 'HOLD')
         confidence = signal.get('confidence', 0)
+        
+        # التأكد من أن confidence رقم صالح
+        if confidence is None or not isinstance(confidence, (int, float)):
+            confidence = 0
         
         # حساب نسبة النجاح
         if analysis:
