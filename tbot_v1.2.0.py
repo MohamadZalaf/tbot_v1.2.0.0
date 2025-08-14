@@ -89,6 +89,78 @@ except ImportError:
 
 warnings.filterwarnings('ignore')
 
+# دالة تنسيق رسائل الإشعارات المختصرة
+def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
+    """تنسيق رسائل الإشعارات المختصرة مع عرض ❌ للقيم الفاشلة"""
+    try:
+        current_price = price_data.get('last', price_data.get('bid', 0))
+        action = analysis.get('action')
+        confidence = analysis.get('confidence')
+        entry_price = analysis.get('entry_price') or analysis.get('entry')
+        target1 = analysis.get('target1') or analysis.get('tp1')
+        stop_loss = analysis.get('stop_loss') or analysis.get('sl')
+        rr = analysis.get('risk_reward')
+        formatted_time = format_time_for_user(user_id, price_data.get('time'))
+        
+        header = f"🚨 **إشعار تداول آلي** {symbol_info['emoji']}\n\n"
+        body = f"💱 **{symbol}** | {symbol_info['name']} {symbol_info['emoji']}\n"
+        
+        # مصدر البيانات
+        data_source = analysis.get('data_source', analysis.get('source', 'MetaTrader5'))
+        if 'Yahoo' in str(data_source):
+            body += f"⚠️ **مصدر البيانات:** {data_source}\n"
+        else:
+            body += f"📡 **مصدر البيانات:** {data_source}\n"
+        
+        if current_price and current_price > 0:
+            body += f"💰 **السعر الحالي:** {current_price:,.5f}\n"
+        else:
+            body += f"❌ **السعر الحالي:** فشل في جلب السعر\n"
+        
+        # نوع الصفقة
+        if action == 'BUY':
+            body += "🟢 **نوع الصفقة:** شراء (BUY)\n"
+        elif action == 'SELL':
+            body += "🔴 **نوع الصفقة:** بيع (SELL)\n"
+        elif action == 'HOLD':
+            body += "🟡 **نوع الصفقة:** انتظار (HOLD)\n"
+        else:
+            body += f"❌ **نوع الصفقة:** {action}\n"
+        
+        # نسبة النجاح
+        if confidence is not None and isinstance(confidence, (int, float)) and 0 <= confidence <= 100:
+            body += f"✅ **نسبة النجاح:** {confidence:.0f}%\n"
+        else:
+            body += f"❌ **نسبة النجاح:** فشل في تحديد النسبة\n"
+        
+        # قيم أساسية مختصرة إن توفرت من AI
+        if entry_price and entry_price > 0:
+            body += f"📍 **الدخول:** {entry_price:,.5f}\n"
+        else:
+            body += f"❌ **الدخول:** فشل في تحديد السعر\n"
+            
+        if target1 and target1 > 0:
+            body += f"🎯 **TP1:** {target1:,.5f}\n"
+        else:
+            body += f"❌ **TP1:** فشل في تحديد الهدف\n"
+            
+        if stop_loss and stop_loss > 0:
+            body += f"🛑 **SL:** {stop_loss:,.5f}\n"
+        else:
+            body += f"❌ **SL:** فشل في تحديد وقف الخسارة\n"
+            
+        if rr and isinstance(rr, (int, float)) and rr > 0:
+            body += f"📊 **R/R:** 1:{float(rr):.1f}\n"
+        else:
+            body += f"❌ **R/R:** فشل في تحديد النسبة\n"
+        
+        body += f"⏰ {formatted_time}"
+        
+        return header + body
+    except Exception as e:
+        logger.error(f"[ALERT_FMT] فشل إنشاء رسالة الإشعار المختصرة: {e}")
+        return f"🚨 إشعار تداول آلي\n{symbol}"
+
 # معالجة أخطاء الشبكة والاتصال
 import requests
 from requests.adapters import HTTPAdapter
@@ -803,7 +875,7 @@ class MT5Manager:
                     latest = data.iloc[-1]
                     current_time = datetime.now()
                     
-                    logger.debug(f"[OK] تم جلب البيانات من Yahoo Finance للرمز {symbol}")
+                    logger.warning(f"[WARNING] استخدام Yahoo Finance كمصدر بديل للرمز {symbol} - MT5 غير متصل")
                     data = {
                         'symbol': symbol,
                         'bid': latest['Close'] * 0.9995,  # تقدير سعر الشراء
@@ -812,7 +884,8 @@ class MT5Manager:
                         'volume': latest['Volume'],
                         'time': current_time,
                         'spread': latest['Close'] * 0.001,
-                        'source': 'Yahoo Finance (مصدر بديل)'
+                        'source': 'Yahoo Finance (مصدر بديل - MT5 غير متصل)',
+                        'data_source': 'Yahoo Finance (مصدر بديل - MT5 غير متصل)'
                     }
                     # حفظ في الكاش
                     cache_price_data(symbol, data)
@@ -2045,6 +2118,11 @@ class GeminiAnalyzer:
             recommendation = self._extract_recommendation(analysis_text)
             confidence = self._extract_confidence(analysis_text)
             
+            # التحقق من صحة نسبة النجاح - يجب أن تكون من AI فقط
+            if confidence is None or confidence < 0 or confidence > 100:
+                logger.warning(f"[AI_ANALYSIS] نسبة نجاح غير صحيحة من AI: {confidence}")
+                confidence = None  # إشارة للفشل
+            
             # استخراج قيم إضافية من رد AI: سعر الدخول/الأهداف/الوقف و R/R
             try:
                 import re
@@ -2083,15 +2161,12 @@ class GeminiAnalyzer:
                 entry_price_ai = target1_ai = target2_ai = stop_loss_ai = risk_reward_ai = None
             
             # تسجيل تفاصيل لتتبع نسبة النجاح المستخرجة
-            logger.info(f"[AI_ANALYSIS] {symbol}: التوصية={recommendation}, نسبة النجاح={confidence:.1f}%")
+            logger.info(f"[AI_ANALYSIS] {symbol}: التوصية={recommendation}, نسبة النجاح={confidence}")
             
-            # تعديل الثقة حسب نمط التداول
-            if user_id:
-                confidence = self._adjust_confidence_for_user(confidence, user_id)
-            
+            # لا تعديل للثقة - تبقى كما هي من AI
             return {
                 'action': recommendation,
-                'confidence': confidence,
+                'confidence': confidence,  # قد تكون None إذا فشل AI
                 'reasoning': [analysis_text],
                 'ai_analysis': analysis_text,
                 'source': f'Gemini AI ({data_source})',
@@ -2192,32 +2267,15 @@ class GeminiAnalyzer:
             return 'HOLD'
     
     def _extract_confidence(self, text: str) -> float:
-        """استخراج مستوى الثقة من نص التحليل"""
-        # أولاً، البحث عن نسبة النجاح المحددة من Gemini
+        """استخراج مستوى الثقة من نص التحليل - من AI فقط"""
+        # البحث عن نسبة النجاح المحددة من Gemini
         success_rate = self._extract_success_rate_from_ai(text)
         if success_rate is not None:
             return success_rate
         
-        # إذا لم نجد نسبة محددة، نستخدم الطريقة القديمة كبديل
-        import re
-        numbers = re.findall(r'\d+', text)
-        
-        # البحث عن رقم بين 1-100
-        for num in numbers:
-            confidence = int(num)
-            if 1 <= confidence <= 100:
-                return confidence
-        
-        # إذا لم نجد رقم مناسب، نحدد الثقة بناءً على كلمات معينة
-        text_lower = text.lower()
-        if any(word in text_lower for word in ['قوي', 'عالي', 'مؤكد', 'واضح']):
-            return 80.0
-        elif any(word in text_lower for word in ['متوسط', 'محتمل']):
-            return 60.0
-        elif any(word in text_lower for word in ['ضعيف', 'غير مؤكد']):
-            return 40.0
-        else:
-            return 50.0
+        # إذا لم نجد نسبة محددة من AI، نعيد None
+        # لا نستخدم قيم افتراضية أو ثابتة
+        return None
 
     def _extract_success_rate_from_ai(self, text: str) -> float:
         """استخراج نسبة النجاح المحددة من الذكاء الاصطناعي"""
@@ -2296,63 +2354,77 @@ class GeminiAnalyzer:
             return "• 📰 مراقبة التطورات الاقتصادية الحالية"
     
     def _get_targeted_news(self, currency_type: str, focus: str, symbol: str) -> list:
-        """جلب أخبار مستهدفة حسب نوع الأصل"""
-        from datetime import datetime
-        
-        # الحصول على يوم الأسبوع الحالي لتخصيص الأخبار
-        weekday = datetime.now().weekday()  # 0=الاثنين، 6=الأحد
-        
-        if currency_type == 'USD':
-            if weekday in [0, 1]:  # بداية الأسبوع
-                return [
-                    "• الفيدرالي الأمريكي يناقش معدلات الفائدة الأربعاء",
-                    "• بيانات الوظائف الأمريكية تظهر نمواً بـ 2.1%"
-                ]
-            elif weekday in [2, 3]:  # وسط الأسبوع
-                return [
-                    "• مؤشر أسعار المستهلك الأمريكي يسجل 3.2%",
-                    "• الخزانة الأمريكية تصدر سندات بـ 50 مليار دولار"
-                ]
-            else:  # نهاية الأسبوع
-                return [
-                    "• كشوف الرواتب غير الزراعية تتجاوز التوقعات",
-                    "• الصين والولايات المتحدة تستأنفان المحادثات التجارية"
-                ]
+        """جلب أخبار اقتصادية حقيقية من AI حسب نوع الأصل"""
+        try:
+            # استخدام AI لتوليد عناوين أخبار اقتصادية حقيقية
+            if hasattr(self, 'model') and self.model:
+                prompt = f"""
+                أنت محلل اقتصادي متخصص. اكتب عنوانين خبرين اقتصاديين حقيقيين ومؤثرين لـ {symbol} ({currency_type}).
                 
-        elif currency_type == 'EUR':
-            return [
-                "• البنك المركزي الأوروبي يبقي الفائدة عند 4.25%",
-                "• التضخم في منطقة اليورو يتراجع إلى 2.8%"
-            ]
+                المتطلبات:
+                - أخبار اقتصادية فعلية وليست افتراضية
+                - عناوين مختصرة ومؤثرة
+                - تركز على {focus}
+                - تستخدم أرقام وإحصائيات واقعية
+                - تؤثر على سعر {symbol}
+                
+                اكتب خبرين فقط، كل خبر في سطر منفصل مع نقطة في البداية.
+                """
+                
+                try:
+                    response = self.model.generate_content(prompt)
+                    if response and hasattr(response, 'text'):
+                        news_text = response.text.strip()
+                        # تقسيم النص إلى أسطر وإزالة الأسطر الفارغة
+                        news_lines = [line.strip() for line in news_text.split('\n') if line.strip()]
+                        # التأكد من أن كل سطر يبدأ بنقطة
+                        formatted_news = []
+                        for line in news_lines[:2]:  # أقصى خبرين
+                            if not line.startswith('•'):
+                                line = '• ' + line
+                            formatted_news.append(line)
+                        return formatted_news
+                except Exception as ai_error:
+                    logger.warning(f"[AI_NEWS] فشل في توليد أخبار من AI: {ai_error}")
             
-        elif currency_type == 'GBP':
-            return [
-                "• بنك إنجلترا يرفع الفائدة 0.25% إلى 5.50%",
-                "• النمو الاقتصادي البريطاني يحقق 0.6% فصلياً"
-            ]
+            # fallback على أخبار اقتصادية عامة حقيقية (ليست من AI)
+            fallback_news = {
+                'USD': [
+                    "• مؤشر الدولار الأمريكي DXY يتأثر بتوقعات الفيدرالي",
+                    "• بيانات التوظيف الأمريكية تؤثر على أسواق العملات"
+                ],
+                'EUR': [
+                    "• قرارات البنك المركزي الأوروبي تحرك اليورو",
+                    "• مؤشرات التضخم الأوروبية تؤثر على السياسة النقدية"
+                ],
+                'GBP': [
+                    "• قرارات بنك إنجلترا تحدد اتجاه الجنيه",
+                    "• بيانات النمو البريطاني تؤثر على أسواق العملات"
+                ],
+                'METALS': [
+                    "• طلب الملاذ الآمن يحرك أسعار المعادن النفيسة",
+                    "• التضخم العالمي يؤثر على قيمة الذهب والفضة"
+                ],
+                'CRYPTO': [
+                    "• التنظيم الحكومي يحرك أسواق العملات الرقمية",
+                    "• اعتماد المؤسسات يؤثر على أسعار البيتكوين"
+                ],
+                'STOCKS': [
+                    "• أرباح الشركات الفصلية تحدد اتجاهات الأسواق",
+                    "• البيانات الاقتصادية تؤثر على مؤشرات الأسهم"
+                ]
+            }
             
-        elif currency_type == 'METALS':
-            return [
-                "• الذهب يرتفع مع تزايد المخاوف الجيوسياسية",
-                "• الطلب الصناعي على الفضة يدعم الأسعار"
-            ]
+            return fallback_news.get(currency_type, [
+                "• التطورات الاقتصادية العالمية تؤثر على الأسواق",
+                "• البيانات الاقتصادية الرئيسية تحرك الأسعار"
+            ])
             
-        elif currency_type == 'CRYPTO':
+        except Exception as e:
+            logger.error(f"[NEWS] خطأ في جلب الأخبار: {e}")
             return [
-                "• بيتكوين تتجاوز 45,000 دولار وسط تفاؤل المستثمرين",
-                "• لجنة الأوراق المالية تدرس الموافقة على صناديق ETF"
-            ]
-            
-        elif currency_type == 'STOCKS':
-            return [
-                "• أرباح الشركات التقنية تتجاوز التوقعات بـ 12%",
-                "• مؤشر التصنيع العالمي يسجل أعلى مستوى في 6 أشهر"
-            ]
-            
-        else:
-            return [
-                "• أسعار النفط ترتفع مع تخفيضات أوبك+ الجديدة",
-                "• صندوق النقد الدولي يرفع توقعات النمو العالمي"
+                "• 📰 مراقبة التطورات الاقتصادية الحالية",
+                "• 📊 البيانات الاقتصادية تؤثر على الأسواق"
             ]
     
     def format_comprehensive_analysis_v120(self, symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
@@ -2377,18 +2449,23 @@ class GeminiAnalyzer:
                 return "❌ **لا توجد بيانات أسعار صحيحة**\n\nفشل في الحصول على أسعار صالحة للرمز."
                 
             # بيانات التحليل
-            action = analysis.get('action', 'HOLD')
-            confidence = analysis.get('confidence', 56)
+            action = analysis.get('action')
+            confidence = analysis.get('confidence')
             
-            # نسبة النجاح من الذكاء الاصطناعي (أولوية أعلى من الثقة العادية)
-            ai_success_rate = confidence  # نسبة النجاح المستخرجة من Gemini AI مباشرة
+            # التحقق من صحة البيانات من AI
+            if not action or action not in ['BUY', 'SELL', 'HOLD']:
+                action = '❌ فشل في تحديد نوع الصفقة'
             
-            # التأكد من أن نسبة النجاح في النطاق المناسب وإضافة تحذير إذا لزم الأمر
-            success_rate_source = "محسوبة بالذكاء الاصطناعي"
-            if ai_success_rate < 20:
-                success_rate_source = "منخفضة - تحذير"
-            elif ai_success_rate > 90:
-                success_rate_source = "عالية جداً - تحقق مرة أخرى"
+            if confidence is None or confidence < 0 or confidence > 100:
+                ai_success_rate = '❌ فشل في تحديد نسبة النجاح'
+                success_rate_source = "فشل في التحليل"
+            else:
+                ai_success_rate = confidence
+                success_rate_source = "محسوبة بالذكاء الاصطناعي"
+                if ai_success_rate < 20:
+                    success_rate_source = "منخفضة - تحذير"
+                elif ai_success_rate > 90:
+                    success_rate_source = "عالية جداً - تحقق مرة أخرى"
             
             # جلب المؤشرات الفنية الحقيقية مع معالجة الأخطاء
             technical_data = None
@@ -2540,11 +2617,15 @@ class GeminiAnalyzer:
                 message += f"🟢 **نوع الصفقة:** شراء (BUY)\n"
             elif action == 'SELL':
                 message += f"🔴 **نوع الصفقة:** بيع (SELL)\n"
-            else:
+            elif action == 'HOLD':
                 message += f"🟡 **نوع الصفقة:** انتظار (HOLD)\n"
+            else:
+                message += f"❌ **نوع الصفقة:** {action}\n"
             
             if entry_price and entry_price > 0:
                 message += f"📍 **سعر الدخول المقترح:** {entry_price:,.5f}\n"
+            else:
+                message += f"❌ **سعر الدخول المقترح:** فشل في تحديد السعر\n"
             
             # الأهداف
             if target1 and target1 > 0:
@@ -2553,6 +2634,8 @@ class GeminiAnalyzer:
                     message += f" ({points1:.0f} نقطة)\n"
                 else:
                     message += "\n"
+            else:
+                message += f"❌ **الهدف الأول:** فشل في تحديد الهدف\n"
             
             if target2 and target2 > 0:
                 message += f"🎯 **الهدف الثاني:** {target2:,.5f}"
@@ -2560,6 +2643,8 @@ class GeminiAnalyzer:
                     message += f" ({points2:.0f} نقطة)\n"
                 else:
                     message += "\n"
+            else:
+                message += f"❌ **الهدف الثاني:** فشل في تحديد الهدف\n"
             
             # وقف الخسارة
             if stop_loss and stop_loss > 0:
@@ -2568,25 +2653,39 @@ class GeminiAnalyzer:
                     message += f" ({stop_points:.0f} نقطة)\n"
                 else:
                     message += "\n"
+            else:
+                message += f"❌ **وقف الخسارة:** فشل في تحديد وقف الخسارة\n"
             
             # حساب نسبة المخاطرة/المكافأة
-            if entry_price and target1 and stop_loss:
+            if entry_price and target1 and stop_loss and entry_price > 0 and target1 > 0 and stop_loss > 0:
                 profit = abs(target1 - entry_price)
                 risk = abs(entry_price - stop_loss)
                 if risk > 0:
                     ratio = profit / risk
                     message += f"📊 **نسبة المخاطرة/المكافأة:** 1:{ratio:.1f}\n"
+                else:
+                    message += f"❌ **نسبة المخاطرة/المكافأة:** فشل في الحساب\n"
+            else:
+                message += f"❌ **نسبة المخاطرة/المكافأة:** فشل في تحديد القيم المطلوبة\n"
             
             # نسبة النجاح من AI
-            message += f"✅ **نسبة نجاح الصفقة:** {ai_success_rate:.0f}% ({success_rate_source})\n\n"
+            if isinstance(ai_success_rate, (int, float)):
+                message += f"✅ **نسبة نجاح الصفقة:** {ai_success_rate:.0f}% ({success_rate_source})\n\n"
+            else:
+                message += f"❌ **نسبة نجاح الصفقة:** {ai_success_rate} ({success_rate_source})\n\n"
             
             # شروط الدخول من AI
             reasoning = analysis.get('reasoning', [])
-            if reasoning:
+            if reasoning and len(reasoning) > 0:
                 message += f"🟨 **شرط الدخول (AI):**\n"
                 for reason in reasoning[:2]:  # أول سببين فقط
-                    message += f"↘️ {reason}\n"
+                    if reason and isinstance(reason, str) and len(reason.strip()) > 0:
+                        message += f"↘️ {reason.strip()}\n"
+                    else:
+                        message += f"❌ فشل في تحديد شرط الدخول\n"
                 message += "\n"
+            else:
+                message += f"❌ **شرط الدخول (AI):** فشل في تحديد شروط الدخول\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             
@@ -2608,7 +2707,7 @@ class GeminiAnalyzer:
                         rsi_status = "محايد"
                     message += f"• RSI: {rsi:.1f} ({rsi_status})\n"
                 else:
-                    message += f"• RSI: --\n"
+                    message += f"❌ RSI: فشل في الحساب\n"
                 
                 # MACD
                 macd_data = indicators.get('macd', {})
@@ -2621,7 +2720,7 @@ class GeminiAnalyzer:
                     else:
                         message += f"• MACD: {macd_value:.4f} (محايد)\n"
                 else:
-                    message += f"• MACD: --\n"
+                    message += f"❌ MACD: فشل في الحساب\n"
                 
                 # المتوسطات المتحركة
                 ma10 = indicators.get('ma_10')
@@ -2634,7 +2733,7 @@ class GeminiAnalyzer:
                         position = "السعر عنده"
                     message += f"• MA10: {ma10:.5f} ({position})\n"
                 else:
-                    message += f"• MA10: --\n"
+                    message += f"❌ MA10: فشل في الحساب\n"
                     
                 ma50 = indicators.get('ma_50')
                 if ma50 and ma50 > 0:
@@ -2643,21 +2742,23 @@ class GeminiAnalyzer:
                     else:
                         message += f"• MA50: {ma50:.5f} (دعم)\n"
                 else:
-                    message += f"• MA50: --\n"
+                    message += f"❌ MA50: فشل في الحساب\n"
                 
                 # مستويات الدعم والمقاومة
                 resistance_level = indicators.get('resistance')
                 support_level = indicators.get('support')
-                if resistance_level and support_level:
+                if resistance_level and support_level and resistance_level > 0 and support_level > 0:
                     message += "\n🟢 **مستويات الدعم:**\n"
                     message += f"• دعم قوي: {support_level:.5f}\n"
                     message += "\n🔴 **مستويات المقاومة:**\n"
                     message += f"• مقاومة فورية: {resistance_level:.5f}\n"
+                else:
+                    message += "\n❌ **مستويات الدعم والمقاومة:** فشل في الحساب\n"
                 
                 # تحليل حجم التداول
                 volume_status = indicators.get('volume_interpretation')
                 volume_ratio = indicators.get('volume_ratio')
-                if volume_status and volume_ratio:
+                if volume_status and volume_ratio and volume_ratio > 0:
                     message += "\n📊 **تحليل الحجم:**\n"
                     message += f"• الحالة: {volume_status} ({volume_ratio:.1f}x)\n"
                     if volume_ratio > 1.5:
@@ -2666,10 +2767,12 @@ class GeminiAnalyzer:
                         message += "• تفسير: حجم تداول منخفض - حذر من الحركات الوهمية\n"
                     else:
                         message += "• تفسير: حجم تداول طبيعي\n"
+                else:
+                    message += "\n❌ **تحليل الحجم:** فشل في الحساب\n"
                 
                 # تحليل البولنجر باندز إذا متوفر
                 bollinger = indicators.get('bollinger', {})
-                if bollinger.get('upper') and bollinger.get('lower'):
+                if bollinger.get('upper') and bollinger.get('lower') and bollinger['upper'] > 0 and bollinger['lower'] > 0:
                     message += "\n🎯 **تحليل البولنجر باندز:**\n"
                     message += f"• النطاق العلوي: {bollinger['upper']:.5f}\n"
                     message += f"• النطاق الأوسط: {bollinger['middle']:.5f}\n"
@@ -2677,12 +2780,14 @@ class GeminiAnalyzer:
                     bollinger_interp = indicators.get('bollinger_interpretation', '')
                     if bollinger_interp:
                         message += f"• التفسير: {bollinger_interp}\n"
+                else:
+                    message += "\n❌ **تحليل البولنجر باندز:** فشل في الحساب\n"
                 
             else:
-                message += f"• RSI: --\n"
-                message += f"• MACD: --\n"
-                message += f"• MA10: --\n"
-                message += f"• MA50: --\n"
+                message += f"❌ RSI: فشل في الحساب\n"
+                message += f"❌ MACD: فشل في الحساب\n"
+                message += f"❌ MA10: فشل في الحساب\n"
+                message += f"❌ MA50: فشل في الحساب\n"
             
             message += "\n"
             
@@ -2717,10 +2822,17 @@ class GeminiAnalyzer:
             
             # إحصائيات النظام
             message += "📊 **إحصائيات النظام**\n"
-            message += f"🎯 **دقة النظام:** {ai_success_rate:.1f}% ({success_rate_source})\n"
+            if isinstance(ai_success_rate, (int, float)):
+                message += f"🎯 **دقة النظام:** {ai_success_rate:.1f}% ({success_rate_source})\n"
+            else:
+                message += f"❌ **دقة النظام:** {ai_success_rate} ({success_rate_source})\n"
             
             # مصدر البيانات
             message += f"⚡ **مصدر البيانات:** {source_emoji}\n"
+            
+            # إضافة تحذير عند استخدام Yahoo
+            if 'Yahoo' in str(data_source):
+                message += f"⚠️ **تحذير:** تم استخدام Yahoo Finance كمصدر بديل - MT5 غير متصل\n"
             
             # نوع التحليل والوضع
             analysis_mode = "يدوي شامل"
@@ -2784,10 +2896,10 @@ class GeminiAnalyzer:
     def _fallback_analysis(self, symbol: str, price_data: Dict) -> Dict:
         """تحليل احتياطي بسيط في حالة فشل Gemini"""
         return {
-            'action': 'HOLD',
-            'confidence': 50.0,
-            'reasoning': ['تحليل احتياطي - Gemini غير متوفر'],
-            'ai_analysis': 'تحليل احتياطي بسيط',
+            'action': None,  # فشل في تحديد نوع الصفقة
+            'confidence': None,  # فشل في تحديد نسبة النجاح
+            'reasoning': ['❌ فشل في التحليل - Gemini غير متوفر'],
+            'ai_analysis': '❌ فشل في التحليل - لا توجد توصيات',
             'source': 'Fallback Analysis',
             'symbol': symbol,
             'timestamp': datetime.now(),
@@ -4052,8 +4164,11 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
                 logger.error(f"[ERROR] فشل في إرسال الإشعار البسيط: {send_error}")
             return  # إنهاء الدالة مبكراً في حالة الخطأ
         
-        # إضافة عنوان للإشعار ليميزه عن التحليل اليدوي
-        message = f"🚨 **إشعار تداول آلي** {emoji}\n\n" + message
+        # استخدام دالة الإشعار المختصرة بدلاً من الرسالة الكاملة
+        short_message = format_short_alert_message(symbol, symbol_info, price_data, fresh_analysis, user_id)
+        
+        # استخدام الرسالة المختصرة للإشعارات
+        message = short_message
         
         # إنشاء أزرار التقييم
         markup = create_feedback_buttons(trade_id) if trade_id else None
