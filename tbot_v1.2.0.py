@@ -91,223 +91,295 @@ warnings.filterwarnings('ignore')
 
 # دالة تنسيق رسائل الإشعارات المختصرة
 def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
-    """تنسيق رسائل الإشعارات المختصرة مع ضبط TP/SL لتكون منطقية وإزالة فقرة المؤشرات"""
+    """تنسيق رسائل الإشعارات المختصرة باستخدام أسلوب التحليل اليدوي الشامل مع AI"""
     try:
+        # استخدام نفس أسلوب جلب البيانات من التحليل اليدوي
         current_price = price_data.get('last', price_data.get('bid', 0))
         action = analysis.get('action')
         confidence = analysis.get('confidence')
-        entry_price = analysis.get('entry_price') or analysis.get('entry')
-        target1 = analysis.get('target1') or analysis.get('tp1')
-        stop_loss = analysis.get('stop_loss') or analysis.get('sl')
-        rr = analysis.get('risk_reward')
         formatted_time = format_time_for_user(user_id, price_data.get('time'))
-
-        # اشتقاق نمط التداول ورأس المال لضبط الحدود المنطقية
-        trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
-        capital = get_user_capital(user_id) if user_id else 1000
-
-        # نسب افتراضية وحدود منطقية حسب النمط
-        if trading_mode == 'scalping':
-            default_profit_pct, default_loss_pct = 0.015, 0.005  # 1.5%/0.5%
-            min_profit_pct, max_profit_pct = 0.005, 0.03        # 0.5% - 3%
-            min_loss_pct, max_loss_pct = 0.003, 0.015           # 0.3% - 1.5%
-        else:
-            default_profit_pct, default_loss_pct = 0.05, 0.02   # 5%/2%
-            min_profit_pct, max_profit_pct = 0.02, 0.08         # 2% - 8%
-            min_loss_pct, max_loss_pct = 0.01, 0.03             # 1% - 3%
-
-        if not entry_price or entry_price <= 0:
-            entry_price = current_price
-
-        def _pct_diff(a, b):
-            try:
-                return abs(a - b) / b if b else 0.0
-            except Exception:
-                return 0.0
-
-        # ضبط TP/SL ضمن حدود منطقية استناداً للصفقة
-        if entry_price and entry_price > 0 and action in ['BUY', 'SELL']:
-            if action == 'BUY':
-                # الهدف أعلى من الدخول والوقف أدناه
-                if not target1 or target1 <= entry_price:
-                    target1 = entry_price * (1 + default_profit_pct)
-                else:
-                    p = _pct_diff(target1, entry_price)
-                    p = min(max(p, min_profit_pct), max_profit_pct)
-                    target1 = entry_price * (1 + p)
-                if not stop_loss or stop_loss >= entry_price:
-                    stop_loss = entry_price * (1 - default_loss_pct)
-                else:
-                    l = _pct_diff(entry_price, stop_loss)
-                    l = min(max(l, min_loss_pct), max_loss_pct)
-                    stop_loss = entry_price * (1 - l)
-            elif action == 'SELL':
-                # الهدف أدنى من الدخول والوقف أعلاه
-                if not target1 or target1 >= entry_price:
-                    target1 = entry_price * (1 - default_profit_pct)
-                else:
-                    p = _pct_diff(entry_price, target1)
-                    p = min(max(p, min_profit_pct), max_profit_pct)
-                    target1 = entry_price * (1 - p)
-                if not stop_loss or stop_loss <= entry_price:
-                    stop_loss = entry_price * (1 + default_loss_pct)
-                else:
-                    l = _pct_diff(stop_loss, entry_price)
-                    l = min(max(l, min_loss_pct), max_loss_pct)
-                    stop_loss = entry_price * (1 + l)
-
-            # إعادة حساب R/R بناءً على القيم المصححة
-            try:
-                profit = abs(target1 - entry_price) if target1 else None
-                risk = abs(entry_price - stop_loss) if stop_loss else None
-                if profit and risk and risk > 0:
-                    rr = profit / risk
-            except Exception:
-                pass
-
-        header = f"🚨 *إشعار تداول آلي* {symbol_info['emoji']}\n\n"
-        body = "🚀 *إشارة تداول ذكية*\n\n"
-        body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        body += f"💱 *{symbol}* | {symbol_info['name']} {symbol_info['emoji']}\n"
-
-        if current_price and current_price > 0:
-            body += f"💰 *السعر اللحظي:* {current_price:,.5f}\n"
-        else:
+        
+        # التحقق من صحة البيانات الأساسية
+        if current_price <= 0:
+            current_price = max(price_data.get('bid', 0), price_data.get('ask', 0))
+        if not current_price:
             # محاولة أخيرة لجلب السعر
             retry_price_data = mt5_manager.get_live_price(symbol)
             if retry_price_data and retry_price_data.get('last', 0) > 0:
                 current_price = retry_price_data['last']
-                body += f"💰 *السعر اللحظي:* {current_price:,.5f}\n"
-            else:
-                body += f"⚠️ *السعر اللحظي:* يرجى التأكد من اتصال MT5\n"
-
-        # مستويات الدعم والمقاومة من MT5
+        
+        # جلب المؤشرات الفنية الحقيقية باستخدام نفس الطريقة من التحليل اليدوي
+        technical_data = None
+        indicators = {}
         try:
-            technical = mt5_manager.calculate_technical_indicators(symbol)
-            resistance = None
-            support = None
-            if technical:
-                if isinstance(technical, dict):
-                    if 'resistance' in technical or 'support' in technical:
-                        resistance = technical.get('resistance')
-                        support = technical.get('support')
-                    elif 'indicators' in technical and isinstance(technical['indicators'], dict):
-                        resistance = technical['indicators'].get('resistance')
-                        support = technical['indicators'].get('support')
-            if resistance and resistance > 0:
-                body += f"🔺 *مقاومة:* {resistance:,.5f}\n"
-            else:
-                body += f"🔺 *مقاومة:* --\n"
-            if support and support > 0:
-                body += f"🔻 *دعم:* {support:,.5f}\n"
-            else:
-                body += f"🔻 *دعم:* --\n"
-        except Exception:
-            body += f"🔺 *مقاومة:* --\n"
-            body += f"🔻 *دعم:* --\n"
+            technical_data = mt5_manager.calculate_technical_indicators(symbol)
+            indicators = technical_data.get('indicators', {}) if technical_data else {}
+        except Exception as e:
+            logger.warning(f"[WARNING] فشل في جلب المؤشرات الفنية للرمز {symbol}: {e}")
+            indicators = {}
+        
+        # حساب نسبة النجاح الديناميكية باستخدام AI
+        try:
+            ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
+            confidence = ai_success_rate  # استخدام النسبة المحسوبة
+        except Exception as e:
+            logger.warning(f"[WARNING] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
+            confidence = confidence if confidence else 50
+        
+        # حساب التغير اليومي الصحيح
+        price_change_pct = indicators.get('price_change_pct', 0)
+        if price_change_pct == -100 or price_change_pct < -99:
+            try:
+                daily_rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, 2)
+                if daily_rates is not None and len(daily_rates) >= 2:
+                    yesterday_close = daily_rates[-2]['close']
+                    if yesterday_close > 0:
+                        price_change_pct = ((current_price - yesterday_close) / yesterday_close) * 100
+            except:
+                price_change_pct = 0
+        
+        # تنسيق التغير اليومي
+        if abs(price_change_pct) < 0.01:
+            daily_change = "0.00%"
+        elif price_change_pct != 0:
+            daily_change = f"{price_change_pct:+.2f}%"
+        else:
+            daily_change = "--"
 
-        body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        # استخدام نفس منطق حساب الأهداف من التحليل اليدوي
+        trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
+        capital = get_user_capital(user_id) if user_id else 1000
+        
+        # الحصول على الأهداف ووقف الخسارة من تحليل AI أو حسابها
+        entry_price = analysis.get('entry_price') or analysis.get('entry') or current_price
+        target1 = analysis.get('target1') or analysis.get('tp1')
+        target2 = analysis.get('target2') or analysis.get('tp2')
+        stop_loss = analysis.get('stop_loss') or analysis.get('sl')
+        risk_reward_ratio = analysis.get('risk_reward')
+        
+        # إذا لم تكن متوفرة من AI، احسبها من المؤشرات الفنية (نفس طريقة التحليل اليدوي)
+        if not all([target1, target2, stop_loss]):
+            # استخدام مستويات الدعم والمقاومة الحقيقية من MT5
+            resistance = indicators.get('resistance')
+            support = indicators.get('support')
+            
+            if resistance and support and resistance > support:
+                if action == 'BUY':
+                    target1 = target1 or resistance * 0.99
+                    target2 = target2 or resistance * 1.01
+                    stop_loss = stop_loss or support * 1.01
+                elif action == 'SELL':
+                    target1 = target1 or support * 1.01
+                    target2 = target2 or support * 0.99
+                    stop_loss = stop_loss or resistance * 0.99
+                else:  # HOLD
+                    target1 = target1 or current_price * 1.015
+                    target2 = target2 or current_price * 1.03
+                    stop_loss = stop_loss or current_price * 0.985
+            else:
+                # إذا لم تتوفر مستويات من MT5، احسب بناءً على ATR أو نسبة مئوية
+                atr = indicators.get('atr') if indicators else None
+                if atr and atr > 0:
+                    # استخدام ATR لحساب مستويات دقيقة
+                    if action == 'BUY':
+                        target1 = target1 or current_price + (atr * 1.5)
+                        target2 = target2 or current_price + (atr * 2.5)
+                        stop_loss = stop_loss or current_price - (atr * 1.0)
+                    elif action == 'SELL':
+                        target1 = target1 or current_price - (atr * 1.5)
+                        target2 = target2 or current_price - (atr * 2.5)
+                        stop_loss = stop_loss or current_price + (atr * 1.0)
+                    else:
+                        target1 = target1 or current_price + (atr * 1.0)
+                        target2 = target2 or current_price + (atr * 2.0)
+                        stop_loss = stop_loss or current_price - (atr * 1.0)
+                else:
+                    # نسب افتراضية حسب النمط
+                    if trading_mode == 'scalping':
+                        profit_pct, loss_pct = 0.015, 0.005  # 1.5%/0.5%
+                    else:
+                        profit_pct, loss_pct = 0.05, 0.02   # 5%/2%
+                    
+                    if action == 'BUY':
+                        target1 = target1 or current_price * (1 + profit_pct)
+                        target2 = target2 or current_price * (1 + profit_pct * 2)
+                        stop_loss = stop_loss or current_price * (1 - loss_pct)
+                    elif action == 'SELL':
+                        target1 = target1 or current_price * (1 - profit_pct)
+                        target2 = target2 or current_price * (1 - profit_pct * 2)
+                        stop_loss = stop_loss or current_price * (1 + loss_pct)
+                    else:
+                        target1 = target1 or current_price * (1 + profit_pct)
+                        target2 = target2 or current_price * (1 + profit_pct * 2)
+                        stop_loss = stop_loss or current_price * (1 - loss_pct)
 
+        # حساب النقاط بدقة (نفس طريقة التحليل اليدوي)
+        points1 = 0
+        points2 = 0
+        stop_points = 0
+        
+        try:
+            if target1 and entry_price and target1 != entry_price:
+                points1 = calculate_points_accurately(target1 - entry_price, symbol, capital, current_price)
+                points1 = max(0, points1)
+                
+            if target2 and entry_price and target2 != entry_price:
+                points2 = calculate_points_accurately(target2 - entry_price, symbol, capital, current_price)
+                points2 = max(0, points2)
+                
+            if entry_price and stop_loss and entry_price != stop_loss:
+                stop_points = calculate_points_accurately(abs(entry_price - stop_loss), symbol, capital, current_price)
+                stop_points = max(0, stop_points)
+        except Exception as e:
+            logger.warning(f"[WARNING] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
+            points1 = points2 = stop_points = 0
+        
+        # حساب نسبة المخاطرة/المكافأة
+        if not risk_reward_ratio:
+            if stop_points > 0 and points1 > 0:
+                risk_reward_ratio = points1 / stop_points
+            else:
+                risk_reward_ratio = 1.0
+
+        # هيكل رسالة مطابق للتحليل اليدوي
+        header = f"🚨 إشعار تداول آلي {symbol_info['emoji']}\n\n"
+        body = "🚀 إشارة تداول ذكية\n\n"
+        body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        body += f"💱 {symbol} | {symbol_info['name']} {symbol_info['emoji']}\n"
+        body += f"📡 مصدر البيانات: 🔗 MetaTrader5 (لحظي - بيانات حقيقية)\n"
+        
+        if current_price and current_price > 0:
+            body += f"💰 السعر الحالي: {current_price:,.5f}\n"
+        else:
+            body += f"⚠️ السعر اللحظي: يرجى التأكد من اتصال MT5\n"
+        
+        # إضافة التغير اليومي
+        body += f"➡️ التغيير اليومي: {daily_change}\n"
+        body += f"⏰ وقت التحليل: {formatted_time}\n\n"
+        
+        body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        body += "⚡ إشارة التداول الرئيسية\n\n"
+        
         # نوع الصفقة
         if action == 'BUY':
-            body += "🟢 *التوصية:* شراء | نجاح "
+            body += "🟢 نوع الصفقة: شراء (BUY)\n"
         elif action == 'SELL':
-            body += "🔴 *التوصية:* بيع | نجاح "
-        elif action == 'HOLD':
-            body += "🟡 *التوصية:* انتظار | نجاح "
+            body += "🔴 نوع الصفقة: بيع (SELL)\n"
         else:
-            body += f"❌ *التوصية:* {action} | نجاح "
-
-        # نسبة النجاح
-        if confidence is not None and isinstance(confidence, (int, float)) and 0 <= confidence <= 100:
-            body += f"{confidence:.0f}%\n\n"
+            body += "🟡 نوع الصفقة: انتظار (HOLD)\n"
+        
+        # معلومات الصفقة
+        body += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
+        body += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
+        if target2:
+            body += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
+        body += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
+        body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
+        body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
+        
+        body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        body += "🔧 التحليل الفني المتقدم\n\n"
+        
+        # المؤشرات الفنية
+        body += "📈 المؤشرات الفنية:\n"
+        rsi = indicators.get('rsi', 0)
+        macd = indicators.get('macd', {})
+        atr = indicators.get('atr', 0)
+        
+        if rsi:
+            rsi_status = "ذروة بيع" if rsi < 30 else "ذروة شراء" if rsi > 70 else "محايد"
+            body += f"• RSI: {rsi:.1f} ({rsi_status})\n"
         else:
-            body += f"فشل في تحديد النسبة\n\n"
-
-        body += "📋 *تفاصيل التوصية:*\n"
-
-        # قيم أساسية مختصرة بعد التصحيح
-        if entry_price and entry_price > 0:
-            body += f"📍 *سعر الدخول:* {entry_price:,.5f}\n"
-        elif current_price and current_price > 0:
-            # استخدام السعر الحالي كسعر دخول افتراضي
-            body += f"📍 *سعر الدخول:* {current_price:,.5f} (حالي)\n"
+            body += f"• RSI: --\n"
+            
+        if macd and macd.get('macd') is not None:
+            macd_value = macd['macd']
+            macd_status = "إشارة صعود" if macd_value > 0 else "إشارة هبوط"
+            body += f"• MACD: {macd_value:.4f} ({macd_status})\n"
         else:
-            body += f"⚠️ *سعر الدخول:* يحتاج تحديث السعر\n"
-
-        if stop_loss and stop_loss > 0:
-            body += f"🛑 *ستوب لوس:* {stop_loss:,.5f}\n"
-        elif current_price and current_price > 0:
-            # حساب وقف خسارة افتراضي (0.5%)
-            default_sl = current_price * 0.995 if action == 'BUY' else current_price * 1.005
-            body += f"🛑 *ستوب لوس:* {default_sl:,.5f} (مقترح)\n"
+            body += f"• MACD: --\n"
+            
+        if atr and atr > 0:
+            atr_status = indicators.get('atr_interpretation', 'التقلبات')
+            body += f"• ATR: {atr:.5f} ({atr_status})\n"
         else:
-            body += f"⚠️ *ستوب لوس:* يحتاج تحديد السعر\n"
-
-        if target1 and target1 > 0:
-            body += f"🎯 *تيك بروفيت:* {target1:,.5f}\n"
-        elif current_price and current_price > 0:
-            # حساب هدف افتراضي (1%)
-            default_tp = current_price * 1.01 if action == 'BUY' else current_price * 0.99
-            body += f"🎯 *تيك بروفيت:* {default_tp:,.5f} (مقترح)\n"
+            body += f"• ATR: --\n"
+        
+        # الحجم
+        current_volume = indicators.get('current_volume')
+        if current_volume:
+            volume_ratio = indicators.get('volume_ratio', 1)
+            volume_status = indicators.get('volume_interpretation', 'طبيعي')
+            body += f"• الحجم: {current_volume:,.0f} (نسبة: {volume_ratio:.1f}x - {volume_status})\n"
         else:
-            body += f"⚠️ *تيك بروفيت:* يحتاج تحديد السعر\n"
-
-        # عدد النقاط المستهدفة اعتماداً على القيم بعد التصحيح
-        def _calc_points(price_diff: float, sym: str, user_capital: float = 1000) -> float:
-            """حساب النقاط مع مراعاة رأس المال"""
-            try:
-                s = sym.upper()
-                base_points = 0
-                
-                if s.endswith('JPY'):
-                    base_points = abs(price_diff) * 100
-                elif s.startswith('XAU') or s.startswith('XAG'):
-                    base_points = abs(price_diff) * 10
-                elif s.startswith('BTC') or s.startswith('ETH'):
-                    base_points = abs(price_diff)
-                else:
-                    # أزواج العملات الافتراضية
-                    base_points = abs(price_diff) * 10000
-                
-                # تعديل النقاط بناءً على رأس المال
-                if user_capital < 1000:
-                    base_points *= 0.8  # تقليل المخاطرة للحسابات الصغيرة
-                elif user_capital < 5000:
-                    base_points *= 0.9  # تقليل طفيف
-                elif user_capital > 10000:
-                    base_points *= 1.1  # زيادة طفيفة للحسابات الكبيرة
-                
-                return base_points
-            except Exception:
-                return 0.0
-        if entry_price and target1 and entry_price > 0 and target1 > 0:
-            # الحصول على رأس المال للمستخدم
-            user_capital = get_user_capital(user_id) if user_id else 1000
-            points_target = _calc_points(target1 - entry_price, symbol, user_capital)
-            if points_target > 0:
-                body += f"📊 **النقاط المستهدفة:** {points_target:.0f} نقطة\n"
-            else:
-                body += f"❌ **النقاط المستهدفة:** فشل في الحساب\n"
+            body += f"• الحجم: --\n"
+        
+        # مستويات الدعم والمقاومة
+        resistance = indicators.get('resistance')
+        support = indicators.get('support')
+        
+        body += "\n🎯 مستويات الدعم والمقاومة:\n"
+        if resistance and resistance > 0:
+            body += f"🔺 مقاومة: {resistance:,.5f}\n"
         else:
-            body += f"❌ **النقاط المستهدفة:** فشل في تحديد القيم\n"
+            body += f"🔺 مقاومة: --\n"
+        if support and support > 0:
+            body += f"🔻 دعم: {support:,.5f}\n"
+        else:
+            body += f"🔻 دعم: --\n"
 
+        # إضافة توصيات إدارة المخاطر
         body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-
-        # الأخبار الاقتصادية (عناوين مؤثرة وحقيقية) في النهاية
+        body += "📋 توصيات إدارة المخاطر\n\n"
+        
+        # حجم المركز المقترح
+        body += "💡 حجم المركز المقترح:\n"
+        if trading_mode == 'scalping':
+            body += "• للسكالبينغ: 0.01 لوت (مخاطرة منخفضة)\n"
+        else:
+            body += "• للتداول طويل الأمد: 0.02-0.05 لوت\n"
+        
+        # تحذيرات
+        body += "\n⚠️ تحذيرات هامة:\n"
+        body += "• راقب الأحجام عند نقاط الدخول\n"
+        body += "• فعّل وقف الخسارة فور الدخول\n"
+        
+        # تصنيف نسبة النجاح
+        if confidence >= 80:
+            success_rating = "عالية - ثقة قوية"
+        elif confidence >= 70:
+            success_rating = "جيدة - ثقة مقبولة"
+        elif confidence >= 60:
+            success_rating = "متوسطة - حذر مطلوب"
+        else:
+            success_rating = "منخفضة - مخاطرة عالية"
+        
+        body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        body += "📊 إحصائيات النظام\n"
+        body += f"🎯 دقة النظام: {confidence:.1f}% ({success_rating})\n"
+        body += "⚡ مصدر البيانات: MetaTrader5 + Gemini AI Analysis\n"
+        body += f"🤖 نوع التحليل: آلي ذكي | وضع {trading_mode}\n"
+        
+        # الأخبار الاقتصادية
+        body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         try:
             news_text = gemini_analyzer.get_symbol_news(symbol)
             if news_text:
                 news_lines = [ln for ln in news_text.split('\n') if ln.strip()]
                 if news_lines:
-                    body += "📰 **الأخبار القريبة:**\n"
+                    body += "📰 الأخبار القريبة:\n"
                     for ln in news_lines[:2]:
                         body += f"{ln}\n"
-        except Exception:
-            body += "📰 **الأخبار القريبة:** غير متاحة حالياً\n"
+                else:
+                    body += "📰 الأخبار القريبة: لا توجد أخبار مؤثرة حالياً\n"
+            else:
+                body += "📰 الأخبار القريبة: غير متاحة حالياً\n"
+        except Exception as e:
+            logger.warning(f"[WARNING] فشل في جلب الأخبار للرمز {symbol}: {e}")
+            body += "📰 الأخبار القريبة: غير متاحة حالياً\n"
 
         body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        body += f"⏰ 🕐 {formatted_time} | 🤖 تحليل ذكي آلي"
+        body += f"⏰ 🕐 🕐 {formatted_time} | 🤖 تحليل ذكي آلي"
 
         return header + body
     except Exception as e:
