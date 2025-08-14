@@ -165,21 +165,21 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             except Exception:
                 pass
 
-        header = f"🚨 **إشعار تداول آلي** {symbol_info['emoji']}\n\n"
-        body = "🚀 **إشارة تداول ذكية**\n\n"
+        header = f"🚨 *إشعار تداول آلي* {symbol_info['emoji']}\n\n"
+        body = "🚀 *إشارة تداول ذكية*\n\n"
         body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        body += f"💱 **{symbol}** | {symbol_info['name']} {symbol_info['emoji']}\n"
+        body += f"💱 *{symbol}* | {symbol_info['name']} {symbol_info['emoji']}\n"
 
         if current_price and current_price > 0:
-            body += f"💰 **السعر اللحظي:** {current_price:,.5f}\n"
+            body += f"💰 *السعر اللحظي:* {current_price:,.5f}\n"
         else:
             # محاولة أخيرة لجلب السعر
             retry_price_data = mt5_manager.get_live_price(symbol)
             if retry_price_data and retry_price_data.get('last', 0) > 0:
                 current_price = retry_price_data['last']
-                body += f"💰 **السعر اللحظي:** {current_price:,.5f}\n"
+                body += f"💰 *السعر اللحظي:* {current_price:,.5f}\n"
             else:
-                body += f"⚠️ **السعر اللحظي:** يرجى التأكد من اتصال MT5\n"
+                body += f"⚠️ *السعر اللحظي:* يرجى التأكد من اتصال MT5\n"
 
         # مستويات الدعم والمقاومة من MT5
         try:
@@ -195,28 +195,28 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                         resistance = technical['indicators'].get('resistance')
                         support = technical['indicators'].get('support')
             if resistance and resistance > 0:
-                body += f"🔺 **مقاومة:** {resistance:,.5f}\n"
+                body += f"🔺 *مقاومة:* {resistance:,.5f}\n"
             else:
-                body += f"🔺 **مقاومة:** --\n"
+                body += f"🔺 *مقاومة:* --\n"
             if support and support > 0:
-                body += f"🔻 **دعم:** {support:,.5f}\n"
+                body += f"🔻 *دعم:* {support:,.5f}\n"
             else:
-                body += f"🔻 **دعم:** --\n"
+                body += f"🔻 *دعم:* --\n"
         except Exception:
-            body += f"🔺 **مقاومة:** --\n"
-            body += f"🔻 **دعم:** --\n"
+            body += f"🔺 *مقاومة:* --\n"
+            body += f"🔻 *دعم:* --\n"
 
         body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 
         # نوع الصفقة
         if action == 'BUY':
-            body += "🟢 **التوصية:** شراء | نجاح "
+            body += "🟢 *التوصية:* شراء | نجاح "
         elif action == 'SELL':
-            body += "🔴 **التوصية:** بيع | نجاح "
+            body += "🔴 *التوصية:* بيع | نجاح "
         elif action == 'HOLD':
-            body += "🟡 **التوصية:** انتظار | نجاح "
+            body += "🟡 *التوصية:* انتظار | نجاح "
         else:
-            body += f"❌ **التوصية:** {action} | نجاح "
+            body += f"❌ *التوصية:* {action} | نجاح "
 
         # نسبة النجاح
         if confidence is not None and isinstance(confidence, (int, float)) and 0 <= confidence <= 100:
@@ -224,34 +224,34 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         else:
             body += f"فشل في تحديد النسبة\n\n"
 
-        body += "📋 **تفاصيل التوصية:**\n"
+        body += "📋 *تفاصيل التوصية:*\n"
 
         # قيم أساسية مختصرة بعد التصحيح
         if entry_price and entry_price > 0:
-            body += f"📍 **سعر الدخول:** {entry_price:,.5f}\n"
+            body += f"📍 *سعر الدخول:* {entry_price:,.5f}\n"
         elif current_price and current_price > 0:
             # استخدام السعر الحالي كسعر دخول افتراضي
-            body += f"📍 **سعر الدخول:** {current_price:,.5f} (حالي)\n"
+            body += f"📍 *سعر الدخول:* {current_price:,.5f} (حالي)\n"
         else:
-            body += f"⚠️ **سعر الدخول:** يحتاج تحديث السعر\n"
+            body += f"⚠️ *سعر الدخول:* يحتاج تحديث السعر\n"
 
         if stop_loss and stop_loss > 0:
-            body += f"🛑 **ستوب لوس:** {stop_loss:,.5f}\n"
+            body += f"🛑 *ستوب لوس:* {stop_loss:,.5f}\n"
         elif current_price and current_price > 0:
             # حساب وقف خسارة افتراضي (0.5%)
             default_sl = current_price * 0.995 if action == 'BUY' else current_price * 1.005
-            body += f"🛑 **ستوب لوس:** {default_sl:,.5f} (مقترح)\n"
+            body += f"🛑 *ستوب لوس:* {default_sl:,.5f} (مقترح)\n"
         else:
-            body += f"⚠️ **ستوب لوس:** يحتاج تحديد السعر\n"
+            body += f"⚠️ *ستوب لوس:* يحتاج تحديد السعر\n"
 
         if target1 and target1 > 0:
-            body += f"🎯 **تيك بروفيت:** {target1:,.5f}\n"
+            body += f"🎯 *تيك بروفيت:* {target1:,.5f}\n"
         elif current_price and current_price > 0:
             # حساب هدف افتراضي (1%)
             default_tp = current_price * 1.01 if action == 'BUY' else current_price * 0.99
-            body += f"🎯 **تيك بروفيت:** {default_tp:,.5f} (مقترح)\n"
+            body += f"🎯 *تيك بروفيت:* {default_tp:,.5f} (مقترح)\n"
         else:
-            body += f"⚠️ **تيك بروفيت:** يحتاج تحديد السعر\n"
+            body += f"⚠️ *تيك بروفيت:* يحتاج تحديد السعر\n"
 
         # عدد النقاط المستهدفة اعتماداً على القيم بعد التصحيح
         def _calc_points(price_diff: float, sym: str) -> float:
@@ -587,6 +587,17 @@ for directory in [DATA_DIR, FEEDBACK_DIR, TRADE_LOGS_DIR, CHAT_LOGS_DIR]:
 # رسائل تحذير للمكتبات المفقودة
 if not TIMEZONE_AVAILABLE:
     logger.warning("مكتبة pytz غير متوفرة - سيتم استخدام التوقيت المحلي فقط")
+
+# دالة مساعدة لمعالجة callback queries
+def safe_answer_callback_query(call, text, show_alert=False):
+    """دالة آمنة للرد على callback query مع معالجة timeout"""
+    try:
+        bot.answer_callback_query(call.id, text, show_alert=show_alert)
+    except Exception as callback_error:
+        if "query is too old" in str(callback_error) or "timeout" in str(callback_error).lower():
+            logger.debug(f"[DEBUG] تجاهل خطأ timeout في callback query: {text}")
+        else:
+            logger.warning(f"[WARNING] خطأ في callback query: {callback_error}")
 
 # ===== قواميس الرموز المالية المحدثة من v1.1.0 =====
 CURRENCY_PAIRS = {
@@ -6881,12 +6892,13 @@ def handle_start_monitoring(call):
         
         bot.send_message(
             call.message.chat.id,
-            f"▶️ **بدء المراقبة الآلية**\n\n"
+            f"▶️ *بدء المراقبة الآلية*\n\n"
             f"📊 نمط التداول: {trading_mode_display}\n"
             f"🎯 الرموز: {symbols_text}\n"
             f"⏰ بدء المراقبة: {datetime.now().strftime('%H:%M:%S')}\n"
             f"🔗 مصدر البيانات: MetaTrader5 + Gemini AI\n\n"
-            "سيتم إرسال التنبيهات عند رصد فرص تداول مناسبة! 📈"
+            "سيتم إرسال التنبيهات عند رصد فرص تداول مناسبة! 📈",
+            parse_mode='Markdown'
         )
         
     except Exception as e:
@@ -6908,8 +6920,14 @@ def handle_stop_monitoring(call):
         
         logger.info(f"[STOP] تم إيقاف المراقبة للمستخدم {user_id}")
         
-        # رسالة تأكيد
-        bot.answer_callback_query(call.id, "⏹️ تم إيقاف المراقبة الآلية")
+        # رسالة تأكيد مع معالجة timeout
+        try:
+            bot.answer_callback_query(call.id, "⏹️ تم إيقاف المراقبة الآلية")
+        except Exception as callback_error:
+            if "query is too old" in str(callback_error):
+                logger.debug(f"[DEBUG] تجاهل خطأ timeout في callback query: {callback_error}")
+            else:
+                logger.warning(f"[WARNING] خطأ في callback query: {callback_error}")
         
         # تحديث القائمة
         trading_mode = get_user_trading_mode(user_id)
@@ -6917,11 +6935,11 @@ def handle_stop_monitoring(call):
         selected_count = len(user_selected_symbols.get(user_id, []))
         
         bot.edit_message_text(
-            f"📡 **المراقبة الآلية**\n\n"
-            f"📊 **نمط التداول:** {trading_mode_display}\n"
-            f"📈 **الحالة:** 🔴 متوقفة\n"
-            f"🎯 **الرموز المختارة:** {selected_count}\n"
-            f"🔗 **مصدر البيانات:** MetaTrader5 + Gemini AI\n\n"
+            f"📡 *المراقبة الآلية*\n\n"
+            f"📊 *نمط التداول:* {trading_mode_display}\n"
+            f"📈 *الحالة:* 🔴 متوقفة\n"
+            f"🎯 *الرموز المختارة:* {selected_count}\n"
+            f"🔗 *مصدر البيانات:* MetaTrader5 + Gemini AI\n\n"
             "تعتمد المراقبة على إعدادات التنبيهات ونمط التداول المحدد.",
             call.message.chat.id,
             call.message.message_id,
@@ -6931,7 +6949,13 @@ def handle_stop_monitoring(call):
         
     except Exception as e:
         logger.error(f"خطأ في إيقاف المراقبة للمستخدم {user_id}: {str(e)}")
-        bot.answer_callback_query(call.id, "❌ حدث خطأ في إيقاف المراقبة")
+        try:
+            bot.answer_callback_query(call.id, "❌ حدث خطأ في إيقاف المراقبة")
+        except Exception as callback_error:
+            if "query is too old" in str(callback_error):
+                logger.debug(f"[DEBUG] تجاهل خطأ timeout في callback query: {callback_error}")
+            else:
+                logger.warning(f"[WARNING] خطأ في callback query: {callback_error}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "clear_symbols")
 def handle_clear_symbols(call):
