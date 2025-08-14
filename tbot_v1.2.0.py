@@ -2045,6 +2045,43 @@ class GeminiAnalyzer:
             recommendation = self._extract_recommendation(analysis_text)
             confidence = self._extract_confidence(analysis_text)
             
+            # استخراج قيم إضافية من رد AI: سعر الدخول/الأهداف/الوقف و R/R
+            try:
+                import re
+                def _find_number(patterns):
+                    for p in patterns:
+                        m = re.search(p, analysis_text, re.IGNORECASE | re.UNICODE)
+                        if m:
+                            try:
+                                return float(m.group(1))
+                            except Exception:
+                                if len(m.groups()) >= 2:
+                                    try:
+                                        return float(m.group(2))
+                                    except Exception:
+                                        pass
+                    return None
+                entry_price_ai = _find_number([
+                    r'(?:نقطة|سعر)\s*الدخول\s*[:：]?\s*([\d\.]+)',
+                    r'entry\s*(?:price)?\s*[:：]?\s*([\d\.]+)'
+                ])
+                target1_ai = _find_number([
+                    r'(?:TP1|الهدف\s*الأول)\s*[:：]?\s*([\d\.]+)'
+                ])
+                target2_ai = _find_number([
+                    r'(?:TP2|الهدف\s*الثاني)\s*[:：]?\s*([\d\.]+)'
+                ])
+                stop_loss_ai = _find_number([
+                    r'(?:SL|وقف\s*الخسارة)\s*[:：]?\s*([\d\.]+)'
+                ])
+                risk_reward_ai = _find_number([
+                    r'(?:RR|R\s*/\s*R|Risk\s*/\s*Reward|نسبة\s*المخاطرة\s*/\s*المكافأة)\s*[:：]?\s*1\s*[:：]\s*([\d\.]+)',
+                    r'(?:RR|Risk\s*/\s*Reward|نسبة\s*المخاطرة\s*/\s*المكافأة)\s*[:：]?\s*([\d\.]+)'
+                ])
+            except Exception as _ai_parse_e:
+                logger.debug(f"[AI_PARSE] فشل استخراج القيم العددية من AI: {_ai_parse_e}")
+                entry_price_ai = target1_ai = target2_ai = stop_loss_ai = risk_reward_ai = None
+            
             # تسجيل تفاصيل لتتبع نسبة النجاح المستخرجة
             logger.info(f"[AI_ANALYSIS] {symbol}: التوصية={recommendation}, نسبة النجاح={confidence:.1f}%")
             
@@ -2058,10 +2095,16 @@ class GeminiAnalyzer:
                 'reasoning': [analysis_text],
                 'ai_analysis': analysis_text,
                 'source': f'Gemini AI ({data_source})',
+                'data_source': f'Gemini AI ({data_source})',
                 'symbol': symbol,
                 'timestamp': datetime.now(),
                 'price_data': price_data,
-                'user_context': user_context if user_id else None
+                'user_context': user_context if user_id else None,
+                'entry_price': entry_price_ai,
+                'target1': target1_ai,
+                'target2': target2_ai,
+                'stop_loss': stop_loss_ai,
+                'risk_reward': risk_reward_ai
             }
             
         except Exception as e:
