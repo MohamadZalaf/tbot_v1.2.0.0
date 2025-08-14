@@ -1006,12 +1006,95 @@ class MT5Manager:
                 if "connection" in str(e).lower() or "terminal" in str(e).lower():
                     self.connected = False
         else:
-            logger.debug(f"[DEBUG] MT5 غير متصل حقيقياً - لا يمكن جلب البيانات لـ {symbol}")
+            logger.debug(f"[DEBUG] MT5 غير متصل حقيقياً - سيتم استخدام مصدر بديل لـ {symbol}")
         
-        logger.error(f"[ERROR] فشل في جلب البيانات من MT5 للرمز {symbol}")
+        # 🔄 مصدر بديل فقط: Yahoo Finance (للرموز غير المتوفرة في MT5)
+        try:
+            import yfinance as yf
+            
+            # تحويل رموز MT5 إلى رموز Yahoo Finance
+            yahoo_symbol = self._convert_to_yahoo_symbol(symbol)
+            if yahoo_symbol:
+                logger.info(f"[RUNNING] محاولة جلب البيانات من Yahoo Finance لـ {symbol}")
+                ticker = yf.Ticker(yahoo_symbol)
+                data = ticker.history(period="1d", interval="1m")
+                
+                if not data.empty:
+                    latest = data.iloc[-1]
+                    current_time = datetime.now()
+                    
+                    logger.debug(f"[OK] تم جلب البيانات من Yahoo Finance للرمز {symbol}")
+                    data = {
+                        'symbol': symbol,
+                        'bid': latest['Close'] * 0.9995,  # تقدير سعر الشراء
+                        'ask': latest['Close'] * 1.0005,  # تقدير سعر البيع
+                        'last': latest['Close'],
+                        'volume': latest['Volume'],
+                        'time': current_time,
+                        'spread': latest['Close'] * 0.001,
+                        'source': 'Yahoo Finance (مصدر بديل)'
+                    }
+                    # حفظ في الكاش
+                    cache_price_data(symbol, data)
+                    return data
+                    
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في جلب البيانات من Yahoo Finance لـ {symbol}: {e}")
+        
+        logger.error(f"[ERROR] فشل في جلب البيانات من جميع المصادر للرمز {symbol}")
         return None
     
-
+    def _convert_to_yahoo_symbol(self, mt5_symbol: str) -> Optional[str]:
+        """تحويل رموز MT5 إلى رموز Yahoo Finance"""
+        conversion_map = {
+            # العملات الرقمية
+            'BTCUSD': 'BTC-USD',
+            'ETHUSD': 'ETH-USD',
+            'LTCUSD': 'LTC-USD',
+            'BCHUSD': 'BCH-USD',
+            
+            # أزواج العملات (Forex)
+            'EURUSD': 'EURUSD=X',
+            'GBPUSD': 'GBPUSD=X',
+            'USDJPY': 'USDJPY=X',
+            'AUDUSD': 'AUDUSD=X',
+            'USDCAD': 'USDCAD=X',
+            'USDCHF': 'USDCHF=X',
+            'NZDUSD': 'NZDUSD=X',
+            'EURJPY': 'EURJPY=X',
+            'EURGBP': 'EURGBP=X',
+            'EURAUD': 'EURAUD=X',
+            
+            # المؤشرات
+            'US30': '^DJI',
+            'SPX500': '^GSPC',
+            'NAS100': '^IXIC',
+            'GER40': '^GDAXI',
+            'UK100': '^FTSE',
+            
+            # المعادن
+            'XAUUSD': 'GC=F',  # الذهب
+            'XAGUSD': 'SI=F',  # الفضة
+            'XPTUSD': 'PL=F',  # البلاتين
+            'XPDUSD': 'PA=F',  # البلاديوم
+            
+            # العملات الإضافية
+            'GBPJPY': 'GBPJPY=X',
+            'EURAUD': 'EURAUD=X',
+            
+            # الأسهم
+            'AAPL': 'AAPL',
+            'TSLA': 'TSLA', 
+            'GOOGL': 'GOOGL',
+            'MSFT': 'MSFT',
+            'AMZN': 'AMZN',
+            'META': 'META',
+            'NVDA': 'NVDA',
+            'NFLX': 'NFLX'
+        }
+        
+        return conversion_map.get(mt5_symbol)
+    
     def get_market_data(self, symbol: str, timeframe: int = mt5.TIMEFRAME_M1, count: int = 100) -> Optional[pd.DataFrame]:
         """جلب بيانات السوق من MT5"""
         if not self.connected:
