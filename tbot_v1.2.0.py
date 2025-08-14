@@ -2781,15 +2781,29 @@ class GeminiAnalyzer:
                 action = action or 'HOLD'
                 confidence = confidence or 50
             
-            # نسبة النجاح من الذكاء الاصطناعي
-            ai_success_rate = confidence
+            # نسبة النجاح من الذكاء الاصطناعي - حساب ديناميكي لكل صفقة
+            try:
+                # استخدام دالة حساب نسبة النجاح المطورة
+                ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
+                logger.info(f"[INFO] نسبة النجاح المحسوبة للرمز {symbol}: {ai_success_rate:.1f}%")
+            except Exception as e:
+                logger.warning(f"[WARNING] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
+                # كملاذ أخير، استخدم الثقة من التحليل
+                ai_success_rate = confidence if confidence else 50
             
-            # مصدر نسبة النجاح
-            success_rate_source = "محسوبة بالذكاء الاصطناعي"
-            if ai_success_rate < 20:
-                success_rate_source = "منخفضة - تحذير"
-            elif ai_success_rate > 90:
-                success_rate_source = "عالية جداً - تحقق مرة أخرى"
+            # مصدر نسبة النجاح مع تصنيف أفضل
+            if ai_success_rate >= 80:
+                success_rate_source = "عالية - ثقة قوية"
+            elif ai_success_rate >= 70:
+                success_rate_source = "جيدة - ثقة مقبولة"
+            elif ai_success_rate >= 60:
+                success_rate_source = "متوسطة - حذر مطلوب"
+            elif ai_success_rate >= 40:
+                success_rate_source = "منخفضة - مخاطرة عالية"
+            elif ai_success_rate >= 20:
+                success_rate_source = "ضعيفة - تحذير شديد"
+            else:
+                success_rate_source = "ضعيفة جداً - تجنب التداول"
             
             # جلب المؤشرات الفنية الحقيقية مع معالجة الأخطاء
             technical_data = None
@@ -2923,9 +2937,28 @@ class GeminiAnalyzer:
             # جلب رأس المال للمستخدم
             user_capital = get_user_capital(user_id) if user_id else 1000
             
-            points1 = calculate_points_accurately(target1 - entry_price, symbol, user_capital, current_price) if target1 and entry_price else 0
-            points2 = calculate_points_accurately(target2 - entry_price, symbol, user_capital, current_price) if target2 and entry_price else 0
-            stop_points = calculate_points_accurately(entry_price - stop_loss, symbol, user_capital, current_price) if entry_price and stop_loss else 0
+            # التأكد من وجود قيم صحيحة قبل حساب النقاط
+            points1 = 0
+            points2 = 0
+            stop_points = 0
+            
+            try:
+                if target1 and entry_price and target1 != entry_price:
+                    points1 = calculate_points_accurately(target1 - entry_price, symbol, user_capital, current_price)
+                    points1 = max(0, points1)  # التأكد من القيمة الإيجابية
+                    
+                if target2 and entry_price and target2 != entry_price:
+                    points2 = calculate_points_accurately(target2 - entry_price, symbol, user_capital, current_price)
+                    points2 = max(0, points2)  # التأكد من القيمة الإيجابية
+                    
+                if entry_price and stop_loss and entry_price != stop_loss:
+                    stop_points = calculate_points_accurately(abs(entry_price - stop_loss), symbol, user_capital, current_price)
+                    stop_points = max(0, stop_points)  # التأكد من القيمة الإيجابية
+                    
+                logger.debug(f"[DEBUG] النقاط المحسوبة: {symbol} - Target1: {points1:.0f}, Target2: {points2:.0f}, Stop: {stop_points:.0f}")
+            except Exception as e:
+                logger.warning(f"[WARNING] خطأ في حساب النقاط للرمز {symbol}: {e}")
+                points1 = points2 = stop_points = 0
             
             # حساب نسبة المخاطرة/المكافأة
             if not risk_reward_ratio:
@@ -2936,9 +2969,36 @@ class GeminiAnalyzer:
             
 
             
-            # حساب التغيير اليومي الحقيقي
+            # حساب التغيير اليومي الحقيقي مع تحقق إضافي
             price_change_pct = indicators.get('price_change_pct', 0)
-            daily_change = f"{price_change_pct:+.2f}%" if price_change_pct != 0 else "--"
+            
+            # تحقق إضافي للتأكد من صحة التغير اليومي
+            if price_change_pct == -100 or price_change_pct < -99:
+                # إعادة حساب التغير بناءً على بيانات مباشرة
+                try:
+                    # محاولة حساب التغير من بيانات MT5 مباشرة
+                    daily_rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, 2)
+                    if daily_rates is not None and len(daily_rates) >= 2:
+                        yesterday_close = daily_rates[-2]['close']
+                        today_current = current_price
+                        if yesterday_close > 0:
+                            price_change_pct = ((today_current - yesterday_close) / yesterday_close) * 100
+                            logger.info(f"[INFO] تم إعادة حساب التغير اليومي للرمز {symbol}: {price_change_pct:.2f}%")
+                    else:
+                        # كملاذ أخير، استخدم تغير صغير
+                        price_change_pct = 0
+                        logger.warning(f"[WARNING] فشل في الحصول على بيانات التغير اليومي للرمز {symbol}")
+                except Exception as e:
+                    logger.warning(f"[WARNING] خطأ في إعادة حساب التغير اليومي للرمز {symbol}: {e}")
+                    price_change_pct = 0
+            
+            # تنسيق عرض التغير اليومي
+            if abs(price_change_pct) < 0.01:  # إذا كان التغير صغير جداً
+                daily_change = "0.00%"
+            elif price_change_pct != 0:
+                daily_change = f"{price_change_pct:+.2f}%"
+            else:
+                daily_change = "--"
             
             # التحقق من وجود تحذيرات - تقليل التحذيرات عند وجود بيانات صحيحة
             has_warning = analysis.get('warning') or not indicators or (confidence is not None and confidence == 0)
