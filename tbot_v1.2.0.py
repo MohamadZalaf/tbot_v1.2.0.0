@@ -2664,7 +2664,7 @@ class GeminiAnalyzer:
             ]
     
     def format_comprehensive_analysis_v120(self, symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
-        """تنسيق التحليل الشامل المتقدم للإصدار v1.2.0 بالتنسيق المطلوب الكامل"""
+        """تنسيق التحليل الشامل المتقدم للإصدار v1.2.0 - مطابق لـ v1.2.1"""
         try:
             # الحصول على بيانات المستخدم
             trading_mode = get_user_trading_mode(user_id)
