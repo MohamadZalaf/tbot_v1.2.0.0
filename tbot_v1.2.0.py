@@ -118,13 +118,67 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             logger.warning(f"[WARNING] فشل في جلب المؤشرات الفنية للرمز {symbol}: {e}")
             indicators = {}
         
-        # حساب نسبة النجاح الديناميكية باستخدام AI
+        # حساب نسبة النجاح الديناميكية باستخدام AI دائماً (حتى لو لم تعرض المؤشرات)
         try:
+            # التأكد من أن AI يدرس المؤشرات دائماً ويحسب النسبة
             ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
-            confidence = ai_success_rate  # استخدام النسبة المحسوبة
+            
+            # التأكد من أن النسبة ضمن النطاق المطلوب 0-100%
+            if ai_success_rate is None or ai_success_rate < 0:
+                ai_success_rate = 15  # حد أدنى
+            elif ai_success_rate > 100:
+                ai_success_rate = 95  # حد أقصى
+            
+            confidence = ai_success_rate
+            logger.info(f"[AI_SUCCESS] تم حساب نسبة النجاح للرمز {symbol}: {confidence:.1f}%")
+            
         except Exception as e:
-            logger.warning(f"[WARNING] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
-            confidence = confidence if confidence else 50
+            logger.error(f"[ERROR] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
+            # في حالة الفشل، حساب نسبة بديلة بناءً على المؤشرات المتوفرة
+            backup_score = 50  # نقطة البداية
+            
+            try:
+                # حساب بديل بناءً على المؤشرات الأساسية
+                if indicators:
+                    rsi = indicators.get('rsi', 50)
+                    macd = indicators.get('macd', {})
+                    volume_ratio = indicators.get('volume_ratio', 1.0)
+                    
+                    # تعديل النسبة بناءً على RSI
+                    if action == 'BUY':
+                        if rsi < 30:  # ذروة بيع - فرصة شراء
+                            backup_score += 20
+                        elif rsi > 70:  # ذروة شراء - خطر
+                            backup_score -= 15
+                    elif action == 'SELL':
+                        if rsi > 70:  # ذروة شراء - فرصة بيع
+                            backup_score += 20
+                        elif rsi < 30:  # ذروة بيع - خطر
+                            backup_score -= 15
+                    
+                    # تعديل بناءً على MACD
+                    if macd.get('macd') is not None:
+                        macd_value = macd['macd']
+                        if (action == 'BUY' and macd_value > 0) or (action == 'SELL' and macd_value < 0):
+                            backup_score += 10
+                        else:
+                            backup_score -= 5
+                    
+                    # تعديل بناءً على الحجم
+                    if volume_ratio > 1.5:
+                        backup_score += 10
+                    elif volume_ratio < 0.5:
+                        backup_score -= 10
+                    
+                    # ضمان النطاق 15-90%
+                    backup_score = max(15, min(90, backup_score))
+                
+                confidence = backup_score
+                logger.info(f"[BACKUP_SUCCESS] استخدام نسبة احتياطية للرمز {symbol}: {confidence:.1f}%")
+                
+            except Exception as backup_error:
+                logger.error(f"[ERROR] فشل في الحساب الاحتياطي للرمز {symbol}: {backup_error}")
+                confidence = 50  # نسبة افتراضية آمنة
         
         # حساب التغير اليومي الصحيح
         price_change_pct = indicators.get('price_change_pct', 0)
@@ -213,25 +267,60 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                         target2 = target2 or current_price * (1 + profit_pct * 2)
                         stop_loss = stop_loss or current_price * (1 - loss_pct)
 
-        # حساب النقاط بدقة (نفس طريقة التحليل اليدوي)
+        # حساب النقاط بدقة مع ضمان قيم صحيحة
+        def calc_points_for_symbol(price_diff, symbol_name):
+            """حساب النقاط حسب نوع الرمز"""
+            try:
+                if not price_diff or price_diff == 0:
+                    return 0
+                
+                s = symbol_name.upper()
+                base_points = 0
+                
+                if s.endswith('JPY'):
+                    base_points = abs(price_diff) * 100
+                elif s.startswith('XAU') or s.startswith('XAG') or 'GOLD' in s or 'SILVER' in s:
+                    base_points = abs(price_diff) * 10
+                elif s.startswith('BTC') or s.startswith('ETH'):
+                    base_points = abs(price_diff)
+                elif any(s.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
+                    base_points = abs(price_diff) * 10000  # أزواج العملات الرئيسية
+                else:
+                    base_points = abs(price_diff) * 100  # افتراضي
+                
+                # تعديل بناءً على رأس المال
+                if capital < 1000:
+                    base_points *= 0.8
+                elif capital > 10000:
+                    base_points *= 1.1
+                
+                return max(0, base_points)
+            except Exception:
+                return 0
+        
         points1 = 0
         points2 = 0
         stop_points = 0
         
         try:
+            logger.debug(f"[DEBUG] حساب النقاط للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}")
+            
             if target1 and entry_price and target1 != entry_price:
-                points1 = calculate_points_accurately(target1 - entry_price, symbol, capital, current_price)
-                points1 = max(0, points1)
+                points1 = calc_points_for_symbol(target1 - entry_price, symbol)
+                logger.debug(f"[DEBUG] النقاط للهدف الأول: {points1}")
                 
             if target2 and entry_price and target2 != entry_price:
-                points2 = calculate_points_accurately(target2 - entry_price, symbol, capital, current_price)
-                points2 = max(0, points2)
+                points2 = calc_points_for_symbol(target2 - entry_price, symbol)
+                logger.debug(f"[DEBUG] النقاط للهدف الثاني: {points2}")
                 
             if entry_price and stop_loss and entry_price != stop_loss:
-                stop_points = calculate_points_accurately(abs(entry_price - stop_loss), symbol, capital, current_price)
-                stop_points = max(0, stop_points)
+                stop_points = calc_points_for_symbol(abs(entry_price - stop_loss), symbol)
+                logger.debug(f"[DEBUG] النقاط لوقف الخسارة: {stop_points}")
+                
+            logger.info(f"[POINTS] النقاط المحسوبة للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
+            
         except Exception as e:
-            logger.warning(f"[WARNING] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
+            logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
             points1 = points2 = stop_points = 0
         
         # حساب نسبة المخاطرة/المكافأة
@@ -274,91 +363,8 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         if target2:
             body += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
         body += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
-        body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
+                body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
         body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
-        
-        body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        body += "🔧 التحليل الفني المتقدم\n\n"
-        
-        # المؤشرات الفنية
-        body += "📈 المؤشرات الفنية:\n"
-        rsi = indicators.get('rsi', 0)
-        macd = indicators.get('macd', {})
-        atr = indicators.get('atr', 0)
-        
-        if rsi:
-            rsi_status = "ذروة بيع" if rsi < 30 else "ذروة شراء" if rsi > 70 else "محايد"
-            body += f"• RSI: {rsi:.1f} ({rsi_status})\n"
-        else:
-            body += f"• RSI: --\n"
-            
-        if macd and macd.get('macd') is not None:
-            macd_value = macd['macd']
-            macd_status = "إشارة صعود" if macd_value > 0 else "إشارة هبوط"
-            body += f"• MACD: {macd_value:.4f} ({macd_status})\n"
-        else:
-            body += f"• MACD: --\n"
-            
-        if atr and atr > 0:
-            atr_status = indicators.get('atr_interpretation', 'التقلبات')
-            body += f"• ATR: {atr:.5f} ({atr_status})\n"
-        else:
-            body += f"• ATR: --\n"
-        
-        # الحجم
-        current_volume = indicators.get('current_volume')
-        if current_volume:
-            volume_ratio = indicators.get('volume_ratio', 1)
-            volume_status = indicators.get('volume_interpretation', 'طبيعي')
-            body += f"• الحجم: {current_volume:,.0f} (نسبة: {volume_ratio:.1f}x - {volume_status})\n"
-        else:
-            body += f"• الحجم: --\n"
-        
-        # مستويات الدعم والمقاومة
-        resistance = indicators.get('resistance')
-        support = indicators.get('support')
-        
-        body += "\n🎯 مستويات الدعم والمقاومة:\n"
-        if resistance and resistance > 0:
-            body += f"🔺 مقاومة: {resistance:,.5f}\n"
-        else:
-            body += f"🔺 مقاومة: --\n"
-        if support and support > 0:
-            body += f"🔻 دعم: {support:,.5f}\n"
-        else:
-            body += f"🔻 دعم: --\n"
-
-        # إضافة توصيات إدارة المخاطر
-        body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        body += "📋 توصيات إدارة المخاطر\n\n"
-        
-        # حجم المركز المقترح
-        body += "💡 حجم المركز المقترح:\n"
-        if trading_mode == 'scalping':
-            body += "• للسكالبينغ: 0.01 لوت (مخاطرة منخفضة)\n"
-        else:
-            body += "• للتداول طويل الأمد: 0.02-0.05 لوت\n"
-        
-        # تحذيرات
-        body += "\n⚠️ تحذيرات هامة:\n"
-        body += "• راقب الأحجام عند نقاط الدخول\n"
-        body += "• فعّل وقف الخسارة فور الدخول\n"
-        
-        # تصنيف نسبة النجاح
-        if confidence >= 80:
-            success_rating = "عالية - ثقة قوية"
-        elif confidence >= 70:
-            success_rating = "جيدة - ثقة مقبولة"
-        elif confidence >= 60:
-            success_rating = "متوسطة - حذر مطلوب"
-        else:
-            success_rating = "منخفضة - مخاطرة عالية"
-        
-        body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        body += "📊 إحصائيات النظام\n"
-        body += f"🎯 دقة النظام: {confidence:.1f}% ({success_rating})\n"
-        body += "⚡ مصدر البيانات: MetaTrader5 + Gemini AI Analysis\n"
-        body += f"🤖 نوع التحليل: آلي ذكي | وضع {trading_mode}\n"
         
         # الأخبار الاقتصادية
         body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -754,9 +760,9 @@ SYMBOL_CATEGORIES = {
     'indices': {**INDICES}
 }
 
-# إعدادات تردد الإشعارات - تردد ثابت 15 ثانية
+# إعدادات تردد الإشعارات - تردد ثابت 30 ثانية
 NOTIFICATION_FREQUENCIES = {
-    '15s': {'name': '15 ثانية 🔥', 'seconds': 15},  # التردد الوحيد المدعوم
+    '30s': {'name': '30 ثانية ⚡', 'seconds': 30},  # التردد الوحيد المدعوم
 }
 
 # ===== كلاس إدارة MT5 =====
@@ -4345,7 +4351,7 @@ def get_user_advanced_notification_settings(user_id: int) -> Dict:
         'candlestick_patterns': True,
         'economic_news': False,
         'success_threshold': 70,
-        'frequency': '15s',  # الافتراضي 15 ثانية للاستجابة السريعة
+        'frequency': '30s',  # الافتراضي 30 ثانية (محدث من 15 ثانية)
         'timing': 'always'
     }
     
@@ -4354,7 +4360,7 @@ def get_user_advanced_notification_settings(user_id: int) -> Dict:
 def get_user_notification_frequency(user_id: int) -> str:
     """جلب تردد الإشعارات للمستخدم"""
     settings = get_user_advanced_notification_settings(user_id)
-    return settings.get('frequency', '15s')
+    return settings.get('frequency', '30s')
 
 def set_user_notification_frequency(user_id: int, frequency: str):
     """تعيين تردد الإشعارات للمستخدم"""
@@ -4662,7 +4668,7 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         
         # التحقق من تردد الإشعارات
         user_frequency = get_user_notification_frequency(user_id)
-        frequency_seconds = NOTIFICATION_FREQUENCIES.get(user_frequency, {}).get('seconds', 15)
+        frequency_seconds = NOTIFICATION_FREQUENCIES.get(user_frequency, {}).get('seconds', 30)
         logger.debug(f"[DEBUG] تردد الإشعارات: {user_frequency} ({frequency_seconds} ثانية)")
         
         can_send = frequency_manager.can_send_notification(user_id, symbol, frequency_seconds)
@@ -5132,7 +5138,7 @@ def handle_settings_callback(message):
         trading_mode_display = "⚡ سكالبينغ سريع" if trading_mode == 'scalping' else "📈 تداول طويل المدى"
         settings = get_user_advanced_notification_settings(user_id)
         frequency = get_user_notification_frequency(user_id)
-        frequency_name = NOTIFICATION_FREQUENCIES.get(frequency, {}).get('name', '15 ثانية 🔥')
+        frequency_name = NOTIFICATION_FREQUENCIES.get(frequency, {}).get('name', '30 ثانية ⚡')
         user_timezone = get_user_timezone(user_id)
         timezone_display = AVAILABLE_TIMEZONES.get(user_timezone, user_timezone)
         capital = get_user_capital(user_id)
@@ -5903,7 +5909,7 @@ def handle_settings(call):
         trading_mode_display = "⚡ سكالبينغ سريع" if trading_mode == 'scalping' else "📈 تداول طويل المدى"
         settings = get_user_advanced_notification_settings(user_id)
         frequency = get_user_notification_frequency(user_id)
-        frequency_name = NOTIFICATION_FREQUENCIES.get(frequency, {}).get('name', '15 ثانية 🔥')
+        frequency_name = NOTIFICATION_FREQUENCIES.get(frequency, {}).get('name', '30 ثانية ⚡')
         user_timezone = get_user_timezone(user_id)
         timezone_display = AVAILABLE_TIMEZONES.get(user_timezone, user_timezone)
         capital = get_user_capital(user_id)
@@ -6503,7 +6509,7 @@ def handle_toggle_symbol(call):
         logger.error(f"[ERROR] خطأ في تبديل الرمز: {e}")
         bot.answer_callback_query(call.id, "حدث خطأ في تبديل الرمز", show_alert=True)
 
-# تم حذف معالجات التردد - التردد الآن موحد لكل 15 ثانية
+# تم حذف معالجات التردد - التردد الآن موحد لكل 30 ثانية
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("detailed_"))
 def handle_detailed_analysis(call):
@@ -7954,7 +7960,7 @@ def handle_set_threshold(call):
         logger.error(f"[ERROR] خطأ في تحديد نسبة النجاح: {e}")
         bot.answer_callback_query(call.id, "حدث خطأ", show_alert=True)
 
-# تم حذف معالجات التردد المكررة - التردد الآن موحد لكل 15 ثانية
+# تم حذف معالجات التردد المكررة - التردد الآن موحد لكل 30 ثانية
 
 @bot.callback_query_handler(func=lambda call: call.data == "notification_timing")
 def handle_notification_timing(call):
@@ -8423,8 +8429,8 @@ def monitoring_loop():
                     logger.info("[RECONNECT] محاولة إعادة اتصال شاملة بسبب أخطاء MT5 المتكررة...")
                     mt5_manager.check_real_connection()
             
-            # انتظار 15 ثانية - تردد موحد لجميع المستخدمين
-            time.sleep(15)
+            # انتظار 30 ثانية - تردد موحد لجميع المستخدمين (محدث من 15 ثانية)
+            time.sleep(30)
             
         except Exception as e:
             consecutive_errors += 1
