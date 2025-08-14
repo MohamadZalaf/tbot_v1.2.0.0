@@ -2349,7 +2349,7 @@ class GeminiAnalyzer:
                 'target1': target1_ai,
                 'target2': target2_ai,
                 'stop_loss': stop_loss_ai,
-                'risk_reward': risk_reward_ai
+                'risk_reward_ratio': risk_reward_ai
             }
             
         except Exception as e:
@@ -2684,14 +2684,20 @@ class GeminiAnalyzer:
                 logger.warning(f"[WARNING] لا توجد بيانات أسعار صحيحة للرمز {symbol}")
                 return "❌ **لا توجد بيانات أسعار صحيحة**\n\nفشل في الحصول على أسعار صالحة للرمز."
                 
-            # بيانات التحليل
-            action = analysis.get('action', 'HOLD')
-            confidence = analysis.get('confidence', 56)
+            # بيانات التحليل - إزالة القيم الافتراضية
+            action = analysis.get('action')
+            confidence = analysis.get('confidence')
             
-            # نسبة النجاح من الذكاء الاصطناعي (أولوية أعلى من الثقة العادية)
-            ai_success_rate = confidence  # نسبة النجاح المستخرجة من Gemini AI مباشرة
+            # التحقق من وجود بيانات صحيحة من AI
+            if not action or not confidence:
+                has_warning = True
+                action = action or 'HOLD'
+                confidence = confidence or 50
             
-            # التأكد من أن نسبة النجاح في النطاق المناسب وإضافة تحذير إذا لزم الأمر
+            # نسبة النجاح من الذكاء الاصطناعي
+            ai_success_rate = confidence
+            
+            # مصدر نسبة النجاح
             success_rate_source = "محسوبة بالذكاء الاصطناعي"
             if ai_success_rate < 20:
                 success_rate_source = "منخفضة - تحذير"
@@ -2710,33 +2716,100 @@ class GeminiAnalyzer:
                 logger.warning(f"[WARNING] فشل في جلب المؤشرات الفنية للرمز {symbol}: {e}")
                 indicators = {}
             
-            # حساب الأهداف والوقف بناءً على التحليل الذكي والمؤشرات
-            entry_price = current_price
+            # الحصول على الأهداف ووقف الخسارة من تحليل AI أو حسابها
+            entry_price = analysis.get('entry_price') or current_price
+            target1 = analysis.get('target1')
+            target2 = analysis.get('target2')
+            stop_loss = analysis.get('stop_loss')
+            risk_reward_ratio = analysis.get('risk_reward_ratio')
             
-            # استخدام مستويات الدعم والمقاومة الحقيقية إذا متوفرة
-            resistance = indicators.get('resistance', current_price * 1.02)
-            support = indicators.get('support', current_price * 0.98)
+            # إذا لم تكن متوفرة من AI، احسبها من المؤشرات الفنية
+            if not all([target1, target2, stop_loss]):
+                # استخدام مستويات الدعم والمقاومة الحقيقية من MT5
+                resistance = indicators.get('resistance')
+                support = indicators.get('support')
+                
+                if resistance and support and resistance > support:
+                    if action == 'BUY':
+                        target1 = target1 or resistance * 0.99
+                        target2 = target2 or resistance * 1.01
+                        stop_loss = stop_loss or support * 1.01
+                    elif action == 'SELL':
+                        target1 = target1 or support * 1.01
+                        target2 = target2 or support * 0.99
+                        stop_loss = stop_loss or resistance * 0.99
+                    else:  # HOLD
+                        target1 = target1 or current_price * 1.015
+                        target2 = target2 or current_price * 1.03
+                        stop_loss = stop_loss or current_price * 0.985
+                else:
+                    # إذا لم تتوفر مستويات من MT5، احسب بناءً على ATR أو نسبة مئوية
+                    atr = indicators.get('atr') if indicators else None
+                    if atr and atr > 0:
+                        # استخدام ATR لحساب مستويات دقيقة
+                        if action == 'BUY':
+                            target1 = target1 or current_price + (atr * 1.5)
+                            target2 = target2 or current_price + (atr * 2.5)
+                            stop_loss = stop_loss or current_price - (atr * 1.0)
+                        elif action == 'SELL':
+                            target1 = target1 or current_price - (atr * 1.5)
+                            target2 = target2 or current_price - (atr * 2.5)
+                            stop_loss = stop_loss or current_price + (atr * 1.0)
+                        else:
+                            target1 = target1 or current_price + (atr * 1.0)
+                            target2 = target2 or current_price + (atr * 2.0)
+                            stop_loss = stop_loss or current_price - (atr * 1.0)
+                    else:
+                        # حساب نسبة مئوية بسيط كملاذ أخير
+                        percentage_move = 0.02  # 2%
+                        if action == 'BUY':
+                            target1 = target1 or current_price * (1 + percentage_move)
+                            target2 = target2 or current_price * (1 + percentage_move * 2)
+                            stop_loss = stop_loss or current_price * (1 - percentage_move * 0.5)
+                        elif action == 'SELL':
+                            target1 = target1 or current_price * (1 - percentage_move)
+                            target2 = target2 or current_price * (1 - percentage_move * 2)
+                            stop_loss = stop_loss or current_price * (1 + percentage_move * 0.5)
+                        else:
+                            target1 = target1 or current_price * (1 + percentage_move)
+                            target2 = target2 or current_price * (1 + percentage_move * 2)
+                            stop_loss = stop_loss or current_price * (1 - percentage_move * 0.5)
             
-            if action == 'BUY':
-                target1 = resistance * 0.99  # قريب من المقاومة
-                target2 = resistance * 1.01  # فوق المقاومة قليلاً
-                stop_loss = support * 1.01   # فوق الدعم قليلاً
-            elif action == 'SELL':
-                target1 = support * 1.01     # قريب من الدعم
-                target2 = support * 0.99     # تحت الدعم قليلاً
-                stop_loss = resistance * 0.99 # تحت المقاومة قليلاً
-            else:
-                target1 = current_price * 1.015
-                target2 = current_price * 1.03
-                stop_loss = current_price * 0.985
+            # حساب النقاط بدقة حسب نوع الرمز
+            def calculate_points_accurately(price_diff, symbol):
+                """حساب النقاط بدقة حسب نوع الرمز"""
+                if not price_diff or price_diff == 0:
+                    return 0
+                    
+                # أزواج العملات الرئيسية
+                if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
+                    if any(symbol.endswith(yen) for yen in ['JPY']):
+                        return abs(price_diff) * 100  # أزواج الين
+                    else:
+                        return abs(price_diff) * 10000  # العملات الرئيسية
+                # المعادن النفيسة
+                elif any(symbol.startswith(metal) for metal in ['XAU', 'XAG', 'GOLD', 'SILVER']):
+                    return abs(price_diff) * 10
+                # العملات الرقمية
+                elif any(symbol.startswith(crypto) for crypto in ['BTC', 'ETH', 'LTC', 'XRP']):
+                    return abs(price_diff)
+                # المؤشرات والأسهم
+                elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER']):
+                    return abs(price_diff)
+                else:
+                    # افتراضي للرموز الأخرى
+                    return abs(price_diff) * 100
             
-            # حساب النقاط
-            points1 = abs(target1 - entry_price) * 10000 if entry_price else 0
-            points2 = abs(target2 - entry_price) * 10000 if entry_price else 0
-            stop_points = abs(entry_price - stop_loss) * 10000 if entry_price else 0
+            points1 = calculate_points_accurately(target1 - entry_price, symbol) if target1 and entry_price else 0
+            points2 = calculate_points_accurately(target2 - entry_price, symbol) if target2 and entry_price else 0
+            stop_points = calculate_points_accurately(entry_price - stop_loss, symbol) if entry_price and stop_loss else 0
             
             # حساب نسبة المخاطرة/المكافأة
-            risk_reward_ratio = (points1 / stop_points) if stop_points > 0 else 1.0
+            if not risk_reward_ratio:
+                if stop_points > 0 and points1 > 0:
+                    risk_reward_ratio = points1 / stop_points
+                else:
+                    risk_reward_ratio = 1.0
             
 
             
@@ -2744,8 +2817,8 @@ class GeminiAnalyzer:
             price_change_pct = indicators.get('price_change_pct', 0)
             daily_change = f"{price_change_pct:+.2f}%" if price_change_pct != 0 else "--"
             
-            # التحقق من وجود تحذيرات
-            has_warning = analysis.get('warning') or not indicators or confidence == 0
+            # التحقق من وجود تحذيرات - تقليل التحذيرات عند وجود بيانات صحيحة
+            has_warning = analysis.get('warning') or not indicators or (confidence is not None and confidence == 0)
             
             # بناء الرسالة بالتنسيق المطلوب الكامل
             message = "🚀 تحليل شامل متقدم\n\n"
@@ -2804,24 +2877,78 @@ class GeminiAnalyzer:
                     message += f"• MACD: --\n"
                 
                 # المتوسطات المتحركة
+                ma9 = indicators.get('ma_9')
                 ma10 = indicators.get('ma_10')
+                ma20 = indicators.get('ma_20')
+                ma21 = indicators.get('ma_21')
                 ma50 = indicators.get('ma_50')
                 
+                if ma9 and ma9 > 0:
+                    message += f"• MA9: {ma9:.5f}\n"
+                else:
+                    message += f"• MA9: --\n"
+                    
                 if ma10 and ma10 > 0:
                     message += f"• MA10: {ma10:.5f}\n"
                 else:
                     message += f"• MA10: --\n"
+                
+                if ma20 and ma20 > 0:
+                    message += f"• MA20: {ma20:.5f}\n"
+                else:
+                    message += f"• MA20: --\n"
+                
+                if ma21 and ma21 > 0:
+                    message += f"• MA21: {ma21:.5f}\n"
+                else:
+                    message += f"• MA21: --\n"
                     
                 if ma50 and ma50 > 0:
                     message += f"• MA50: {ma50:.5f}\n"
                 else:
                     message += f"• MA50: --\n"
                 
+                # Stochastic Oscillator
+                stochastic = indicators.get('stochastic', {})
+                if stochastic and stochastic.get('k') is not None:
+                    k_value = stochastic.get('k', 0)
+                    d_value = stochastic.get('d', 0)
+                    stoch_status = indicators.get('stochastic_interpretation', 'محايد')
+                    message += f"• Stochastic %K: {k_value:.1f}, %D: {d_value:.1f} ({stoch_status})\n"
+                else:
+                    message += f"• Stochastic: --\n"
+                
+                # ATR
+                atr = indicators.get('atr')
+                if atr and atr > 0:
+                    message += f"• ATR: {atr:.5f} (التقلبات)\n"
+                else:
+                    message += f"• ATR: --\n"
+                
+                # Volume Analysis
+                current_volume = indicators.get('current_volume')
+                avg_volume = indicators.get('avg_volume')
+                volume_ratio = indicators.get('volume_ratio')
+                if current_volume and avg_volume:
+                    message += f"• الحجم الحالي: {current_volume:,.0f}\n"
+                    message += f"• متوسط الحجم: {avg_volume:,.0f}\n"
+                    if volume_ratio:
+                        volume_status = indicators.get('volume_interpretation', 'طبيعي')
+                        message += f"• نسبة الحجم: {volume_ratio:.1f}x ({volume_status})\n"
+                else:
+                    message += f"• الحجم: --\n"
+                
             else:
                 message += f"• RSI: --\n"
                 message += f"• MACD: --\n"
+                message += f"• MA9: --\n"
                 message += f"• MA10: --\n"
+                message += f"• MA20: --\n"
+                message += f"• MA21: --\n"
                 message += f"• MA50: --\n"
+                message += f"• Stochastic: --\n"
+                message += f"• ATR: --\n"
+                message += f"• الحجم: --\n"
                 
             
             message += "\n"
