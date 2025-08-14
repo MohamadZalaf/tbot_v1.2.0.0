@@ -166,56 +166,75 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                 pass
 
         header = f"🚨 **إشعار تداول آلي** {symbol_info['emoji']}\n\n"
-        body = f"💱 **{symbol}** | {symbol_info['name']} {symbol_info['emoji']}\n"
-
-        # مصدر البيانات
-        data_source = analysis.get('data_source', analysis.get('source', 'MetaTrader5'))
-        if 'Yahoo' in str(data_source):
-            body += f"⚠️ **مصدر البيانات:** {data_source}\n"
-        else:
-            body += f"📡 **مصدر البيانات:** {data_source}\n"
+        body = "🚀 **إشارة تداول ذكية**\n\n"
+        body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        body += f"💱 **{symbol}** | {symbol_info['name']} {symbol_info['emoji']}\n"
 
         if current_price and current_price > 0:
-            body += f"💰 **السعر الحالي:** {current_price:,.5f}\n"
+            body += f"💰 **السعر اللحظي:** {current_price:,.5f}\n"
         else:
-            body += f"❌ **السعر الحالي:** فشل في جلب السعر\n"
+            body += f"❌ **السعر اللحظي:** فشل في جلب السعر\n"
+
+        # مستويات الدعم والمقاومة من MT5
+        try:
+            technical = mt5_manager.calculate_technical_indicators(symbol)
+            resistance = None
+            support = None
+            if technical:
+                if isinstance(technical, dict):
+                    if 'resistance' in technical or 'support' in technical:
+                        resistance = technical.get('resistance')
+                        support = technical.get('support')
+                    elif 'indicators' in technical and isinstance(technical['indicators'], dict):
+                        resistance = technical['indicators'].get('resistance')
+                        support = technical['indicators'].get('support')
+            if resistance and resistance > 0:
+                body += f"🔺 **مقاومة:** {resistance:,.5f}\n"
+            else:
+                body += f"🔺 **مقاومة:** 0.00000\n"
+            if support and support > 0:
+                body += f"🔻 **دعم:** {support:,.5f}\n"
+            else:
+                body += f"🔻 **دعم:** 0.00000\n"
+        except Exception:
+            body += f"🔺 **مقاومة:** 0.00000\n"
+            body += f"🔻 **دعم:** 0.00000\n"
+
+        body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 
         # نوع الصفقة
         if action == 'BUY':
-            body += "🟢 **نوع الصفقة:** شراء (BUY)\n"
+            body += "🟢 **التوصية:** شراء | نجاح "
         elif action == 'SELL':
-            body += "🔴 **نوع الصفقة:** بيع (SELL)\n"
+            body += "🔴 **التوصية:** بيع | نجاح "
         elif action == 'HOLD':
-            body += "🟡 **نوع الصفقة:** انتظار (HOLD)\n"
+            body += "🟡 **التوصية:** انتظار | نجاح "
         else:
-            body += f"❌ **نوع الصفقة:** {action}\n"
+            body += f"❌ **التوصية:** {action} | نجاح "
 
         # نسبة النجاح
         if confidence is not None and isinstance(confidence, (int, float)) and 0 <= confidence <= 100:
-            body += f"✅ **نسبة النجاح:** {confidence:.0f}%\n"
+            body += f"{confidence:.0f}%\n\n"
         else:
-            body += f"❌ **نسبة النجاح:** فشل في تحديد النسبة\n"
+            body += f"فشل في تحديد النسبة\n\n"
+
+        body += "📋 **تفاصيل التوصية:**\n"
 
         # قيم أساسية مختصرة بعد التصحيح
         if entry_price and entry_price > 0:
-            body += f"📍 **الدخول:** {entry_price:,.5f}\n"
+            body += f"📍 **سعر الدخول:** {entry_price:,.5f}\n"
         else:
-            body += f"❌ **الدخول:** فشل في تحديد السعر\n"
-
-        if target1 and target1 > 0:
-            body += f"🎯 **TP1:** {target1:,.5f}\n"
-        else:
-            body += f"❌ **TP1:** فشل في تحديد الهدف\n"
+            body += f"❌ **سعر الدخول:** فشل في تحديد السعر\n"
 
         if stop_loss and stop_loss > 0:
-            body += f"🛑 **SL:** {stop_loss:,.5f}\n"
+            body += f"🛑 **ستوب لوس:** {stop_loss:,.5f}\n"
         else:
-            body += f"❌ **SL:** فشل في تحديد وقف الخسارة\n"
+            body += f"❌ **ستوب لوس:** فشل في تحديد وقف الخسارة\n"
 
-        if rr and isinstance(rr, (int, float)) and rr > 0:
-            body += f"📊 **R/R:** 1:{float(rr):.1f}\n"
+        if target1 and target1 > 0:
+            body += f"🎯 **تيك بروفيت:** {target1:,.5f}\n"
         else:
-            body += f"❌ **R/R:** فشل في تحديد النسبة\n"
+            body += f"❌ **تيك بروفيت:** فشل في تحديد الهدف\n"
 
         # عدد النقاط المستهدفة اعتماداً على القيم بعد التصحيح
         def _calc_points(price_diff: float, sym: str) -> float:
@@ -234,14 +253,13 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         if entry_price and target1 and entry_price > 0 and target1 > 0:
             points_target = _calc_points(target1 - entry_price, symbol)
             if points_target > 0:
-                body += f"🎯 **عدد النقاط المستهدفة:** {points_target:.0f} نقطة\n"
+                body += f"📊 **النقاط المستهدفة:** {points_target:.0f} نقطة\n"
             else:
-                body += f"❌ **عدد النقاط المستهدفة:** فشل في الحساب\n"
+                body += f"❌ **النقاط المستهدفة:** فشل في الحساب\n"
         else:
-            body += f"❌ **عدد النقاط المستهدفة:** فشل في تحديد القيم\n"
+            body += f"❌ **النقاط المستهدفة:** فشل في تحديد القيم\n"
 
-        # أضف الوقت قبل الأخبار ليبقى الخبر في نهاية الإشعار
-        body += f"⏰ {formatted_time}\n"
+        body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 
         # الأخبار الاقتصادية (عناوين مؤثرة وحقيقية) في النهاية
         try:
@@ -249,11 +267,14 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             if news_text:
                 news_lines = [ln for ln in news_text.split('\n') if ln.strip()]
                 if news_lines:
-                    body += "📰 **الأخبار الاقتصادية:**\n"
+                    body += "📰 **الأخبار القريبة:**\n"
                     for ln in news_lines[:2]:
                         body += f"{ln}\n"
         except Exception:
-            body += "📰 **الأخبار الاقتصادية:** غير متاحة حالياً\n"
+            body += "📰 **الأخبار القريبة:** غير متاحة حالياً\n"
+
+        body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        body += f"⏰ 🕐 {formatted_time} | 🤖 تحليل ذكي آلي"
 
         return header + body
     except Exception as e:
