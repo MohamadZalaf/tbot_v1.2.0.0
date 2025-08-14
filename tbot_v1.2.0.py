@@ -191,14 +191,14 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             if resistance and resistance > 0:
                 body += f"🔺 **مقاومة:** {resistance:,.5f}\n"
             else:
-                body += f"🔺 **مقاومة:** 0.00000\n"
+                body += f"🔺 **مقاومة:** --\n"
             if support and support > 0:
                 body += f"🔻 **دعم:** {support:,.5f}\n"
             else:
-                body += f"🔻 **دعم:** 0.00000\n"
+                body += f"🔻 **دعم:** --\n"
         except Exception:
-            body += f"🔺 **مقاومة:** 0.00000\n"
-            body += f"🔻 **دعم:** 0.00000\n"
+            body += f"🔺 **مقاومة:** --\n"
+            body += f"🔻 **دعم:** --\n"
 
         body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 
