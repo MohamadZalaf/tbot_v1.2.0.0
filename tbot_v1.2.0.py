@@ -653,10 +653,23 @@ class MT5Manager:
         self.last_connection_attempt = 0
         self.connection_retry_delay = 5  # 5 ثوان بين محاولات الاتصال
         self.max_reconnection_attempts = 3
-        self.initialize_mt5()
+        
+        # محاولة الاتصال بـ MT5 إذا كان متوفراً، وإلا استخدام Yahoo Finance
+        try:
+            import MetaTrader5 as mt5
+            self.mt5_available = True
+            self.initialize_mt5()
+        except ImportError:
+            logger.warning("[WARNING] MetaTrader5 غير متوفر - سيتم استخدام Yahoo Finance كمصدر أساسي")
+            self.mt5_available = False
+            self.connected = True  # نعتبر الاتصال ناجحاً مع Yahoo Finance
+            logger.info("[OK] تم تفعيل وضع Yahoo Finance - البوت جاهز للعمل!")
     
     def initialize_mt5(self):
         """تهيئة الاتصال مع MT5 مع آلية إعادة المحاولة"""
+        if not self.mt5_available:
+            return True  # نجح الاتصال مع Yahoo Finance
+            
         with self.connection_lock:
             # منع محاولات الاتصال المتكررة
             current_time = time.time()
@@ -936,9 +949,10 @@ class MT5Manager:
         if not real_connection_status:
             real_connection_status = self.check_real_connection()
         
-        # ✅ المصدر الأساسي الأولي: MetaTrader5
-        if real_connection_status:
+        # ✅ المصدر الأساسي: MetaTrader5 إذا كان متوفراً، وإلا Yahoo Finance
+        if real_connection_status and self.mt5_available:
             try:
+                import MetaTrader5 as mt5
                 # جلب آخر تيك للرمز من MT5 (البيانات الأكثر دقة)
                 with self.connection_lock:
                     tick = mt5.symbol_info_tick(symbol)
