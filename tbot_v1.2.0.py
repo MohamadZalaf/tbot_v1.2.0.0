@@ -6415,8 +6415,8 @@ def handle_feedback(call):
                     else:
                         updated_markup.row(
                             types.InlineKeyboardButton("👍 دقيق", callback_data="feedback_disabled"),
-                                                         types.InlineKeyboardButton("✅ 👎 غير دقيق", callback_data="feedback_selected")
-                         )
+                            types.InlineKeyboardButton("✅ 👎 غير دقيق", callback_data="feedback_selected")
+                        )
                 
                 # إضافة الأزرار الإضافية للتحليل المباشر
                 if is_direct_analysis and 'symbol' in locals():
@@ -7674,9 +7674,18 @@ def load_analysis_rules():
     """تحميل قواعد التحليل من الملف"""
     rules_file = os.path.join(FEEDBACK_DIR, "analysis_rules.json")
     try:
+        logger.debug(f"[LOAD_RULES] محاولة تحميل القواعد من: {rules_file}")
+        
         if os.path.exists(rules_file):
             with open(rules_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                rules = json.load(f)
+                logger.info(f"[LOAD_RULES] تم تحميل {len(rules)} قاعدة بنجاح")
+                return rules
+        else:
+            logger.info(f"[LOAD_RULES] ملف القواعد غير موجود، سيتم إنشاؤه عند الحاجة")
+            return []
+    except json.JSONDecodeError as e:
+        logger.error(f"[ERROR] خطأ في تحليل JSON للقواعد: {e}")
         return []
     except Exception as e:
         logger.error(f"[ERROR] خطأ في تحميل قواعد التحليل: {e}")
@@ -7686,12 +7695,22 @@ def save_analysis_rules(rules):
     """حفظ قواعد التحليل في الملف"""
     rules_file = os.path.join(FEEDBACK_DIR, "analysis_rules.json")
     try:
+        logger.debug(f"[SAVE_RULES] محاولة حفظ {len(rules)} قاعدة في: {rules_file}")
+        
+        # إنشاء المجلد إذا لم يكن موجوداً
         os.makedirs(FEEDBACK_DIR, exist_ok=True)
+        
+        # حفظ القواعد
         with open(rules_file, 'w', encoding='utf-8') as f:
             json.dump(rules, f, ensure_ascii=False, indent=2, default=str)
+        
+        logger.info(f"[SAVE_RULES] تم حفظ {len(rules)} قاعدة بنجاح")
         return True
+        
     except Exception as e:
         logger.error(f"[ERROR] خطأ في حفظ قواعد التحليل: {e}")
+        logger.error(f"[ERROR] مسار الملف: {rules_file}")
+        logger.error(f"[ERROR] مجلد FEEDBACK_DIR: {FEEDBACK_DIR}")
         return False
 
 def process_user_rule_with_ai(user_input, user_id):
@@ -7816,7 +7835,9 @@ def handle_add_analysis_rule(call):
 def handle_edit_analysis_rules(call):
     """معالج تحرير قواعد التحليل"""
     try:
+        logger.info(f"[EDIT_RULES] معالجة طلب تحرير القواعد من المستخدم {call.from_user.id}")
         rules = load_analysis_rules()
+        logger.info(f"[EDIT_RULES] تم تحميل {len(rules)} قاعدة")
         
         if not rules:
             message_text = """
@@ -7871,10 +7892,14 @@ def handle_edit_analysis_rules(call):
 def handle_edit_specific_rule(call):
     """معالج تحرير قاعدة محددة"""
     try:
+        logger.info(f"[EDIT_RULE] معالجة طلب تحرير قاعدة: {call.data}")
         rule_index = int(call.data.split("_")[2])
         rules = load_analysis_rules()
         
+        logger.info(f"[EDIT_RULE] عدد القواعد المحملة: {len(rules)}, الفهرس المطلوب: {rule_index}")
+        
         if rule_index >= len(rules):
+            logger.warning(f"[EDIT_RULE] القاعدة غير موجودة - الفهرس {rule_index} أكبر من {len(rules)}")
             bot.answer_callback_query(call.id, "القاعدة غير موجودة", show_alert=True)
             return
             
