@@ -27,3 +27,7 @@ pytz>=2022.1
 
 # Development & Testing
 colorama>=0.4.5
+
+# Document Processing for AI Analysis
+PyPDF2>=3.0.1
+python-docx>=1.1.0

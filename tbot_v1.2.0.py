@@ -211,8 +211,39 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         stop_loss = analysis.get('stop_loss') or analysis.get('sl')
         risk_reward_ratio = analysis.get('risk_reward')
         
-        # إذا لم تكن متوفرة من AI، احسبها من المؤشرات الفنية (نفس طريقة التحليل اليدوي)
-        if not all([target1, target2, stop_loss]):
+        # التحقق من صحة القيم المستخرجة من AI وتطبيق قواعد نمط التداول
+        ai_values_valid = True
+        if target1 and target2 and stop_loss and entry_price:
+            # التحقق من منطقية القيم
+            if trading_mode == 'scalping':
+                # للسكالبينغ: التأكد من أن الأهداف قريبة (1-3%) ووقف الخسارة ضيق (<1%)
+                if action == 'BUY':
+                    tp1_pct = abs((target1 - entry_price) / entry_price) * 100
+                    tp2_pct = abs((target2 - entry_price) / entry_price) * 100
+                    sl_pct = abs((entry_price - stop_loss) / entry_price) * 100
+                    
+                    if tp1_pct > 3 or tp2_pct > 5 or sl_pct > 1.5:
+                        logger.warning(f"[SCALPING_CHECK] قيم AI غير مناسبة للسكالبينغ للرمز {symbol}: TP1={tp1_pct:.1f}%, TP2={tp2_pct:.1f}%, SL={sl_pct:.1f}%")
+                        ai_values_valid = False
+                elif action == 'SELL':
+                    tp1_pct = abs((entry_price - target1) / entry_price) * 100
+                    tp2_pct = abs((entry_price - target2) / entry_price) * 100
+                    sl_pct = abs((stop_loss - entry_price) / entry_price) * 100
+                    
+                    if tp1_pct > 3 or tp2_pct > 5 or sl_pct > 1.5:
+                        logger.warning(f"[SCALPING_CHECK] قيم AI غير مناسبة للسكالبينغ للرمز {symbol}: TP1={tp1_pct:.1f}%, TP2={tp2_pct:.1f}%, SL={sl_pct:.1f}%")
+                        ai_values_valid = False
+                        
+                if ai_values_valid:
+                    logger.info(f"[AI_SUCCESS] استخدام قيم AI للسكالبينغ للرمز {symbol}: TP1={target1:.5f}, TP2={target2:.5f}, SL={stop_loss:.5f}")
+            else:
+                logger.info(f"[AI_SUCCESS] استخدام قيم AI للتداول طويل الأمد للرمز {symbol}: TP1={target1:.5f}, TP2={target2:.5f}, SL={stop_loss:.5f}")
+        else:
+            ai_values_valid = False
+            logger.debug(f"[AI_MISSING] قيم AI مفقودة للرمز {symbol}: TP1={target1}, TP2={target2}, SL={stop_loss}, Entry={entry_price}")
+        
+        # إذا لم تكن متوفرة من AI أو غير صالحة، احسبها من المؤشرات الفنية
+        if not ai_values_valid or not all([target1, target2, stop_loss]):
             # استخدام مستويات الدعم والمقاومة الحقيقية من MT5
             resistance = indicators.get('resistance')
             support = indicators.get('support')
@@ -248,24 +279,28 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                         target2 = target2 or current_price + (atr * 2.0)
                         stop_loss = stop_loss or current_price - (atr * 1.0)
                 else:
-                    # نسب افتراضية حسب النمط
+                    # نسب افتراضية حسب النمط - محسنة للسكالبينغ
                     if trading_mode == 'scalping':
-                        profit_pct, loss_pct = 0.015, 0.005  # 1.5%/0.5%
+                        # نسب دقيقة للسكالبينغ
+                        tp1_pct, tp2_pct, sl_pct = 0.015, 0.025, 0.005  # TP1: 1.5%, TP2: 2.5%, SL: 0.5%
+                        logger.info(f"[SCALPING] استخدام نسب السكالبينغ للرمز {symbol}: TP1={tp1_pct*100}%, TP2={tp2_pct*100}%, SL={sl_pct*100}%")
                     else:
-                        profit_pct, loss_pct = 0.05, 0.02   # 5%/2%
+                        # نسب للتداول طويل الأمد
+                        tp1_pct, tp2_pct, sl_pct = 0.05, 0.08, 0.02  # TP1: 5%, TP2: 8%, SL: 2%
+                        logger.info(f"[LONGTERM] استخدام نسب التداول طويل الأمد للرمز {symbol}: TP1={tp1_pct*100}%, TP2={tp2_pct*100}%, SL={sl_pct*100}%")
                     
                     if action == 'BUY':
-                        target1 = target1 or current_price * (1 + profit_pct)
-                        target2 = target2 or current_price * (1 + profit_pct * 2)
-                        stop_loss = stop_loss or current_price * (1 - loss_pct)
+                        target1 = target1 or current_price * (1 + tp1_pct)
+                        target2 = target2 or current_price * (1 + tp2_pct)
+                        stop_loss = stop_loss or current_price * (1 - sl_pct)
                     elif action == 'SELL':
-                        target1 = target1 or current_price * (1 - profit_pct)
-                        target2 = target2 or current_price * (1 - profit_pct * 2)
-                        stop_loss = stop_loss or current_price * (1 + loss_pct)
-                    else:
-                        target1 = target1 or current_price * (1 + profit_pct)
-                        target2 = target2 or current_price * (1 + profit_pct * 2)
-                        stop_loss = stop_loss or current_price * (1 - loss_pct)
+                        target1 = target1 or current_price * (1 - tp1_pct)
+                        target2 = target2 or current_price * (1 - tp2_pct)
+                        stop_loss = stop_loss or current_price * (1 + sl_pct)
+                    else:  # HOLD
+                        target1 = target1 or current_price * (1 + tp1_pct)
+                        target2 = target2 or current_price * (1 + tp2_pct)
+                        stop_loss = stop_loss or current_price * (1 - sl_pct)
 
         # حساب النقاط بدقة مع ضمان قيم صحيحة
         def calc_points_for_symbol(price_diff, symbol_name):
@@ -879,8 +914,15 @@ class MT5Manager:
                 
                 # التحقق من أن البيانات حديثة (مع مرونة أكبر لبعض الأسواق)
                 try:
+                    # تحويل وقت MT5 مع التعامل الصحيح للمنطقة الزمنية
                     tick_time = datetime.fromtimestamp(tick.time)
-                    time_diff = datetime.now() - tick_time
+                    if TIMEZONE_AVAILABLE:
+                        # MT5 عادة يعطي التوقيت بـ UTC، لذلك نحوله
+                        tick_time = pytz.UTC.localize(tick_time)
+                        current_utc = pytz.UTC.localize(datetime.utcnow())
+                        time_diff = current_utc - tick_time
+                    else:
+                        time_diff = datetime.now() - tick_time
                     
                     # 15 دقيقة بدلاً من 5 للمرونة أكثر
                     if time_diff.total_seconds() > 900:
@@ -1013,7 +1055,12 @@ class MT5Manager:
                     tick = mt5.symbol_info_tick("EURUSD")
                     if tick:
                         tick_time = datetime.fromtimestamp(tick.time)
-                        age_seconds = (datetime.now() - tick_time).total_seconds()
+                        if TIMEZONE_AVAILABLE:
+                            tick_time = pytz.UTC.localize(tick_time)
+                            current_utc = pytz.UTC.localize(datetime.utcnow())
+                            age_seconds = (current_utc - tick_time).total_seconds()
+                        else:
+                            age_seconds = (datetime.now() - tick_time).total_seconds()
                         status_info['data_freshness'] = f"{age_seconds:.0f} ثانية"
                         
                 except Exception as e:
@@ -1068,7 +1115,12 @@ class MT5Manager:
                 if tick is not None and hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0:
                     # التحقق من أن البيانات حديثة (ليست قديمة)
                     tick_time = datetime.fromtimestamp(tick.time)
-                    time_diff = datetime.now() - tick_time
+                    if TIMEZONE_AVAILABLE:
+                        tick_time = pytz.UTC.localize(tick_time)
+                        current_utc = pytz.UTC.localize(datetime.utcnow())
+                        time_diff = current_utc - tick_time
+                    else:
+                        time_diff = datetime.now() - tick_time
                     
                     # زيادة مرونة وقت البيانات إلى 15 دقيقة
                     if time_diff.total_seconds() > 900:
@@ -2225,13 +2277,18 @@ class GeminiAnalyzer:
                     
                     تعليمات خاصة للسكالبينغ:
                     - ركز على الفرص قصيرة المدى (دقائق إلى ساعات)
-                    - أهداف ربح صغيرة (1-2%)
-                    - وقف خسارة ضيق (0.5-1%)
+                    - أهداف ربح صغيرة (1-2%) - يجب تحديد TP1 و TP2 بدقة
+                    - وقف خسارة ضيق (0.5-1%) - يجب تحديد SL بدقة
                     - تحليل سريع وفوري
                     - ثقة عالية مطلوبة (80%+)
                     - ركز على التحركات السريعة والمؤشرات قصيرة المدى
                     - حجم صفقات أصغر لتقليل المخاطر
                     - اهتم بـ RSI و MACD للإشارات السريعة
+                    
+                    ⚠️ مهم جداً للسكالبينغ:
+                    - يجب تحديد TP1 (الهدف الأول) و TP2 (الهدف الثاني) و SL (وقف الخسارة) بأرقام دقيقة
+                    - استخدم نسب صغيرة: TP1 = +1.5%, TP2 = +2.5%, SL = -0.5% من سعر الدخول
+                    - اكتب القيم بوضوح: "TP1: [رقم]" و "TP2: [رقم]" و "SL: [رقم]"
                     """
                 else:
                     trading_mode_instructions = """
@@ -2590,13 +2647,19 @@ class GeminiAnalyzer:
                     r'entry\s*(?:price)?\s*[:：]?\s*([\d\.]+)'
                 ])
                 target1_ai = _find_number([
-                    r'(?:TP1|الهدف\s*الأول)\s*[:：]?\s*([\d\.]+)'
+                    r'(?:TP1|الهدف\s*الأول|Target\s*1|T1)\s*[:：]?\s*([\d\.]+)',
+                    r'هدف\s*أول\s*[:：]?\s*([\d\.]+)',
+                    r'الهدف\s*1\s*[:：]?\s*([\d\.]+)'
                 ])
                 target2_ai = _find_number([
-                    r'(?:TP2|الهدف\s*الثاني)\s*[:：]?\s*([\d\.]+)'
+                    r'(?:TP2|الهدف\s*الثاني|Target\s*2|T2)\s*[:：]?\s*([\d\.]+)',
+                    r'هدف\s*ثاني\s*[:：]?\s*([\d\.]+)',
+                    r'الهدف\s*2\s*[:：]?\s*([\d\.]+)'
                 ])
                 stop_loss_ai = _find_number([
-                    r'(?:SL|وقف\s*الخسارة)\s*[:：]?\s*([\d\.]+)'
+                    r'(?:SL|وقف\s*الخسارة|Stop\s*Loss)\s*[:：]?\s*([\d\.]+)',
+                    r'إيقاف\s*الخسارة\s*[:：]?\s*([\d\.]+)',
+                    r'وقف\s*خسارة\s*[:：]?\s*([\d\.]+)'
                 ])
                 risk_reward_ai = _find_number([
                     r'(?:RR|R\s*/\s*R|Risk\s*/\s*Reward|نسبة\s*المخاطرة\s*/\s*المكافأة)\s*[:：]?\s*1\s*[:：]\s*([\d\.]+)',
@@ -2665,16 +2728,29 @@ class GeminiAnalyzer:
                     patterns = json.load(f)
                 
                 if patterns:
-                    context = "\n🧠 الأنماط المتعلمة من المستخدمين:\n"
+                    context = "\n🧠 الأنماط المتعلمة من المستخدمين (مع تحليل AI):\n"
                     for pattern in patterns[-10:]:  # آخر 10 أنماط
-                        pattern_info = pattern.get('pattern_info', {})
+                        # استخدام البيانات المدمجة الجديدة
+                        merged_analysis = pattern.get('merged_analysis', {})
+                        ai_analysis = pattern.get('ai_analysis', {})
                         description = pattern.get('user_description', '')
                         
+                        # معلومات محسنة
+                        final_pattern = merged_analysis.get('final_pattern', pattern.get('pattern_info', {}).get('pattern_name', 'نمط مخصص'))
+                        final_direction = merged_analysis.get('final_direction', pattern.get('pattern_info', {}).get('direction', 'غير محدد'))
+                        final_confidence = merged_analysis.get('final_confidence', pattern.get('pattern_info', {}).get('confidence', 50))
+                        agreement_level = merged_analysis.get('agreement_level', 'غير محدد')
+                        strategies = merged_analysis.get('strategies', [])
+                        
                         context += f"""
-- النمط: {pattern_info.get('pattern_name', 'نمط مخصص')}
-  الاتجاه: {pattern_info.get('direction', 'غير محدد')}
-  الثقة: {pattern_info.get('confidence', 50)}%
-  الوصف: {description[:100]}...
+- النمط: {final_pattern}
+  الاتجاه: {final_direction}
+  الثقة: {final_confidence}%
+  مستوى التطابق: {agreement_level}
+  الاستراتيجيات: {', '.join(strategies[:3]) if strategies else 'لا توجد'}
+  AI Support: {ai_analysis.get('support_level', 'غير محدد')}
+  AI Resistance: {ai_analysis.get('resistance_level', 'غير محدد')}
+  الوصف: {description[:80]}...
                         """
                     
                     context += "\n⚠️ يرجى مراعاة هذه الأنماط المتعلمة عند التحليل.\n"
@@ -2691,8 +2767,17 @@ class GeminiAnalyzer:
             trading_mode = get_user_trading_mode(user_id)
             
             if trading_mode == 'scalping':
-                # للسكالبينغ، نحتاج ثقة أعلى
-                return min(confidence * 0.9, 95.0)  # تقليل الثقة قليلاً للحذر
+                # للسكالبينغ، نحتاج ثقة أعلى وتحليل أكثر دقة
+                # إذا كانت الثقة أقل من 75%، نقللها أكثر لأن السكالبينغ يحتاج دقة عالية
+                if confidence < 75:
+                    adjusted_confidence = confidence * 0.8  # تقليل أكبر للثقة المنخفضة
+                    logger.debug(f"[SCALPING_CONFIDENCE] ثقة منخفضة للسكالبينغ: {confidence:.1f}% -> {adjusted_confidence:.1f}%")
+                    return min(adjusted_confidence, 95.0)
+                else:
+                    # ثقة عالية، تقليل طفيف فقط
+                    adjusted_confidence = confidence * 0.95
+                    logger.debug(f"[SCALPING_CONFIDENCE] ثقة جيدة للسكالبينغ: {confidence:.1f}% -> {adjusted_confidence:.1f}%")
+                    return min(adjusted_confidence, 95.0)
             elif trading_mode == 'longterm':
                 # للتداول طويل المدى، يمكن قبول ثقة أقل
                 return min(confidence * 1.1, 95.0)  # زيادة الثقة قليلاً
@@ -3310,8 +3395,14 @@ class GeminiAnalyzer:
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             message += f"💱 {symbol} | {symbol_info['name']} {symbol_info['emoji']}\n"
             message += f"📡 مصدر البيانات: 🔗 MetaTrader5 (لحظي - بيانات حقيقية)\n"
+            message += f"🌍 مصدر التوقيت: خادم MT5 - محول لمنطقتك الزمنية\n"
             message += f"💰 السعر الحالي: {current_price:,.5f}\n"
             message += f"➡️ التغيير اليومي: {daily_change}\n"
+            # استخدام التوقيت المصحح حسب المنطقة الزمنية للمستخدم
+            if user_id:
+                formatted_time = format_time_for_user(user_id)
+            else:
+                formatted_time = f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (التوقيت المحلي)"
             message += f"⏰ وقت التحليل: {formatted_time}\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -3745,7 +3836,7 @@ class GeminiAnalyzer:
             # معالجة الملف حسب نوعه
             if file_type.startswith('image/'):
                 return self._process_image_file(file_path, user_context)
-            elif file_type in ['application/pdf', 'text/plain', 'application/msword']:
+            elif file_type in ['application/pdf', 'text/plain', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']:
                 return self._process_document_file(file_path, user_context)
             
             return True
@@ -3755,29 +3846,42 @@ class GeminiAnalyzer:
             return False
     
     def _process_image_file(self, file_path: str, user_context: Dict) -> bool:
-        """معالجة ملفات الصور للتدريب على الأنماط"""
+        """معالجة ملفات الصور للتدريب على الأنماط مع تحليل AI فعلي"""
         try:
-            # يمكن هنا إضافة معالجة متقدمة للصور
-            # مثل تحليل الأنماط الفنية، الشارتات، إلخ
+            # تحليل الصورة بواسطة Gemini Vision AI
+            ai_analysis = self._analyze_image_with_gemini(file_path, user_context)
             
             analysis_prompt = f"""
-            تم رفع صورة للتدريب من المستخدم.
-            السياق: نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
-            رأس المال: {user_context.get('capital', 'غير محدد')}
+            تم رفع صورة للتدريب من المستخدم مع تحليل AI متقدم.
             
-            يرجى تحليل هذه الصورة واستخراج الأنماط المفيدة للتداول.
+            السياق: 
+            - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
+            - رأس المال: {user_context.get('capital', 'غير محدد')}
+            
+            تحليل AI للصورة:
+            {ai_analysis.get('analysis_text', 'لم يتم التحليل')}
+            
+            المعلومات المستخرجة:
+            - نوع الشارت: {ai_analysis.get('chart_type', 'غير محدد')}
+            - الأنماط المكتشفة: {ai_analysis.get('patterns', [])}
+            - الاتجاه: {ai_analysis.get('trend', 'غير محدد')}
+            - مستوى الدعم: {ai_analysis.get('support_level', 'غير محدد')}
+            - مستوى المقاومة: {ai_analysis.get('resistance_level', 'غير محدد')}
+            - نسبة ثقة AI: {ai_analysis.get('confidence', 0)}%
             """
             
-            # حفظ prompt التحليل مع بيانات الصورة
+            # حفظ prompt التحليل مع بيانات الصورة والتحليل
             training_data = {
                 'type': 'image_analysis',
                 'file_path': file_path,
                 'analysis_prompt': analysis_prompt,
+                'ai_analysis': ai_analysis,
                 'user_context': user_context,
                 'timestamp': datetime.now().isoformat()
             }
             
             self._save_training_data(training_data)
+            logger.info(f"[AI_IMAGE] تم تحليل الصورة بنجاح: {ai_analysis.get('patterns', [])} patterns detected")
             return True
             
         except Exception as e:
@@ -3785,16 +3889,42 @@ class GeminiAnalyzer:
             return False
     
     def _process_document_file(self, file_path: str, user_context: Dict) -> bool:
-        """معالجة ملفات المستندات للتدريب"""
+        """معالجة ملفات المستندات للتدريب مع تحليل AI فعلي"""
         try:
+            # تحليل المستند بواسطة AI
+            ai_analysis = self._analyze_document_with_gemini(file_path, user_context)
+            
+            analysis_prompt = f"""
+            تم رفع مستند للتدريب من المستخدم مع تحليل AI متقدم.
+            
+            السياق:
+            - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
+            - رأس المال: {user_context.get('capital', 'غير محدد')}
+            
+            تحليل AI للمستند:
+            {ai_analysis.get('analysis_text', 'لم يتم التحليل')}
+            
+            المعلومات المستخرجة:
+            - نوع المحتوى: {ai_analysis.get('content_type', 'غير محدد')}
+            - الاستراتيجيات المذكورة: {ai_analysis.get('strategies', [])}
+            - الأدوات المالية: {ai_analysis.get('instruments', [])}
+            - نسب المخاطرة: {ai_analysis.get('risk_ratios', 'غير محدد')}
+            - التوصيات الرئيسية: {ai_analysis.get('recommendations', [])}
+            - مستوى الخبرة المطلوب: {ai_analysis.get('experience_level', 'غير محدد')}
+            - نسبة ثقة AI: {ai_analysis.get('confidence', 0)}%
+            """
+            
             training_data = {
                 'type': 'document_analysis',
                 'file_path': file_path,
+                'analysis_prompt': analysis_prompt,
+                'ai_analysis': ai_analysis,
                 'user_context': user_context,
                 'timestamp': datetime.now().isoformat()
             }
             
             self._save_training_data(training_data)
+            logger.info(f"[AI_DOC] تم تحليل المستند بنجاح: {ai_analysis.get('strategies', [])} strategies found")
             return True
             
         except Exception as e:
@@ -3802,39 +3932,56 @@ class GeminiAnalyzer:
             return False
     
     def learn_from_pattern_image(self, file_path: str, file_type: str, user_context: Dict, pattern_description: str) -> bool:
-        """تعلم نمط محدد من صورة مع وصف المستخدم"""
+        """تعلم نمط محدد من ملف مع وصف المستخدم ودمج تحليل AI"""
         try:
             if not self.model:
                 return False
             
-            # استخراج معلومات النمط من الوصف
-            pattern_info = self._extract_pattern_info(pattern_description)
+            # تحليل الملف بواسطة AI أولاً
+            if file_type.startswith('image/'):
+                ai_analysis = self._analyze_image_with_gemini(file_path, user_context)
+            else:
+                ai_analysis = self._analyze_document_with_gemini(file_path, user_context)
             
-            # إنشاء prompt متقدم للتحليل
+            # استخراج معلومات النمط من وصف المستخدم
+            user_pattern_info = self._extract_pattern_info(pattern_description)
+            
+            # دمج تحليل AI مع وصف المستخدم
+            merged_analysis = self._merge_ai_user_analysis(ai_analysis, user_pattern_info, pattern_description)
+            
+            # إنشاء prompt متقدم للتحليل المدمج
             analysis_prompt = f"""
-            تم رفع صورة نمط تداول مع توجيهات من المستخدم المتخصص.
+            تم رفع {'صورة' if file_type.startswith('image/') else 'مستند'} مع تحليل AI متقدم ووصف من المستخدم المتخصص.
             
             معلومات المستخدم:
             - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
             - رأس المال: ${user_context.get('capital', 'غير محدد')}
             
-            وصف المستخدم للنمط:
+            تحليل AI للملف:
+            {ai_analysis.get('analysis_text', 'لم يتم التحليل')[:500]}...
+            
+            وصف المستخدم:
             "{pattern_description}"
             
-            معلومات النمط المستخرجة:
-            - النمط: {pattern_info.get('pattern_name', 'غير محدد')}
-            - الاتجاه المتوقع: {pattern_info.get('direction', 'غير محدد')}
-            - نسبة الثقة: {pattern_info.get('confidence', 'غير محدد')}%
+            التحليل المدمج:
+            - النمط النهائي: {merged_analysis.get('final_pattern', 'غير محدد')}
+            - الاتجاه المتوقع: {merged_analysis.get('final_direction', 'غير محدد')}
+            - نسبة الثقة النهائية: {merged_analysis.get('final_confidence', 0)}%
+            - مستوى التطابق AI-User: {merged_analysis.get('agreement_level', 'غير محدد')}
+            - الاستراتيجيات المستخرجة: {merged_analysis.get('strategies', [])}
             
-            يرجى تحليل هذه الصورة وحفظ النمط للاستخدام المستقبلي في التحليلات.
+            يرجى حفظ هذا التحليل المدمج للاستخدام المستقبلي في التحليلات.
             """
             
-            # حفظ بيانات النمط المتعلم
+            # حفظ بيانات النمط المتعلم مع التحليل المدمج
             pattern_data = {
                 'type': 'learned_pattern',
                 'file_path': file_path,
+                'file_type': file_type,
                 'user_description': pattern_description,
-                'pattern_info': pattern_info,
+                'ai_analysis': ai_analysis,
+                'user_pattern_info': user_pattern_info,
+                'merged_analysis': merged_analysis,
                 'analysis_prompt': analysis_prompt,
                 'user_context': user_context,
                 'timestamp': datetime.now().isoformat(),
@@ -3847,11 +3994,11 @@ class GeminiAnalyzer:
             # حفظ في ملف التدريب العام
             self._save_training_data(pattern_data)
             
-            logger.info(f"[AI_LEARNING] تم تعلم نمط جديد من المستخدم {user_context.get('user_id', 'unknown')}")
+            logger.info(f"[AI_LEARNING] تم تعلم نمط مدمج من المستخدم {user_context.get('user_id', 'unknown')}: {merged_analysis.get('final_pattern', 'unknown')}")
             return True
             
         except Exception as e:
-            logger.error(f"[ERROR] خطأ في تعلم النمط من الصورة: {e}")
+            logger.error(f"[ERROR] خطأ في تعلم النمط من الملف: {e}")
             return False
     
     def _extract_pattern_info(self, description: str) -> Dict:
@@ -3894,6 +4041,470 @@ class GeminiAnalyzer:
                 break
         
         return info
+    
+    def _analyze_image_with_gemini(self, file_path: str, user_context: Dict) -> Dict:
+        """تحليل الصورة بواسطة Gemini Vision AI لاستخراج المعلومات التداولية"""
+        try:
+            if not self.model:
+                logger.warning("[AI_IMAGE] Gemini model not available")
+                return {}
+            
+            # تحميل الصورة
+            from PIL import Image
+            image = Image.open(file_path)
+            
+            # إنشاء prompt متخصص للتحليل الفني
+            analysis_prompt = f"""
+            أنت محلل فني خبير متخصص في تحليل الشارتات والأنماط التداولية.
+            
+            حلل هذه الصورة التداولية بدقة واستخرج المعلومات التالية:
+
+            1. **نوع الشارت**: (شموع، خطي، أعمدة، أو غير محدد)
+            2. **الأنماط الفنية المكتشفة**: اذكر جميع الأنماط (مثلث، رأس وكتفين، قمة مزدوجة، إلخ)
+            3. **الاتجاه العام**: (صاعد، هابط، جانبي)
+            4. **مستويات الدعم**: أرقام تقريبية إن أمكن
+            5. **مستويات المقاومة**: أرقام تقريبية إن أمكن
+            6. **إشارات التداول**: (شراء، بيع، انتظار)
+            7. **نسبة الثقة**: من 1-100%
+            8. **الرمز المالي**: إن كان واضحاً في الصورة
+            9. **الإطار الزمني**: إن كان واضحاً
+            10. **ملاحظات إضافية**: أي معلومات مهمة أخرى
+
+            سياق المستخدم:
+            - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
+            - رأس المال: ${user_context.get('capital', 'غير محدد')}
+
+            قدم التحليل بتنسيق واضح ومنظم.
+            """
+            
+            # إرسال الصورة والنص لـ Gemini
+            response = self.model.generate_content([analysis_prompt, image])
+            analysis_text = response.text
+            
+            # استخراج المعلومات المهيكلة من النص
+            extracted_info = self._parse_image_analysis_response(analysis_text)
+            
+            return {
+                'analysis_text': analysis_text,
+                'chart_type': extracted_info.get('chart_type', 'غير محدد'),
+                'patterns': extracted_info.get('patterns', []),
+                'trend': extracted_info.get('trend', 'غير محدد'),
+                'support_level': extracted_info.get('support_level', 'غير محدد'),
+                'resistance_level': extracted_info.get('resistance_level', 'غير محدد'),
+                'trading_signal': extracted_info.get('trading_signal', 'غير محدد'),
+                'confidence': extracted_info.get('confidence', 0),
+                'symbol': extracted_info.get('symbol', 'غير محدد'),
+                'timeframe': extracted_info.get('timeframe', 'غير محدد'),
+                'notes': extracted_info.get('notes', '')
+            }
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في تحليل الصورة بـ Gemini: {e}")
+            return {
+                'analysis_text': f'فشل التحليل: {str(e)}',
+                'chart_type': 'غير محدد',
+                'patterns': [],
+                'trend': 'غير محدد',
+                'confidence': 0
+            }
+    
+    def _parse_image_analysis_response(self, analysis_text: str) -> Dict:
+        """استخراج المعلومات المهيكلة من نص تحليل الصورة"""
+        import re
+        
+        extracted = {}
+        
+        try:
+            # استخراج نوع الشارت
+            chart_match = re.search(r'نوع الشارت[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if chart_match:
+                extracted['chart_type'] = chart_match.group(1).strip()
+            
+            # استخراج الأنماط
+            patterns_match = re.search(r'الأنماط الفنية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if patterns_match:
+                patterns_text = patterns_match.group(1).strip()
+                extracted['patterns'] = [p.strip() for p in patterns_text.split(',') if p.strip()]
+            
+            # استخراج الاتجاه
+            trend_match = re.search(r'الاتجاه العام[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if trend_match:
+                extracted['trend'] = trend_match.group(1).strip()
+            
+            # استخراج مستوى الدعم
+            support_match = re.search(r'مستوى.*الدعم[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if support_match:
+                extracted['support_level'] = support_match.group(1).strip()
+            
+            # استخراج مستوى المقاومة
+            resistance_match = re.search(r'مستوى.*المقاومة[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if resistance_match:
+                extracted['resistance_level'] = resistance_match.group(1).strip()
+            
+            # استخراج إشارة التداول
+            signal_match = re.search(r'إشارات التداول[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if signal_match:
+                extracted['trading_signal'] = signal_match.group(1).strip()
+            
+            # استخراج نسبة الثقة
+            confidence_match = re.search(r'نسبة الثقة[:\s]*(\d+)', analysis_text, re.IGNORECASE)
+            if confidence_match:
+                extracted['confidence'] = int(confidence_match.group(1))
+            
+            # استخراج الرمز المالي
+            symbol_match = re.search(r'الرمز المالي[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if symbol_match:
+                extracted['symbol'] = symbol_match.group(1).strip()
+            
+            # استخراج الإطار الزمني
+            timeframe_match = re.search(r'الإطار الزمني[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if timeframe_match:
+                extracted['timeframe'] = timeframe_match.group(1).strip()
+            
+            # استخراج الملاحظات
+            notes_match = re.search(r'ملاحظات إضافية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if notes_match:
+                extracted['notes'] = notes_match.group(1).strip()
+                
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج المعلومات من تحليل الصورة: {e}")
+        
+        return extracted
+    
+    def _analyze_document_with_gemini(self, file_path: str, user_context: Dict) -> Dict:
+        """تحليل المستندات (PDF, Word, Text) بواسطة Gemini AI لاستخراج المحتوى التداولي"""
+        try:
+            if not self.model:
+                logger.warning("[AI_DOC] Gemini model not available")
+                return {}
+            
+            # استخراج النص من الملف
+            document_text = self._extract_text_from_document(file_path)
+            
+            if not document_text.strip():
+                logger.warning("[AI_DOC] No text extracted from document")
+                return {'analysis_text': 'لم يتم استخراج نص من المستند'}
+            
+            # إنشاء prompt متخصص لتحليل المحتوى التداولي
+            analysis_prompt = f"""
+            أنت خبير تداول ومحلل مالي متخصص في تحليل المحتوى التداولي والمالي.
+            
+            حلل هذا المحتوى التداولي بدقة واستخرج المعلومات التالية:
+
+            1. **نوع المحتوى**: (استراتيجية تداول، تقرير تحليلي، دليل تعليمي، أخبار مالية، أو غير محدد)
+            2. **الاستراتيجيات المذكورة**: جميع استراتيجيات التداول المذكورة في النص
+            3. **الأدوات المالية**: العملات، الأسهم، السلع، المؤشرات المذكورة
+            4. **نسب المخاطرة والعائد**: أي نسب أو أرقام متعلقة بالمخاطر والأرباح
+            5. **التوصيات الرئيسية**: أهم النصائح والتوصيات
+            6. **مستوى الخبرة المطلوب**: (مبتدئ، متوسط، متقدم)
+            7. **الإطار الزمني**: (سكالبينغ، يومي، أسبوعي، شهري)
+            8. **المؤشرات الفنية المذكورة**: أي مؤشرات تقنية مذكورة
+            9. **نسبة الثقة**: تقييمك لجودة المحتوى من 1-100%
+            10. **ملخص المحتوى**: ملخص مختصر للنقاط الرئيسية
+
+            سياق المستخدم:
+            - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
+            - رأس المال: ${user_context.get('capital', 'غير محدد')}
+
+            المحتوى للتحليل:
+            {document_text[:3000]}...
+
+            قدم التحليل بتنسيق واضح ومنظم.
+            """
+            
+            # إرسال النص لـ Gemini للتحليل
+            response = self.model.generate_content(analysis_prompt)
+            analysis_text = response.text
+            
+            # استخراج المعلومات المهيكلة من النص
+            extracted_info = self._parse_document_analysis_response(analysis_text)
+            
+            return {
+                'analysis_text': analysis_text,
+                'content_type': extracted_info.get('content_type', 'غير محدد'),
+                'strategies': extracted_info.get('strategies', []),
+                'instruments': extracted_info.get('instruments', []),
+                'risk_ratios': extracted_info.get('risk_ratios', 'غير محدد'),
+                'recommendations': extracted_info.get('recommendations', []),
+                'experience_level': extracted_info.get('experience_level', 'غير محدد'),
+                'timeframe': extracted_info.get('timeframe', 'غير محدد'),
+                'indicators': extracted_info.get('indicators', []),
+                'confidence': extracted_info.get('confidence', 0),
+                'summary': extracted_info.get('summary', ''),
+                'extracted_text_length': len(document_text)
+            }
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في تحليل المستند بـ Gemini: {e}")
+            return {
+                'analysis_text': f'فشل التحليل: {str(e)}',
+                'content_type': 'غير محدد',
+                'strategies': [],
+                'confidence': 0
+            }
+    
+    def _extract_text_from_document(self, file_path: str) -> str:
+        """استخراج النص من المستندات المختلفة"""
+        try:
+            file_extension = file_path.lower().split('.')[-1]
+            
+            if file_extension == 'pdf':
+                return self._extract_text_from_pdf(file_path)
+            elif file_extension in ['txt']:
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    return file.read()
+            elif file_extension in ['doc', 'docx']:
+                return self._extract_text_from_word(file_path)
+            else:
+                logger.warning(f"[AI_DOC] Unsupported file type: {file_extension}")
+                return ""
+                
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج النص من المستند: {e}")
+            return ""
+    
+    def _extract_text_from_pdf(self, file_path: str) -> str:
+        """استخراج النص من ملف PDF"""
+        try:
+            import PyPDF2
+            text = ""
+            with open(file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                for page in pdf_reader.pages:
+                    text += page.extract_text() + "\n"
+            return text
+        except ImportError:
+            logger.warning("[AI_DOC] PyPDF2 not installed - cannot extract PDF text")
+            return "مكتبة PyPDF2 غير مثبتة - لا يمكن استخراج النص من PDF"
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج النص من PDF: {e}")
+            return ""
+    
+    def _extract_text_from_word(self, file_path: str) -> str:
+        """استخراج النص من ملف Word"""
+        try:
+            import docx
+            doc = docx.Document(file_path)
+            text = ""
+            for paragraph in doc.paragraphs:
+                text += paragraph.text + "\n"
+            return text
+        except ImportError:
+            logger.warning("[AI_DOC] python-docx not installed - cannot extract Word text")
+            return "مكتبة python-docx غير مثبتة - لا يمكن استخراج النص من Word"
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج النص من Word: {e}")
+            return ""
+    
+    def _parse_document_analysis_response(self, analysis_text: str) -> Dict:
+        """استخراج المعلومات المهيكلة من نص تحليل المستند"""
+        import re
+        
+        extracted = {}
+        
+        try:
+            # استخراج نوع المحتوى
+            content_match = re.search(r'نوع المحتوى[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if content_match:
+                extracted['content_type'] = content_match.group(1).strip()
+            
+            # استخراج الاستراتيجيات
+            strategies_match = re.search(r'الاستراتيجيات المذكورة[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if strategies_match:
+                strategies_text = strategies_match.group(1).strip()
+                extracted['strategies'] = [s.strip() for s in strategies_text.split(',') if s.strip()]
+            
+            # استخراج الأدوات المالية
+            instruments_match = re.search(r'الأدوات المالية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if instruments_match:
+                instruments_text = instruments_match.group(1).strip()
+                extracted['instruments'] = [i.strip() for i in instruments_text.split(',') if i.strip()]
+            
+            # استخراج نسب المخاطرة
+            risk_match = re.search(r'نسب المخاطرة[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if risk_match:
+                extracted['risk_ratios'] = risk_match.group(1).strip()
+            
+            # استخراج التوصيات
+            recommendations_match = re.search(r'التوصيات الرئيسية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if recommendations_match:
+                recommendations_text = recommendations_match.group(1).strip()
+                extracted['recommendations'] = [r.strip() for r in recommendations_text.split(',') if r.strip()]
+            
+            # استخراج مستوى الخبرة
+            experience_match = re.search(r'مستوى الخبرة[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if experience_match:
+                extracted['experience_level'] = experience_match.group(1).strip()
+            
+            # استخراج الإطار الزمني
+            timeframe_match = re.search(r'الإطار الزمني[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if timeframe_match:
+                extracted['timeframe'] = timeframe_match.group(1).strip()
+            
+            # استخراج المؤشرات الفنية
+            indicators_match = re.search(r'المؤشرات الفنية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if indicators_match:
+                indicators_text = indicators_match.group(1).strip()
+                extracted['indicators'] = [i.strip() for i in indicators_text.split(',') if i.strip()]
+            
+            # استخراج نسبة الثقة
+            confidence_match = re.search(r'نسبة الثقة[:\s]*(\d+)', analysis_text, re.IGNORECASE)
+            if confidence_match:
+                extracted['confidence'] = int(confidence_match.group(1))
+            
+            # استخراج الملخص
+            summary_match = re.search(r'ملخص المحتوى[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if summary_match:
+                extracted['summary'] = summary_match.group(1).strip()
+                
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج المعلومات من تحليل المستند: {e}")
+        
+        return extracted
+    
+    def _merge_ai_user_analysis(self, ai_analysis: Dict, user_pattern_info: Dict, user_description: str) -> Dict:
+        """دمج تحليل AI مع وصف المستخدم بذكاء"""
+        try:
+            merged = {}
+            
+            # تحديد النمط النهائي
+            ai_patterns = ai_analysis.get('patterns', [])
+            user_pattern = user_pattern_info.get('pattern_name', 'نمط مخصص')
+            
+            if ai_patterns and user_pattern != 'نمط مخصص':
+                # إذا كان لدينا أنماط من AI ووصف محدد من المستخدم
+                merged['final_pattern'] = f"{user_pattern} (مؤكد بـ AI: {', '.join(ai_patterns[:2])})"
+                merged['agreement_level'] = 'عالي'
+            elif ai_patterns:
+                # AI وجد أنماط لكن المستخدم لم يحدد
+                merged['final_pattern'] = ', '.join(ai_patterns[:2])
+                merged['agreement_level'] = 'متوسط - AI فقط'
+            elif user_pattern != 'نمط مخصص':
+                # المستخدم حدد نمط لكن AI لم يجد
+                merged['final_pattern'] = user_pattern
+                merged['agreement_level'] = 'متوسط - مستخدم فقط'
+            else:
+                merged['final_pattern'] = 'نمط مخصص'
+                merged['agreement_level'] = 'منخفض'
+            
+            # تحديد الاتجاه النهائي
+            ai_trend = ai_analysis.get('trend', 'غير محدد')
+            user_direction = user_pattern_info.get('direction', 'غير محدد')
+            
+            if ai_trend != 'غير محدد' and user_direction != 'غير محدد':
+                # مقارنة الاتجاهات
+                if self._directions_match(ai_trend, user_direction):
+                    merged['final_direction'] = user_direction
+                    merged['direction_agreement'] = True
+                else:
+                    merged['final_direction'] = f"{user_direction} (AI: {ai_trend})"
+                    merged['direction_agreement'] = False
+            elif user_direction != 'غير محدد':
+                merged['final_direction'] = user_direction
+                merged['direction_agreement'] = None
+            elif ai_trend != 'غير محدد':
+                merged['final_direction'] = ai_trend
+                merged['direction_agreement'] = None
+            else:
+                merged['final_direction'] = 'غير محدد'
+                merged['direction_agreement'] = None
+            
+            # تحديد نسبة الثقة النهائية
+            ai_confidence = ai_analysis.get('confidence', 0)
+            user_confidence = user_pattern_info.get('confidence', 50)
+            
+            if ai_confidence > 0 and user_confidence > 0:
+                # متوسط مرجح (وزن أكبر لرأي المستخدم)
+                merged['final_confidence'] = int((user_confidence * 0.7) + (ai_confidence * 0.3))
+            elif user_confidence > 0:
+                merged['final_confidence'] = user_confidence
+            elif ai_confidence > 0:
+                merged['final_confidence'] = ai_confidence
+            else:
+                merged['final_confidence'] = 50
+            
+            # دمج الاستراتيجيات
+            strategies = []
+            if 'strategies' in ai_analysis:
+                strategies.extend(ai_analysis['strategies'])
+            
+            # استخراج استراتيجيات من وصف المستخدم
+            user_strategies = self._extract_strategies_from_description(user_description)
+            strategies.extend(user_strategies)
+            
+            merged['strategies'] = list(set(strategies))  # إزالة التكرارات
+            
+            # معلومات إضافية
+            merged['ai_support_level'] = ai_analysis.get('support_level', 'غير محدد')
+            merged['ai_resistance_level'] = ai_analysis.get('resistance_level', 'غير محدد')
+            merged['ai_trading_signal'] = ai_analysis.get('trading_signal', 'غير محدد')
+            merged['user_description_length'] = len(user_description)
+            
+            # تقييم جودة الدمج
+            quality_score = 0
+            if merged['direction_agreement'] is True:
+                quality_score += 30
+            if ai_confidence > 70:
+                quality_score += 25
+            if user_confidence > 70:
+                quality_score += 25
+            if len(strategies) > 0:
+                quality_score += 20
+            
+            merged['merge_quality_score'] = quality_score
+            
+            return merged
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في دمج تحليل AI مع المستخدم: {e}")
+            return {
+                'final_pattern': 'خطأ في الدمج',
+                'final_direction': 'غير محدد',
+                'final_confidence': 0,
+                'agreement_level': 'خطأ',
+                'strategies': []
+            }
+    
+    def _directions_match(self, ai_trend: str, user_direction: str) -> bool:
+        """مقارنة اتجاهات AI مع المستخدم"""
+        # تطبيع الاتجاهات
+        bullish_terms = ['صاعد', 'صعود', 'ارتفاع', 'شراء', 'bullish', 'up', 'buy']
+        bearish_terms = ['هابط', 'هبوط', 'انخفاض', 'بيع', 'bearish', 'down', 'sell']
+        
+        ai_trend_lower = ai_trend.lower()
+        user_direction_lower = user_direction.lower()
+        
+        ai_bullish = any(term in ai_trend_lower for term in bullish_terms)
+        ai_bearish = any(term in ai_trend_lower for term in bearish_terms)
+        
+        user_bullish = any(term in user_direction_lower for term in bullish_terms)
+        user_bearish = any(term in user_direction_lower for term in bearish_terms)
+        
+        return (ai_bullish and user_bullish) or (ai_bearish and user_bearish)
+    
+    def _extract_strategies_from_description(self, description: str) -> List[str]:
+        """استخراج الاستراتيجيات من وصف المستخدم"""
+        strategies = []
+        description_lower = description.lower()
+        
+        strategy_keywords = {
+            'سكالبينغ': 'Scalping',
+            'تداول يومي': 'Day Trading',
+            'سوينغ': 'Swing Trading',
+            'متوسطات متحركة': 'Moving Averages',
+            'مؤشر rsi': 'RSI Strategy',
+            'مؤشر macd': 'MACD Strategy',
+            'دعم ومقاومة': 'Support & Resistance',
+            'كسر المستويات': 'Breakout Strategy',
+            'انعكاس': 'Reversal Strategy',
+            'اتجاه': 'Trend Following'
+        }
+        
+        for keyword, strategy in strategy_keywords.items():
+            if keyword in description_lower:
+                strategies.append(strategy)
+        
+        return strategies
     
     def _save_learned_pattern(self, pattern_data: Dict):
         """حفظ النمط المتعلم في ملف منفصل"""
@@ -4936,10 +5547,11 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         target = None
         stop_loss = None
         if current_price:
-            # تحديد النسب حسب نمط التداول
+            # تحديد النسب حسب نمط التداول مع تحسينات للسكالبينغ
             if trading_mode == 'scalping':
                 profit_pct = 0.015  # 1.5% للسكالبينغ
                 loss_pct = 0.005   # 0.5% وقف خسارة
+                logger.debug(f"[SCALPING_MANUAL] تطبيق نسب السكالبينغ اليدوية: ربح={profit_pct*100}%, خسارة={loss_pct*100}%")
             else:  # longterm
                 profit_pct = 0.05   # 5% للتداول طويل الأمد
                 loss_pct = 0.02     # 2% وقف خسارة
@@ -4957,8 +5569,10 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         
         # حساب حجم الصفقة المناسب حسب نمط التداول
         if trading_mode == 'scalping':
-            position_size = min(capital * 0.02, capital * 0.05)  # 2-5% للسكالبينغ
-            risk_description = "منخفضة (سكالبينغ)"
+            # للسكالبينغ: صفقات صغيرة متكررة بمخاطرة أقل
+            position_size = min(capital * 0.01, capital * 0.03)  # 1-3% للسكالبينغ (أقل مخاطرة)
+            risk_description = "منخفضة جداً (سكالبينغ سريع)"
+            logger.info(f"[SCALPING_POSITION] حجم صفقة السكالبينغ: ${position_size:.2f} ({(position_size/capital)*100:.1f}% من رأس المال)"
         else:
             position_size = min(capital * 0.05, capital * 0.10)  # 5-10% للتداول طويل الأمد
             risk_description = "متوسطة (طويل الأمد)"
@@ -5137,7 +5751,18 @@ def handle_feedback(call):
         # استخراج نوع التقييم ومعرف الصفقة
         parts = call.data.split('_')
         feedback_type = parts[1]  # positive أو negative
-        trade_id = '_'.join(parts[2:])  # معرف الصفقة
+        
+        # التحقق من نوع التقييم (للصفقات أم للتحليل المباشر)
+        if len(parts) >= 4 and parts[3].isdigit():
+            # تقييم تحليل مباشر: feedback_positive_SYMBOL_USERID
+            symbol = parts[2]
+            user_id = parts[3]
+            trade_id = f"analysis_{symbol}_{user_id}_{int(time.time())}"
+            is_direct_analysis = True
+        else:
+            # تقييم صفقة عادية: feedback_positive_TRADEID
+            trade_id = '_'.join(parts[2:])
+            is_direct_analysis = False
         
         # حفظ التقييم
         success = TradeDataManager.save_user_feedback(trade_id, feedback_type)
@@ -5146,6 +5771,7 @@ def handle_feedback(call):
             # رسالة شكر للمستخدم
             feedback_emoji = "👍" if feedback_type == "positive" else "👎"
             thanks_message = f"""
+
 ✅ **شكراً لتقييمك!** {feedback_emoji}
 
 تم حفظ تقييمك وسيتم استخدامه لتحسين دقة التوقعات المستقبلية.
@@ -5153,18 +5779,60 @@ def handle_feedback(call):
 🧠 **نظام التعلم الذكي:** سيقوم Gemini AI بالتعلم من تقييمك لتقديم توقعات أكثر دقة.
             """
             
-            # تعديل الرسالة الأصلية
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=call.message.text + f"\n\n{thanks_message}",
-                parse_mode='Markdown'
-            )
+            # تحديث أزرار التقييم لإظهار الاختيار مع علامة ✅
+            try:
+                updated_markup = types.InlineKeyboardMarkup(row_width=2)
+                
+                if is_direct_analysis:
+                    # أزرار للتحليل المباشر
+                    if feedback_type == "positive":
+                        updated_markup.row(
+                            types.InlineKeyboardButton("✅ 👍 تحليل ممتاز", callback_data="feedback_selected"),
+                            types.InlineKeyboardButton("👎 تحليل ضعيف", callback_data="feedback_disabled")
+                        )
+                    else:
+                        updated_markup.row(
+                            types.InlineKeyboardButton("👍 تحليل ممتاز", callback_data="feedback_disabled"),
+                            types.InlineKeyboardButton("✅ 👎 تحليل ضعيف", callback_data="feedback_selected")
+                        )
+                else:
+                    # أزرار للصفقات العادية
+                    if feedback_type == "positive":
+                        updated_markup.row(
+                            types.InlineKeyboardButton("✅ 👍 دقيق", callback_data="feedback_selected"),
+                            types.InlineKeyboardButton("👎 غير دقيق", callback_data="feedback_disabled")
+                        )
+                    else:
+                        updated_markup.row(
+                            types.InlineKeyboardButton("👍 دقيق", callback_data="feedback_disabled"),
+                                                         types.InlineKeyboardButton("✅ 👎 غير دقيق", callback_data="feedback_selected")
+                         )
+                
+                # إضافة الأزرار الإضافية للتحليل المباشر
+                if is_direct_analysis and 'symbol' in locals():
+                    updated_markup.row(
+                        types.InlineKeyboardButton("🔄 تحديث التحليل", callback_data=f"analyze_symbol_{symbol}"),
+                        types.InlineKeyboardButton("📊 تحليل آخر", callback_data="analyze_symbols")
+                    )
+                
+                # تعديل الرسالة مع الأزرار المحدثة
+                bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text=call.message.text + thanks_message,
+                    parse_mode='Markdown',
+                    reply_markup=updated_markup
+                )
+                
+            except Exception as edit_error:
+                logger.debug(f"[DEBUG] لم يتم تحديث الأزرار: {edit_error}")
+                # في حالة فشل التحديث، نرسل رسالة منفصلة
+                bot.send_message(call.message.chat.id, thanks_message, parse_mode='Markdown')
             
             # إشعار للمستخدم
             bot.answer_callback_query(
                 call.id, 
-                f"تم حفظ تقييمك {feedback_emoji} - شكراً لك!",
+                f"✅ تم حفظ تقييمك {feedback_emoji} - شكراً لك!",
                 show_alert=False
             )
             
@@ -5182,6 +5850,15 @@ def handle_feedback(call):
             "حدث خطأ في معالجة التقييم",
             show_alert=True
         )
+
+# معالج للأزرار المعطلة بعد التقييم
+@bot.callback_query_handler(func=lambda call: call.data in ["feedback_selected", "feedback_disabled"])
+def handle_feedback_buttons(call):
+    """معالج الأزرار المعطلة بعد التقييم"""
+    if call.data == "feedback_selected":
+        bot.answer_callback_query(call.id, "✅ تم حفظ تقييمك مسبقاً")
+    else:
+        bot.answer_callback_query(call.id, "لقد قمت بالتقييم بالفعل")
 
 # ===== وظائف إدارة البوت الرئيسية =====
 def create_main_keyboard():
@@ -7138,7 +7815,9 @@ def handle_alerts_log(call):
                 message_text += f"**{i}.** {symbol} - {action}\n"
                 message_text += f"   💪 قوة: {confidence:.1f}%\n"
                 message_text += f"   {feedback_emoji} تقييم: {feedback}\n"
-                message_text += f"   🕐 {formatted_time}\n\n"
+                # استخدام التوقيت المصحح للمستخدم
+                user_formatted_time = format_time_for_user(user_id, datetime.fromisoformat(trade_data.get('timestamp')))
+                message_text += f"   🕐 {user_formatted_time}\n\n"
         
         # إحصائيات التقييم
         stats = TradeDataManager.get_user_feedback_stats(user_id)
@@ -7244,17 +7923,29 @@ def handle_file_upload(message):
                     'file_type': file_type
                 }
                 
-                # طلب وصف النمط من المستخدم
-                user_states[user_id] = 'waiting_pattern_description'
+                # تحديد نوع الملف للرسالة
+                file_type_name = "الصورة" if file_type.startswith('image/') else "الملف"
+                if file_type == 'application/pdf':
+                    file_type_name = "ملف PDF"
+                
+                # سؤال المستخدم عن إضافة وصف
+                user_states[user_id] = 'waiting_description_choice'
+                
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.row(
+                    types.InlineKeyboardButton("✅ نعم، إضافة وصف", callback_data=f"add_description_{user_id}"),
+                    types.InlineKeyboardButton("❌ لا، رفع مباشر", callback_data=f"skip_description_{user_id}")
+                )
                 
                 bot.reply_to(message, 
-                    "✅ **تم رفع الصورة بنجاح!**\n\n"
-                    "🧠 **الآن اشرح لي النمط:**\n\n"
-                    "📝 **مثال على الوصف:**\n"
-                    "• 'عند رؤية هذا النمط من الشموع، السعر سينزل بنسبة 90%'\n"
-                    "• 'هذا النمط يعني ارتفاع قوي - ثقة 100%'\n"
-                    "• 'شمعة الدوجي هذه تعني تردد السوق - احتمال انعكاس 80%'\n\n"
-                    "💡 **كن محدداً:** اذكر النمط والاتجاه المتوقع ونسبة الثقة")
+                    f"✅ **تم رفع {file_type_name} بنجاح!**\n\n"
+                    f"📋 **هل تريد إضافة شرح خاص لهذا الملف؟**\n\n"
+                    f"💡 **إضافة الوصف يساعد في:**\n"
+                    f"• تحسين دقة التحليلات المستقبلية\n"
+                    f"• ربط الملف بسياق تداولك الخاص\n"
+                    f"• تخصيص التوصيات حسب خبرتك\n\n"
+                    f"🎯 **اختر ما تفضل:**",
+                    reply_markup=markup)
         
         elif user_states.get(user_id) == 'waiting_pattern_description':
             # معالجة وصف النمط
@@ -7286,21 +7977,25 @@ def handle_file_upload(message):
                     pattern_description
                 )
                 
+                # تحديد نوع الملف للرسالة
+                file_type_name = "النمط" if file_data['file_type'].startswith('image/') else "المحتوى"
+                if file_data['file_type'] == 'application/pdf':
+                    file_type_name = "محتوى PDF"
+                
                 if success:
                     bot.reply_to(message, 
-                        "🎯 **تم تعلم النمط بنجاح!**\n\n"
-                        f"📊 **النمط المحفوظ:** {pattern_description[:100]}...\n\n"
-                        "🧠 **ما حدث:**\n"
-                        "• تم تحليل الصورة بواسطة الذكاء الاصطناعي\n"
-                        "• تم ربط النمط بوصفك وتوقعاتك\n"
-                        "• سيتم استخدام هذه المعرفة في التحليلات القادمة\n\n"
-                        "🔄 **النتيجة:** التحليلات ستكون أكثر دقة ومخصصة لك!")
+                        f"🎯 **تم رفع التدريب بنجاح!**\n\n"
+                        f"📊 **{file_type_name} المحفوظ:** {pattern_description[:100]}...\n\n"
+                        f"🧠 **ما حدث:**\n"
+                        f"• تم تحليل الملف بواسطة الذكاء الاصطناعي\n"
+                        f"• تم ربط المحتوى بوصفك وتوقعاتك\n"
+                        f"• سيتم استخدام هذه المعرفة في التحليلات القادمة\n\n"
+                        f"🔄 **النتيجة:** التحليلات ستكون أكثر دقة ومخصصة لك!")
                 else:
                     bot.reply_to(message, 
-                        "⚠️ **تم حفظ النمط ولكن...**\n\n"
-                        "📁 النمط محفوظ بنجاح\n"
-                        "🤖 لكن لم يتم معالجته بالكامل\n"
-                        "🔧 سيتم المحاولة لاحقاً")
+                        f"✅ **تم حفظ {file_type_name} بنجاح!**\n\n"
+                        f"📁 المحتوى محفوظ مع وصفك\n"
+                        f"🔧 سيتم معالجته والاستفادة منه لاحقاً")
                 
                 # تنظيف البيانات المؤقتة
                 del bot.temp_user_files[user_id]
@@ -7311,6 +8006,100 @@ def handle_file_upload(message):
     except Exception as e:
         logger.error(f"[ERROR] خطأ في معالجة الملف المرفوع: {e}")
         bot.reply_to(message, "❌ حدث خطأ في معالجة الملف")
+
+# معالجات أزرار خيار إضافة الوصف
+@bot.callback_query_handler(func=lambda call: call.data.startswith("add_description_"))
+def handle_add_description(call):
+    """معالج اختيار إضافة وصف للملف"""
+    try:
+        user_id = call.from_user.id
+        
+        # تغيير حالة المستخدم لانتظار الوصف
+        user_states[user_id] = 'waiting_pattern_description'
+        
+        # تحديث الرسالة
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="🧠 **ممتاز! الآن اشرح لي الملف أو النمط:**\n\n"
+                 "📝 **أمثلة على الوصف:**\n"
+                 "• 'عند رؤية هذا النمط من الشموع، السعر سينزل بنسبة 90%'\n"
+                 "• 'هذا النمط يعني ارتفاع قوي - ثقة 100%'\n"
+                 "• 'شمعة الدوجي هذه تعني تردد السوق - احتمال انعكاس 80%'\n"
+                 "• 'هذا التقرير يوضح استراتيجية تداول ناجحة'\n\n"
+                 "💡 **كن محدداً:** اذكر النمط/المحتوى والاتجاه المتوقع ونسبة الثقة"
+        )
+        
+        bot.answer_callback_query(call.id, "✅ اكتب وصفك الآن")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في معالج إضافة الوصف: {e}")
+        bot.answer_callback_query(call.id, "حدث خطأ، حاول مرة أخرى", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("skip_description_"))
+def handle_skip_description(call):
+    """معالج تخطي إضافة الوصف"""
+    try:
+        user_id = call.from_user.id
+        
+        # جلب بيانات الملف المحفوظة
+        if hasattr(bot, 'temp_user_files') and user_id in bot.temp_user_files:
+            file_data = bot.temp_user_files[user_id]
+            
+            # إعداد سياق المستخدم للتدريب بدون وصف
+            user_context = {
+                'trading_mode': get_user_trading_mode(user_id),
+                'capital': get_user_capital(user_id),
+                'timezone': get_user_timezone(user_id),
+                'pattern_description': 'لا يوجد وصف - رفع مباشر'
+            }
+            
+            # معالجة الملف للتعلم الآلي
+            if file_data['file_type'].startswith('image/'):
+                success = gemini_analyzer.learn_from_file(
+                    file_data['file_path'], 
+                    file_data['file_type'], 
+                    user_context
+                )
+            else:
+                success = gemini_analyzer.learn_from_file(
+                    file_data['file_path'], 
+                    file_data['file_type'], 
+                    user_context
+                )
+            
+            # تحديث الرسالة
+            if success:
+                bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text="🎯 **تم رفع التدريب بنجاح!**\n\n"
+                         "✅ **ما تم:**\n"
+                         "• تم حفظ الملف في نظام التدريب\n"
+                         "• سيتم استخدامه لتحسين التحليلات المستقبلية\n"
+                         "• تم ربطه بنمط تداولك ورأس مالك\n\n"
+                         "🚀 **النتيجة:** التحليلات ستكون أكثر دقة!"
+                )
+            else:
+                bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text="✅ **تم حفظ الملف!**\n\n"
+                         "📁 الملف محفوظ بنجاح في النظام\n"
+                         "🔧 سيتم معالجته والاستفادة منه لاحقاً"
+                )
+            
+            # تنظيف البيانات المؤقتة
+            del bot.temp_user_files[user_id]
+        
+        # إزالة حالة المستخدم
+        user_states.pop(user_id, None)
+        
+        bot.answer_callback_query(call.id, "✅ تم رفع التدريب بنجاح")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في معالج تخطي الوصف: {e}")
+        bot.answer_callback_query(call.id, "حدث خطأ، حاول مرة أخرى", show_alert=True)
 
 # ===== معالجات المراقبة الآلية =====
 @bot.callback_query_handler(func=lambda call: call.data == "auto_monitoring")
