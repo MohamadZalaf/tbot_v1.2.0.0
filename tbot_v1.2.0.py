@@ -370,6 +370,7 @@ def handle_api_status_command(message):
 
 🛠️ **أوامر التحكم:**
 • `/api_reset` - إعادة تعيين حالة API
+• `/renew_api_context` - تجديد سياق API والبدء من جديد
 • `/api_test` - اختبار API
 • `/api_notify` - إرسال إشعار تجريبي
 
@@ -415,6 +416,78 @@ def handle_api_reset_command(message):
     except Exception as e:
         logger.error(f"[API_RESET_CMD] خطأ في معالجة أمر إعادة تعيين API: {e}")
         bot.reply_to(message, f"❌ خطأ في إعادة تعيين API: {str(e)}")
+
+@bot.message_handler(commands=['renew_api_context'])
+def handle_renew_api_context_command(message):
+    """معالج أمر تجديد سياق API - لإغلاق جميع المحادثات والبدء من جديد - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 123456789  # يجب تغيير هذا ID للمطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        # إعادة تعيين مدير الجلسات وإغلاق جميع المحادثات
+        global chat_session_manager, gemini_key_manager
+        
+        sessions_count = len(chat_session_manager.sessions) if chat_session_manager and hasattr(chat_session_manager, 'sessions') else 0
+        
+        try:
+            # إعادة تهيئة مدير المفاتيح من البداية
+            gemini_key_manager = GeminiKeyManager(GEMINI_API_KEYS if 'GEMINI_API_KEYS' in globals() else [GEMINI_API_KEY])
+            
+            # إعادة تهيئة مدير الجلسات من البداية
+            chat_session_manager = ChatSessionManager(GEMINI_MODEL, GEMINI_GENERATION_CONFIG, GEMINI_SAFETY_SETTINGS, gemini_key_manager)
+            
+            # إعادة تكوين Gemini للبدء من المفتاح الأول
+            first_key = gemini_key_manager.get_current_key()
+            if first_key:
+                genai.configure(api_key=first_key)
+            
+            # إعادة تعيين حالة API
+            global API_QUOTA_EXHAUSTED, API_QUOTA_NOTIFICATION_SENT, API_ERROR_COUNT, LAST_API_ERROR_TIME
+            API_QUOTA_EXHAUSTED = False
+            API_QUOTA_NOTIFICATION_SENT = False
+            API_ERROR_COUNT = 0
+            LAST_API_ERROR_TIME = None
+            
+            response_message = f"""
+🔄 **تم تجديد سياق API بنجاح**
+
+📊 **الإحصائيات:**
+• عدد الجلسات المغلقة: {sessions_count}
+• مفاتيح API متاحة: {len(gemini_key_manager.api_keys)}
+• المفتاح الحالي: المفتاح الأول (إعادة تعيين)
+
+✅ **تم التنفيذ:**
+• إغلاق جميع محادثات AI
+• إعادة تعيين مدير المفاتيح
+• البدء من المفتاح الأول بالتسلسل
+• إعادة تعيين حالة API
+• تنظيف ذاكرة السياق
+
+🚀 **النتيجة:**
+• جميع المحادثات الجديدة ستبدأ بسياق نظيف
+• استخدام المفاتيح سيكون من البداية
+• تحسين الأداء وتوفير الذاكرة
+
+───────────────────────
+🤖 **نظام إدارة API v1.2.0**
+            """
+            
+            bot.reply_to(message, response_message, parse_mode='Markdown')
+            
+            logger.info(f"[RENEW_API_CONTEXT] تم تجديد سياق API بنجاح - جلسات مغلقة: {sessions_count}, مفاتيح متاحة: {len(gemini_key_manager.api_keys)}")
+            
+        except Exception as reset_error:
+            logger.error(f"[RENEW_API_CONTEXT] خطأ في تجديد السياق: {reset_error}")
+            bot.reply_to(message, f"❌ خطأ في تجديد سياق API: {str(reset_error)}")
+            
+    except Exception as e:
+        logger.error(f"[RENEW_API_CONTEXT] خطأ في معالجة أمر تجديد السياق: {e}")
+        bot.reply_to(message, f"❌ خطأ في معالجة الأمر: {str(e)}")
 
 # دوال حساب النقاط المحسنة - منسوخة من التحليل الآلي الصحيح
 def get_asset_type_and_pip_size(symbol):
@@ -904,23 +977,17 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
         body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
         
-        # الأخبار الاقتصادية
+        # الأخبار الاقتصادية - مطابق للتحليل اليدوي
         body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        body += "📰 تحديث إخباري:\n"
+        
+        # جلب الأخبار المتعلقة بالرمز
         try:
-            news_text = gemini_analyzer.get_symbol_news(symbol)
-            if news_text:
-                news_lines = [ln for ln in news_text.split('\n') if ln.strip()]
-                if news_lines:
-                    body += "📰 الأخبار القريبة:\n"
-                    for ln in news_lines[:2]:
-                        body += f"{ln}\n"
-                else:
-                    body += "📰 الأخبار القريبة: لا توجد أخبار مؤثرة حالياً\n"
-            else:
-                body += "📰 الأخبار القريبة: غير متاحة حالياً\n"
+            news = gemini_analyzer.get_symbol_news(symbol)
+            body += f"{news}\n\n"
         except Exception as e:
             logger.warning(f"[WARNING] فشل في جلب الأخبار للرمز {symbol}: {e}")
-            body += "📰 الأخبار القريبة: غير متاحة حالياً\n"
+            body += "لا توجد أخبار مؤثرة متاحة حالياً\n\n"
 
         body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         body += f"⏰ 🕐 🕐 {formatted_time} | 🤖 تحليل ذكي آلي"
