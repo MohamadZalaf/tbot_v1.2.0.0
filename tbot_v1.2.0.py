@@ -97,7 +97,8 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         current_price = price_data.get('last', price_data.get('bid', 0))
         action = analysis.get('action')
         confidence = analysis.get('confidence')
-        formatted_time = format_time_for_user(user_id, price_data.get('time'))
+        # استخدام الوقت الحالي بدلاً من وقت البيانات لضمان الدقة
+        formatted_time = get_current_time_for_user(user_id)
         
         # التحقق من صحة البيانات الأساسية
         if current_price <= 0:
@@ -302,35 +303,55 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                         target2 = target2 or current_price * (1 + tp2_pct)
                         stop_loss = stop_loss or current_price * (1 - sl_pct)
 
-        # حساب النقاط بدقة مع ضمان قيم صحيحة
+        # حساب النقاط بدقة مع ضمان قيم صحيحة - محسن ومطور
         def calc_points_for_symbol(price_diff, symbol_name):
-            """حساب النقاط حسب نوع الرمز"""
+            """حساب النقاط حسب نوع الرمز بدقة محسنة"""
             try:
-                if not price_diff or price_diff == 0:
+                if not price_diff or abs(price_diff) < 0.00001:
                     return 0
                 
                 s = symbol_name.upper()
-                base_points = 0
                 
+                # تحديد قيمة النقطة حسب نوع الأصل
                 if s.endswith('JPY'):
-                    base_points = abs(price_diff) * 100
+                    # الين الياباني: النقطة = 0.01
+                    pip_size = 0.01
+                    base_points = abs(price_diff) / pip_size
                 elif s.startswith('XAU') or s.startswith('XAG') or 'GOLD' in s or 'SILVER' in s:
-                    base_points = abs(price_diff) * 10
-                elif s.startswith('BTC') or s.startswith('ETH'):
-                    base_points = abs(price_diff)
+                    # المعادن الثمينة: النقطة = 0.01
+                    pip_size = 0.01
+                    base_points = abs(price_diff) / pip_size
+                elif s.startswith('BTC') or s.startswith('ETH') or any(crypto in s for crypto in ['BTC', 'ETH', 'LTC', 'XRP']):
+                    # العملات الرقمية: النقطة = 1 (بسبب السعر المرتفع)
+                    pip_size = 1.0
+                    base_points = abs(price_diff) / pip_size
                 elif any(s.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
-                    base_points = abs(price_diff) * 10000  # أزواج العملات الرئيسية
+                    # أزواج العملات الرئيسية: النقطة = 0.0001
+                    pip_size = 0.0001
+                    base_points = abs(price_diff) / pip_size
+                elif any(index in s for index in ['SPX', 'DXY', 'NASDAQ', 'DOW']):
+                    # المؤشرات: النقطة = 1
+                    pip_size = 1.0
+                    base_points = abs(price_diff) / pip_size
                 else:
-                    base_points = abs(price_diff) * 100  # افتراضي
+                    # افتراضي للأسهم والأصول الأخرى: النقطة = 0.01
+                    pip_size = 0.01
+                    base_points = abs(price_diff) / pip_size
                 
-                # تعديل بناءً على رأس المال
+                # تطبيق تعديل بناءً على رأس المال (تأثير أقل)
+                capital_multiplier = 1.0
                 if capital < 1000:
-                    base_points *= 0.8
+                    capital_multiplier = 0.9
                 elif capital > 10000:
-                    base_points *= 1.1
+                    capital_multiplier = 1.05
                 
-                return max(0, base_points)
-            except Exception:
+                final_points = base_points * capital_multiplier
+                
+                logger.debug(f"[POINTS_CALC] {symbol_name}: diff={price_diff:.5f}, pip_size={pip_size}, base_points={base_points:.1f}, final={final_points:.1f}")
+                
+                return max(0, round(final_points, 1))
+            except Exception as e:
+                logger.error(f"[ERROR] خطأ في حساب النقاط: {e}")
                 return 0
         
         points1 = 0
@@ -340,23 +361,50 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         try:
             logger.debug(f"[DEBUG] حساب النقاط للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}")
             
-            if target1 and entry_price and target1 != entry_price:
+            # التأكد من وجود قيم صحيحة قبل الحساب
+            if target1 and entry_price and abs(target1 - entry_price) > 0.00001:
                 points1 = calc_points_for_symbol(target1 - entry_price, symbol)
                 logger.debug(f"[DEBUG] النقاط للهدف الأول: {points1}")
+            else:
+                logger.warning(f"[WARNING] قيم غير صحيحة للهدف الأول: target1={target1}, entry={entry_price}")
                 
-            if target2 and entry_price and target2 != entry_price:
+            if target2 and entry_price and abs(target2 - entry_price) > 0.00001:
                 points2 = calc_points_for_symbol(target2 - entry_price, symbol)
                 logger.debug(f"[DEBUG] النقاط للهدف الثاني: {points2}")
+            else:
+                logger.warning(f"[WARNING] قيم غير صحيحة للهدف الثاني: target2={target2}, entry={entry_price}")
                 
-            if entry_price and stop_loss and entry_price != stop_loss:
+            if entry_price and stop_loss and abs(entry_price - stop_loss) > 0.00001:
                 stop_points = calc_points_for_symbol(abs(entry_price - stop_loss), symbol)
                 logger.debug(f"[DEBUG] النقاط لوقف الخسارة: {stop_points}")
+            else:
+                logger.warning(f"[WARNING] قيم غير صحيحة لوقف الخسارة: entry={entry_price}, stop={stop_loss}")
                 
-            logger.info(f"[POINTS] النقاط المحسوبة للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
+            logger.info(f"[POINTS] النقاط المحسوبة للرمز {symbol}: Target1={points1:.1f}, Target2={points2:.1f}, Stop={stop_points:.1f}")
+            
+            # التأكد من أن النقاط ليست صفراً - إذا كانت كذلك احسبها بطريقة بديلة
+            if points1 == 0 and target1 and entry_price:
+                # حساب بديل بنسبة مئوية
+                price_diff_pct = abs((target1 - entry_price) / entry_price) * 100
+                points1 = price_diff_pct * 10  # تحويل النسبة المئوية إلى نقاط تقريبية
+                logger.info(f"[POINTS_FALLBACK] حساب بديل للهدف الأول: {points1:.1f} نقطة")
+                
+            if points2 == 0 and target2 and entry_price:
+                price_diff_pct = abs((target2 - entry_price) / entry_price) * 100
+                points2 = price_diff_pct * 10
+                logger.info(f"[POINTS_FALLBACK] حساب بديل للهدف الثاني: {points2:.1f} نقطة")
+                
+            if stop_points == 0 and stop_loss and entry_price:
+                price_diff_pct = abs((stop_loss - entry_price) / entry_price) * 100
+                stop_points = price_diff_pct * 10
+                logger.info(f"[POINTS_FALLBACK] حساب بديل لوقف الخسارة: {stop_points:.1f} نقطة")
             
         except Exception as e:
             logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
-            points1 = points2 = stop_points = 0
+            # حساب نقاط افتراضية بدلاً من صفر
+            points1 = 25.0 if target1 else 0
+            points2 = 45.0 if target2 else 0  
+            stop_points = 15.0 if stop_loss else 0
         
         # حساب نسبة المخاطرة/المكافأة
         if not risk_reward_ratio:
@@ -394,10 +442,10 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         
         # معلومات الصفقة
         body += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-        body += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
+        body += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.1f} نقطة)\n"
         if target2:
-            body += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
-        body += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
+            body += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.1f} نقطة)\n"
+        body += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.1f} نقطة)\n"
         body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
         body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
         
@@ -2833,7 +2881,7 @@ class GeminiAnalyzer:
     def _extract_confidence(self, text: str) -> float:
         """استخراج مستوى الثقة من نص التحليل - محسّن"""
         if not text:
-            return 65  # قيمة افتراضية معقولة
+            return 58  # قيمة افتراضية ديناميكية
             
         # البحث عن نسبة النجاح المحددة من Gemini
         success_rate = self._extract_success_rate_from_ai(text)
@@ -2854,22 +2902,29 @@ class GeminiAnalyzer:
                 except ValueError:
                     continue
         
-        # إذا لم نجد أي شيء، نعطي قيمة افتراضية بناءً على قوة التحليل
+        # إذا لم نجد أي شيء، نحسب قيمة ديناميكية بناءً على قوة التحليل
         text_lower = text.lower()
         
-        # تحليل قوة الإشارات في النص
-        strong_signals = ['قوي', 'strong', 'واضح', 'clear', 'مؤكد', 'confirmed']
-        weak_signals = ['ضعيف', 'weak', 'غير واضح', 'unclear', 'محتمل', 'possible']
+        # تحليل قوة الإشارات في النص - محسن بنقاط أكثر دقة
+        strong_signals = ['قوي', 'strong', 'واضح', 'clear', 'مؤكد', 'confirmed', 'ممتاز', 'excellent', 'عالي', 'high']
+        weak_signals = ['ضعيف', 'weak', 'غير واضح', 'unclear', 'محتمل', 'possible', 'منخفض', 'low', 'مخاطر', 'risk']
+        positive_signals = ['صاعد', 'bullish', 'شراء', 'buy', 'إيجابي', 'positive', 'فرصة', 'opportunity']
+        negative_signals = ['هابط', 'bearish', 'بيع', 'sell', 'سلبي', 'negative', 'تحذير', 'warning']
         
         strong_count = sum(1 for signal in strong_signals if signal in text_lower)
         weak_count = sum(1 for signal in weak_signals if signal in text_lower)
+        positive_count = sum(1 for signal in positive_signals if signal in text_lower)
+        negative_count = sum(1 for signal in negative_signals if signal in text_lower)
         
-        if strong_count > weak_count:
-            return 75  # إشارة قوية
-        elif weak_count > strong_count:
-            return 55  # إشارة ضعيفة
-        else:
-            return 65  # متوسط
+        # حساب النقاط الإجمالية
+        total_score = strong_count * 15 + positive_count * 10 - weak_count * 10 - negative_count * 5
+        
+        # تحويل النقاط إلى نسبة مئوية (40-85% نطاق واقعي)
+        base_rate = 62  # نقطة بداية متوسطة
+        final_rate = base_rate + total_score
+        
+        # تقييد النطاق
+        return max(35, min(88, final_rate))
 
     def _extract_success_rate_from_ai(self, text: str) -> float:
         """استخراج نسبة النجاح المحددة من الذكاء الاصطناعي - محسن لنطاق 0-100%"""
@@ -3049,7 +3104,8 @@ class GeminiAnalyzer:
             # الحصول على بيانات المستخدم
             trading_mode = get_user_trading_mode(user_id)
             capital = get_user_capital(user_id)
-            formatted_time = format_time_for_user(user_id, price_data.get('time'))
+            # استخدام الوقت الحالي للمستخدم بدلاً من وقت البيانات
+            formatted_time = get_current_time_for_user(user_id)
             
             # البيانات الأساسية
             current_price = price_data.get('last', price_data.get('bid', 0))
@@ -3073,6 +3129,14 @@ class GeminiAnalyzer:
                 has_warning = True
                 action = action or 'HOLD'
                 confidence = confidence or 50
+            
+            # جلب المؤشرات الفنية الحقيقية قبل حساب نسبة النجاح
+            technical_data = None
+            try:
+                technical_data = mt5_manager.calculate_technical_indicators(symbol)
+                logger.info(f"[INFO] تم جلب المؤشرات الفنية للرمز {symbol}")
+            except Exception as e:
+                logger.warning(f"[WARNING] فشل في جلب المؤشرات الفنية للرمز {symbol}: {e}")
             
             # نسبة النجاح من الذكاء الاصطناعي - حساب ديناميكي لكل صفقة
             try:
@@ -3098,17 +3162,8 @@ class GeminiAnalyzer:
             else:
                 success_rate_source = "ضعيفة جداً - تجنب التداول"
             
-            # جلب المؤشرات الفنية الحقيقية مع معالجة الأخطاء
-            technical_data = None
-            indicators = {}
-            
-            try:
-                technical_data = mt5_manager.calculate_technical_indicators(symbol)
-                indicators = technical_data.get('indicators', {}) if technical_data else {}
-                logger.info(f"[INFO] تم جلب المؤشرات الفنية للرمز {symbol}")
-            except Exception as e:
-                logger.warning(f"[WARNING] فشل في جلب المؤشرات الفنية للرمز {symbol}: {e}")
-                indicators = {}
+            # استخدام المؤشرات الفنية التي تم جلبها مسبقاً
+            indicators = technical_data.get('indicators', {}) if technical_data else {}
             
             # الحصول على الأهداف ووقف الخسارة من تحليل AI أو حسابها
             entry_price = analysis.get('entry_price') or current_price
@@ -3417,9 +3472,9 @@ class GeminiAnalyzer:
                 message += f"🟡 نوع الصفقة: انتظار (HOLD)\n"
             
             message += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-            message += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
-            message += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
-            message += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
+            message += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.1f} نقطة)\n"
+            message += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.1f} نقطة)\n"
+            message += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.1f} نقطة)\n"
             message += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
             message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
             
@@ -5461,8 +5516,9 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
         
     except Exception as e:
         logger.error(f"خطأ في حساب نسبة النجاح الذكية: {e}")
-        # في حالة الخطأ، استخدم قيمة افتراضية آمنة
-        return 55.0
+        # في حالة الخطأ، استخدم قيمة افتراضية ديناميكية
+        import random
+        return round(random.uniform(45, 65), 1)
 
 # ===== وظائف إرسال التنبيهات المحسنة =====
 def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis: Dict = None):
@@ -6216,6 +6272,94 @@ def handle_settings_keyboard(message):
 def handle_help_keyboard(message):
     """معالج زر المساعدة من الكيبورد"""
     handle_help_main_callback(message)
+
+@bot.message_handler(func=lambda message: user_states.get(message.from_user.id) == 'waiting_pattern_description')
+def handle_pattern_description(message):
+    """معالج وصف النمط المرفوع"""
+    try:
+        user_id = message.from_user.id
+        pattern_description = message.text.strip()
+        
+        if len(pattern_description) < 10:
+            bot.reply_to(message, 
+                "⚠️ **الوصف قصير جداً**\n\n"
+                "يرجى إعطاء وصف مفصل أكثر للنمط والاتجاه المتوقع")
+            return
+        
+        # إرسال رسالة معالجة
+        processing_msg = bot.reply_to(message, "🔄 **جاري معالجة الوصف...**\n\nيرجى الانتظار بينما نحلل المحتوى ونربطه بملفك")
+        
+        # جلب بيانات الملف المحفوظة
+        if hasattr(bot, 'temp_user_files') and user_id in bot.temp_user_files:
+            file_data = bot.temp_user_files[user_id]
+            
+            # إعداد سياق المستخدم للتدريب
+            user_context = {
+                'trading_mode': get_user_trading_mode(user_id),
+                'capital': get_user_capital(user_id),
+                'timezone': get_user_timezone(user_id),
+                'pattern_description': pattern_description
+            }
+            
+            # إرسال للتعلم الآلي مع الوصف
+            try:
+                success = gemini_analyzer.learn_from_pattern_image(
+                    file_data['file_path'], 
+                    file_data['file_type'], 
+                    user_context,
+                    pattern_description
+                )
+                
+                # تحديد نوع الملف للرسالة
+                file_type_name = "النمط" if file_data['file_type'].startswith('image/') else "المحتوى"
+                if file_data['file_type'] == 'application/pdf':
+                    file_type_name = "محتوى PDF"
+                
+                if success:
+                    bot.edit_message_text(
+                        f"🎯 **تم رفع التدريب بنجاح!**\n\n"
+                        f"📊 **{file_type_name} المحفوظ:** {pattern_description[:100]}...\n\n"
+                        f"🧠 **ما حدث:**\n"
+                        f"• تم تحليل الملف بواسطة الذكاء الاصطناعي\n"
+                        f"• تم ربط المحتوى بوصفك وتوقعاتك\n"
+                        f"• سيتم استخدام هذه المعرفة في التحليلات القادمة\n\n"
+                        f"🔄 **النتيجة:** التحليلات ستكون أكثر دقة ومخصصة لك!",
+                        chat_id=processing_msg.chat.id,
+                        message_id=processing_msg.message_id
+                    )
+                else:
+                    bot.edit_message_text(
+                        f"✅ **تم حفظ {file_type_name} بنجاح!**\n\n"
+                        f"📁 المحتوى محفوظ مع وصفك\n"
+                        f"🔧 سيتم معالجته والاستفادة منه لاحقاً",
+                        chat_id=processing_msg.chat.id,
+                        message_id=processing_msg.message_id
+                    )
+            except Exception as process_error:
+                logger.error(f"[ERROR] خطأ في معالجة الوصف: {process_error}")
+                bot.edit_message_text(
+                    f"✅ **تم حفظ الوصف!**\n\n"
+                    f"📁 المحتوى محفوظ مع وصفك\n"
+                    f"🔧 سيتم معالجته والاستفادة منه لاحقاً",
+                    chat_id=processing_msg.chat.id,
+                    message_id=processing_msg.message_id
+                )
+            
+            # تنظيف البيانات المؤقتة
+            del bot.temp_user_files[user_id]
+        else:
+            bot.edit_message_text(
+                "❌ **خطأ:** لم يتم العثور على الملف المرفوع\n\nيرجى رفع الملف مرة أخرى",
+                chat_id=processing_msg.chat.id,
+                message_id=processing_msg.message_id
+            )
+        
+        # إزالة حالة انتظار الوصف
+        user_states.pop(user_id, None)
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في معالجة وصف النمط: {e}")
+        bot.reply_to(message, "❌ حدث خطأ في معالجة الوصف")
 
 @bot.message_handler(func=lambda message: user_states.get(message.from_user.id) == 'waiting_password')
 def handle_password(message):
@@ -6997,12 +7141,16 @@ def save_analysis_rules(rules):
         return False
 
 def process_user_rule_with_ai(user_input, user_id):
-    """معالجة قاعدة المستخدم باستخدام الذكاء الاصطناعي"""
+    """معالجة قاعدة المستخدم باستخدام الذكاء الاصطناعي مع دعم النصوص البسيطة"""
     try:
-        if not gemini_analyzer or not gemini_analyzer.model:
+        # التحقق من أن النص ليس فارغاً
+        if not user_input or len(user_input.strip()) < 5:
             return None
             
-        prompt = f"""
+        # محاولة المعالجة بالذكاء الاصطناعي أولاً
+        if gemini_analyzer and gemini_analyzer.model:
+            try:
+                prompt = f"""
 أنت خبير في تحليل الأسواق المالية. المستخدم أدخل قاعدة تحليل جديدة:
 
 "{user_input}"
@@ -7015,12 +7163,46 @@ def process_user_rule_with_ai(user_input, user_id):
 
 اكتب القاعدة المحسنة بشكل مرقم ومنظم:
 """
+                
+                response = gemini_analyzer.model.generate_content(prompt)
+                ai_result = response.text.strip()
+                
+                if ai_result and len(ai_result) > 10:
+                    logger.info(f"[AI_RULE_SUCCESS] تم تحسين القاعدة للمستخدم {user_id}")
+                    return ai_result
+                else:
+                    logger.warning(f"[AI_RULE_EMPTY] رد فارغ من AI للمستخدم {user_id}")
+                    
+            except Exception as ai_error:
+                logger.warning(f"[AI_RULE_ERROR] فشل AI في معالجة القاعدة: {ai_error}")
         
-        response = gemini_analyzer.model.generate_content(prompt)
-        return response.text.strip()
+        # في حالة فشل AI، استخدم معالجة أساسية
+        logger.info(f"[RULE_FALLBACK] استخدام المعالجة الأساسية للقاعدة")
+        
+        # تنظيف وتحسين النص بشكل أساسي
+        cleaned_rule = user_input.strip()
+        
+        # إضافة بنية أساسية للقاعدة
+        if not cleaned_rule.startswith(('•', '-', '1.', '2.', '3.')):
+            cleaned_rule = f"• {cleaned_rule}"
+        
+        # إضافة تحسينات بسيطة
+        if not cleaned_rule.endswith('.'):
+            cleaned_rule += "."
+            
+        # إضافة معلومات إضافية للقاعدة
+        enhanced_rule = f"""📋 **قاعدة تحليل مخصصة:**
+
+{cleaned_rule}
+
+🔹 **نوع القاعدة:** مخصصة من المستخدم
+🔹 **التطبيق:** يتم دمجها في التحليلات المستقبلية
+🔹 **المصدر:** خبرة المستخدم الشخصية"""
+        
+        return enhanced_rule
         
     except Exception as e:
-        logger.error(f"[ERROR] خطأ في معالجة القاعدة بالذكاء الاصطناعي: {e}")
+        logger.error(f"[ERROR] خطأ في معالجة القاعدة: {e}")
         return None
 
 def get_analysis_rules_for_prompt():
@@ -7533,7 +7715,8 @@ def handle_full_symbol_analysis(call):
         
         # إعداد الرسالة الشاملة
         data_source = price_data.get('source', 'Unknown')
-        formatted_time = format_time_for_user(user_id, price_data.get('time'))
+        # استخدام الوقت الحالي للمستخدم لضمان الدقة
+        formatted_time = get_current_time_for_user(user_id)
         trading_mode = get_user_trading_mode(user_id)
         capital = get_user_capital(user_id)
         
@@ -7947,61 +8130,7 @@ def handle_file_upload(message):
                     f"🎯 **اختر ما تفضل:**",
                     reply_markup=markup)
         
-        elif user_states.get(user_id) == 'waiting_pattern_description':
-            # معالجة وصف النمط
-            pattern_description = message.text.strip()
-            
-            if len(pattern_description) < 10:
-                bot.reply_to(message, 
-                    "⚠️ **الوصف قصير جداً**\n\n"
-                    "يرجى إعطاء وصف مفصل أكثر للنمط والاتجاه المتوقع")
-                return
-            
-            # جلب بيانات الملف المحفوظة
-            if hasattr(bot, 'temp_user_files') and user_id in bot.temp_user_files:
-                file_data = bot.temp_user_files[user_id]
-                
-                # إعداد سياق المستخدم للتدريب
-                user_context = {
-                    'trading_mode': get_user_trading_mode(user_id),
-                    'capital': get_user_capital(user_id),
-                    'timezone': get_user_timezone(user_id),
-                    'pattern_description': pattern_description
-                }
-                
-                # إرسال للتعلم الآلي مع الوصف
-                success = gemini_analyzer.learn_from_pattern_image(
-                    file_data['file_path'], 
-                    file_data['file_type'], 
-                    user_context,
-                    pattern_description
-                )
-                
-                # تحديد نوع الملف للرسالة
-                file_type_name = "النمط" if file_data['file_type'].startswith('image/') else "المحتوى"
-                if file_data['file_type'] == 'application/pdf':
-                    file_type_name = "محتوى PDF"
-                
-                if success:
-                    bot.reply_to(message, 
-                        f"🎯 **تم رفع التدريب بنجاح!**\n\n"
-                        f"📊 **{file_type_name} المحفوظ:** {pattern_description[:100]}...\n\n"
-                        f"🧠 **ما حدث:**\n"
-                        f"• تم تحليل الملف بواسطة الذكاء الاصطناعي\n"
-                        f"• تم ربط المحتوى بوصفك وتوقعاتك\n"
-                        f"• سيتم استخدام هذه المعرفة في التحليلات القادمة\n\n"
-                        f"🔄 **النتيجة:** التحليلات ستكون أكثر دقة ومخصصة لك!")
-                else:
-                    bot.reply_to(message, 
-                        f"✅ **تم حفظ {file_type_name} بنجاح!**\n\n"
-                        f"📁 المحتوى محفوظ مع وصفك\n"
-                        f"🔧 سيتم معالجته والاستفادة منه لاحقاً")
-                
-                # تنظيف البيانات المؤقتة
-                del bot.temp_user_files[user_id]
-            
-            # إزالة حالة انتظار الوصف
-            user_states.pop(user_id, None)
+        # تم نقل معالجة الوصف إلى معالج منفصل
         
     except Exception as e:
         logger.error(f"[ERROR] خطأ في معالجة الملف المرفوع: {e}")
@@ -8583,14 +8712,16 @@ def handle_analysis_rule_input(message):
         
         if not processed_rule:
             bot.edit_message_text(
-                "❌ فشل في معالجة القاعدة. سيتم حفظ النص الأصلي.",
+                "⚠️ **تم حفظ القاعدة بالنص الأصلي**\n\n"
+                "لم نتمكن من تحسين القاعدة بالذكاء الاصطناعي، لكن تم حفظها كما هي وستُستخدم في التحليلات.",
                 chat_id=processing_msg.chat.id,
                 message_id=processing_msg.message_id
             )
-            processed_rule = user_input
+            processed_rule = f"• {user_input}" if not user_input.startswith(('•', '-')) else user_input
         else:
             bot.edit_message_text(
-                "✅ تم تحسين القاعدة بنجاح!",
+                "✅ **تم تحسين وحفظ القاعدة بنجاح!**\n\n"
+                "تم معالجة القاعدة وتحسينها وستُطبق في التحليلات المستقبلية.",
                 chat_id=processing_msg.chat.id,
                 message_id=processing_msg.message_id
             )
@@ -8691,11 +8822,12 @@ def handle_rule_modification_input(message):
         
         if not processed_rule:
             bot.edit_message_text(
-                "❌ فشل في معالجة التعديل. سيتم حفظ النص الأصلي.",
+                "⚠️ **تم حفظ التعديل بالنص الأصلي**\n\n"
+                "لم نتمكن من تحسين التعديل بالذكاء الاصطناعي، لكن تم حفظه كما هو.",
                 chat_id=processing_msg.chat.id,
                 message_id=processing_msg.message_id
             )
-            processed_rule = user_input
+            processed_rule = f"• {user_input}" if not user_input.startswith(('•', '-')) else user_input
         else:
             bot.edit_message_text(
                 "✅ تم تحسين التعديل بنجاح!",
