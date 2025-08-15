@@ -272,7 +272,7 @@ def send_api_status_report_to_developer(quota_exhausted: bool, error_details: st
     """إرسال تقرير حالة API للمطور"""
     try:
         # ID المطور (يجب تعديله حسب ID المطور الفعلي)
-        DEVELOPER_ID = 123456789  # يجب تغيير هذا ID للمطور الفعلي
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
         
         if quota_exhausted:
             status_emoji = "🚨"
@@ -339,12 +339,15 @@ def get_api_usage_statistics():
         logger.error(f"[API_STATS] خطأ في جلب إحصائيات API: {e}")
         return {}
 
+# تهيئة البوت
+bot = telebot.TeleBot(BOT_TOKEN)
+
 @bot.message_handler(commands=['api_status'])
 def handle_api_status_command(message):
     """معالج أمر التحقق من حالة API - للمطور فقط"""
     try:
         user_id = message.from_user.id
-        DEVELOPER_ID = 123456789  # يجب تغيير هذا ID للمطور الفعلي
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
         
         # التحقق من أن المستخدم هو المطور
         if user_id != DEVELOPER_ID:
@@ -370,6 +373,7 @@ def handle_api_status_command(message):
 
 🛠️ **أوامر التحكم:**
 • `/api_reset` - إعادة تعيين حالة API
+• `/renew_api_context` - تجديد سياق API والبدء من جديد
 • `/api_test` - اختبار API
 • `/api_notify` - إرسال إشعار تجريبي
 
@@ -388,7 +392,7 @@ def handle_api_reset_command(message):
     """معالج أمر إعادة تعيين حالة API - للمطور فقط"""
     try:
         user_id = message.from_user.id
-        DEVELOPER_ID = 123456789  # يجب تغيير هذا ID للمطور الفعلي
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
         
         # التحقق من أن المستخدم هو المطور
         if user_id != DEVELOPER_ID:
@@ -415,6 +419,78 @@ def handle_api_reset_command(message):
     except Exception as e:
         logger.error(f"[API_RESET_CMD] خطأ في معالجة أمر إعادة تعيين API: {e}")
         bot.reply_to(message, f"❌ خطأ في إعادة تعيين API: {str(e)}")
+
+@bot.message_handler(commands=['renew_api_context'])
+def handle_renew_api_context_command(message):
+    """معالج أمر تجديد سياق API - لإغلاق جميع المحادثات والبدء من جديد - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        # إعادة تعيين مدير الجلسات وإغلاق جميع المحادثات
+        global chat_session_manager, gemini_key_manager
+        
+        sessions_count = len(chat_session_manager.sessions) if chat_session_manager and hasattr(chat_session_manager, 'sessions') else 0
+        
+        try:
+            # إعادة تهيئة مدير المفاتيح من البداية
+            gemini_key_manager = GeminiKeyManager(GEMINI_API_KEYS if 'GEMINI_API_KEYS' in globals() else [GEMINI_API_KEY])
+            
+            # إعادة تهيئة مدير الجلسات من البداية
+            chat_session_manager = ChatSessionManager(GEMINI_MODEL, GEMINI_GENERATION_CONFIG, GEMINI_SAFETY_SETTINGS, gemini_key_manager)
+            
+            # إعادة تكوين Gemini للبدء من المفتاح الأول
+            first_key = gemini_key_manager.get_current_key()
+            if first_key:
+                genai.configure(api_key=first_key)
+            
+            # إعادة تعيين حالة API
+            global API_QUOTA_EXHAUSTED, API_QUOTA_NOTIFICATION_SENT, API_ERROR_COUNT, LAST_API_ERROR_TIME
+            API_QUOTA_EXHAUSTED = False
+            API_QUOTA_NOTIFICATION_SENT = False
+            API_ERROR_COUNT = 0
+            LAST_API_ERROR_TIME = None
+            
+            response_message = f"""
+🔄 **تم تجديد سياق API بنجاح**
+
+📊 **الإحصائيات:**
+• عدد الجلسات المغلقة: {sessions_count}
+• مفاتيح API متاحة: {len(gemini_key_manager.api_keys)}
+• المفتاح الحالي: المفتاح الأول (إعادة تعيين)
+
+✅ **تم التنفيذ:**
+• إغلاق جميع محادثات AI
+• إعادة تعيين مدير المفاتيح
+• البدء من المفتاح الأول بالتسلسل
+• إعادة تعيين حالة API
+• تنظيف ذاكرة السياق
+
+🚀 **النتيجة:**
+• جميع المحادثات الجديدة ستبدأ بسياق نظيف
+• استخدام المفاتيح سيكون من البداية
+• تحسين الأداء وتوفير الذاكرة
+
+───────────────────────
+🤖 **نظام إدارة API v1.2.0**
+            """
+            
+            bot.reply_to(message, response_message, parse_mode='Markdown')
+            
+            logger.info(f"[RENEW_API_CONTEXT] تم تجديد سياق API بنجاح - جلسات مغلقة: {sessions_count}, مفاتيح متاحة: {len(gemini_key_manager.api_keys)}")
+            
+        except Exception as reset_error:
+            logger.error(f"[RENEW_API_CONTEXT] خطأ في تجديد السياق: {reset_error}")
+            bot.reply_to(message, f"❌ خطأ في تجديد سياق API: {str(reset_error)}")
+            
+    except Exception as e:
+        logger.error(f"[RENEW_API_CONTEXT] خطأ في معالجة أمر تجديد السياق: {e}")
+        bot.reply_to(message, f"❌ خطأ في معالجة الأمر: {str(e)}")
 
 # دوال حساب النقاط المحسنة - منسوخة من التحليل الآلي الصحيح
 def get_asset_type_and_pip_size(symbol):
@@ -828,38 +904,52 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                 logger.error(f"[ERROR] خطأ في حساب النقاط: {e}")
                 return 0
         
+        # جلب حجم النقطة (pip size) الخاص بالرمز
+        asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+        
+        # حساب النقاط للأهداف ووقف الخسارة بشكل صحيح
         points1 = 0
         points2 = 0
         stop_points = 0
         
-        # نسخ حساب النقاط الصحيح من التحليل الآلي
         try:
-            logger.debug(f"[DEBUG] حساب النقاط للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}")
+            logger.debug(f"[DEBUG] حساب النقاط للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
             
-            # استخدام نفس الطريقة الصحيحة من التحليل الآلي
-            if target1 and entry_price and target1 != entry_price:
-                points1 = calculate_points_accurately(target1 - entry_price, symbol, capital, current_price)
-                points1 = max(0, points1)  # التأكد من القيمة الإيجابية
-                logger.debug(f"[DEBUG] النقاط للهدف الأول: {points1}")
+            # حساب النقاط للهدف الأول
+            if target1 and entry_price and target1 != entry_price and pip_size > 0:
+                price_diff1 = abs(target1 - entry_price)
+                points1 = price_diff1 / pip_size
+                logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط={points1:.1f}")
                 
-            if target2 and entry_price and target2 != entry_price:
-                points2 = calculate_points_accurately(target2 - entry_price, symbol, capital, current_price)
-                points2 = max(0, points2)  # التأكد من القيمة الإيجابية
-                logger.debug(f"[DEBUG] النقاط للهدف الثاني: {points2}")
+            # حساب النقاط للهدف الثاني
+            if target2 and entry_price and target2 != entry_price and pip_size > 0:
+                price_diff2 = abs(target2 - entry_price)
+                points2 = price_diff2 / pip_size
+                logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط={points2:.1f}")
                 
-            if entry_price and stop_loss and entry_price != stop_loss:
-                stop_points = calculate_points_accurately(abs(entry_price - stop_loss), symbol, capital, current_price)
-                stop_points = max(0, stop_points)  # التأكد من القيمة الإيجابية
-                logger.debug(f"[DEBUG] النقاط لوقف الخسارة: {stop_points}")
+            # حساب النقاط لوقف الخسارة
+            if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
+                price_diff_stop = abs(entry_price - stop_loss)
+                stop_points = price_diff_stop / pip_size
+                logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط={stop_points:.1f}")
                 
             logger.info(f"[POINTS] النقاط المحسوبة للرمز {symbol}: Target1={points1:.1f}, Target2={points2:.1f}, Stop={stop_points:.1f}")
             
         except Exception as e:
             logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
-            # حساب نقاط افتراضية بدلاً من صفر
-            points1 = 25.0 if target1 else 0
-            points2 = 45.0 if target2 else 0  
-            stop_points = 15.0 if stop_loss else 0
+            # حساب نقاط افتراضية بناءً على نوع الرمز
+            if 'JPY' in symbol:
+                points1 = 20.0 if target1 else 0
+                points2 = 35.0 if target2 else 0  
+                stop_points = 10.0 if stop_loss else 0
+            elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+                points1 = 50.0 if target1 else 0
+                points2 = 80.0 if target2 else 0  
+                stop_points = 25.0 if stop_loss else 0
+            else:
+                points1 = 25.0 if target1 else 0
+                points2 = 45.0 if target2 else 0  
+                stop_points = 15.0 if stop_loss else 0
         
         # حساب نسبة المخاطرة/المكافأة
         if not risk_reward_ratio:
@@ -904,23 +994,17 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
         body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
         
-        # الأخبار الاقتصادية
+        # الأخبار الاقتصادية - مطابق للتحليل اليدوي
         body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        body += "📰 تحديث إخباري:\n"
+        
+        # جلب الأخبار المتعلقة بالرمز
         try:
-            news_text = gemini_analyzer.get_symbol_news(symbol)
-            if news_text:
-                news_lines = [ln for ln in news_text.split('\n') if ln.strip()]
-                if news_lines:
-                    body += "📰 الأخبار القريبة:\n"
-                    for ln in news_lines[:2]:
-                        body += f"{ln}\n"
-                else:
-                    body += "📰 الأخبار القريبة: لا توجد أخبار مؤثرة حالياً\n"
-            else:
-                body += "📰 الأخبار القريبة: غير متاحة حالياً\n"
+            news = gemini_analyzer.get_symbol_news(symbol)
+            body += f"{news}\n\n"
         except Exception as e:
             logger.warning(f"[WARNING] فشل في جلب الأخبار للرمز {symbol}: {e}")
-            body += "📰 الأخبار القريبة: غير متاحة حالياً\n"
+            body += "لا توجد أخبار مؤثرة متاحة حالياً\n\n"
 
         body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         body += f"⏰ 🕐 🕐 {formatted_time} | 🤖 تحليل ذكي آلي"
@@ -1006,9 +1090,6 @@ def can_make_api_call(symbol: str) -> bool:
 def record_api_call(symbol: str):
     """تسجيل وقت آخر استدعاء للـ API"""
     last_api_calls[symbol] = time.time()
-
-# تهيئة البوت
-bot = telebot.TeleBot(BOT_TOKEN)
 
 # إعداد البيئة للتعامل مع UTF-8 على Windows
 import os
@@ -3861,28 +3942,51 @@ class GeminiAnalyzer:
             # جلب رأس المال للمستخدم
             user_capital = get_user_capital(user_id) if user_id else 1000
             
-            # التأكد من وجود قيم صحيحة قبل حساب النقاط
+            # جلب حجم النقطة للرمز وحساب النقاط بشكل صحيح
+            asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+            
             points1 = 0
             points2 = 0
             stop_points = 0
             
             try:
-                if target1 and entry_price and target1 != entry_price:
-                    points1 = calculate_points_accurately(target1 - entry_price, symbol, user_capital, current_price)
-                    points1 = max(0, points1)  # التأكد من القيمة الإيجابية
+                logger.debug(f"[DEBUG] حساب النقاط للتحليل الشامل - الرمز: {symbol}, pip_size: {pip_size}")
+                
+                # حساب النقاط للهدف الأول
+                if target1 and entry_price and target1 != entry_price and pip_size > 0:
+                    price_diff1 = abs(target1 - entry_price)
+                    points1 = price_diff1 / pip_size
+                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط={points1:.1f}")
                     
-                if target2 and entry_price and target2 != entry_price:
-                    points2 = calculate_points_accurately(target2 - entry_price, symbol, user_capital, current_price)
-                    points2 = max(0, points2)  # التأكد من القيمة الإيجابية
+                # حساب النقاط للهدف الثاني
+                if target2 and entry_price and target2 != entry_price and pip_size > 0:
+                    price_diff2 = abs(target2 - entry_price)
+                    points2 = price_diff2 / pip_size
+                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط={points2:.1f}")
                     
-                if entry_price and stop_loss and entry_price != stop_loss:
-                    stop_points = calculate_points_accurately(abs(entry_price - stop_loss), symbol, user_capital, current_price)
-                    stop_points = max(0, stop_points)  # التأكد من القيمة الإيجابية
+                # حساب النقاط لوقف الخسارة
+                if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
+                    price_diff_stop = abs(entry_price - stop_loss)
+                    stop_points = price_diff_stop / pip_size
+                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط={stop_points:.1f}")
                     
-                logger.debug(f"[DEBUG] النقاط المحسوبة: {symbol} - Target1: {points1:.0f}, Target2: {points2:.0f}, Stop: {stop_points:.0f}")
+                logger.info(f"[POINTS_COMPREHENSIVE] النقاط المحسوبة للرمز {symbol}: Target1={points1:.1f}, Target2={points2:.1f}, Stop={stop_points:.1f}")
+                
             except Exception as e:
                 logger.warning(f"[WARNING] خطأ في حساب النقاط للرمز {symbol}: {e}")
-                points1 = points2 = stop_points = 0
+                # حساب نقاط افتراضية بناءً على نوع الرمز
+                if 'JPY' in symbol:
+                    points1 = 20.0 if target1 else 0
+                    points2 = 35.0 if target2 else 0  
+                    stop_points = 10.0 if stop_loss else 0
+                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+                    points1 = 50.0 if target1 else 0
+                    points2 = 80.0 if target2 else 0  
+                    stop_points = 25.0 if stop_loss else 0
+                else:
+                    points1 = 25.0 if target1 else 0
+                    points2 = 45.0 if target2 else 0  
+                    stop_points = 15.0 if stop_loss else 0
             
             # حساب نسبة المخاطرة/المكافأة
             if not risk_reward_ratio:
@@ -6348,8 +6452,8 @@ def handle_feedback(call):
                     else:
                         updated_markup.row(
                             types.InlineKeyboardButton("👍 دقيق", callback_data="feedback_disabled"),
-                                                         types.InlineKeyboardButton("✅ 👎 غير دقيق", callback_data="feedback_selected")
-                         )
+                            types.InlineKeyboardButton("✅ 👎 غير دقيق", callback_data="feedback_selected")
+                        )
                 
                 # إضافة الأزرار الإضافية للتحليل المباشر
                 if is_direct_analysis and 'symbol' in locals():
@@ -7607,9 +7711,18 @@ def load_analysis_rules():
     """تحميل قواعد التحليل من الملف"""
     rules_file = os.path.join(FEEDBACK_DIR, "analysis_rules.json")
     try:
+        logger.debug(f"[LOAD_RULES] محاولة تحميل القواعد من: {rules_file}")
+        
         if os.path.exists(rules_file):
             with open(rules_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                rules = json.load(f)
+                logger.info(f"[LOAD_RULES] تم تحميل {len(rules)} قاعدة بنجاح")
+                return rules
+        else:
+            logger.info(f"[LOAD_RULES] ملف القواعد غير موجود، سيتم إنشاؤه عند الحاجة")
+            return []
+    except json.JSONDecodeError as e:
+        logger.error(f"[ERROR] خطأ في تحليل JSON للقواعد: {e}")
         return []
     except Exception as e:
         logger.error(f"[ERROR] خطأ في تحميل قواعد التحليل: {e}")
@@ -7619,12 +7732,22 @@ def save_analysis_rules(rules):
     """حفظ قواعد التحليل في الملف"""
     rules_file = os.path.join(FEEDBACK_DIR, "analysis_rules.json")
     try:
+        logger.debug(f"[SAVE_RULES] محاولة حفظ {len(rules)} قاعدة في: {rules_file}")
+        
+        # إنشاء المجلد إذا لم يكن موجوداً
         os.makedirs(FEEDBACK_DIR, exist_ok=True)
+        
+        # حفظ القواعد
         with open(rules_file, 'w', encoding='utf-8') as f:
             json.dump(rules, f, ensure_ascii=False, indent=2, default=str)
+        
+        logger.info(f"[SAVE_RULES] تم حفظ {len(rules)} قاعدة بنجاح")
         return True
+        
     except Exception as e:
         logger.error(f"[ERROR] خطأ في حفظ قواعد التحليل: {e}")
+        logger.error(f"[ERROR] مسار الملف: {rules_file}")
+        logger.error(f"[ERROR] مجلد FEEDBACK_DIR: {FEEDBACK_DIR}")
         return False
 
 def process_user_rule_with_ai(user_input, user_id):
@@ -7749,7 +7872,9 @@ def handle_add_analysis_rule(call):
 def handle_edit_analysis_rules(call):
     """معالج تحرير قواعد التحليل"""
     try:
+        logger.info(f"[EDIT_RULES] معالجة طلب تحرير القواعد من المستخدم {call.from_user.id}")
         rules = load_analysis_rules()
+        logger.info(f"[EDIT_RULES] تم تحميل {len(rules)} قاعدة")
         
         if not rules:
             message_text = """
@@ -7804,10 +7929,14 @@ def handle_edit_analysis_rules(call):
 def handle_edit_specific_rule(call):
     """معالج تحرير قاعدة محددة"""
     try:
+        logger.info(f"[EDIT_RULE] معالجة طلب تحرير قاعدة: {call.data}")
         rule_index = int(call.data.split("_")[2])
         rules = load_analysis_rules()
         
+        logger.info(f"[EDIT_RULE] عدد القواعد المحملة: {len(rules)}, الفهرس المطلوب: {rule_index}")
+        
         if rule_index >= len(rules):
+            logger.warning(f"[EDIT_RULE] القاعدة غير موجودة - الفهرس {rule_index} أكبر من {len(rules)}")
             bot.answer_callback_query(call.id, "القاعدة غير موجودة", show_alert=True)
             return
             
@@ -9164,7 +9293,7 @@ def handle_custom_capital_input(message):
 
 # ===== معالجات قواعد التحليل =====
 
-@bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('state') == 'waiting_for_analysis_rule')
+@bot.message_handler(func=lambda message: isinstance(user_states.get(message.from_user.id, {}), dict) and user_states.get(message.from_user.id, {}).get('state') == 'waiting_for_analysis_rule')
 def handle_analysis_rule_input(message):
     """معالج إدخال قاعدة التحليل الجديدة"""
     try:
@@ -9267,7 +9396,7 @@ def handle_analysis_rule_input(message):
         bot.reply_to(message, "❌ حدث خطأ في معالجة القاعدة. يرجى المحاولة مرة أخرى.")
         user_states.pop(message.from_user.id, None)
 
-@bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('state') == 'waiting_for_rule_modification')
+@bot.message_handler(func=lambda message: isinstance(user_states.get(message.from_user.id, {}), dict) and user_states.get(message.from_user.id, {}).get('state') == 'waiting_for_rule_modification')
 def handle_rule_modification_input(message):
     """معالج تعديل قاعدة التحليل"""
     try:
@@ -9943,8 +10072,10 @@ def monitoring_loop():
     logger.info("[RUNNING] بدء حلقة المراقبة...")
     consecutive_errors = 0
     max_consecutive_errors = 5
-    connection_check_interval = 300  # فحص الاتصال كل 5 دقائق
+    connection_check_interval = 3600  # فحص الاتصال كل ساعة (3600 ثانية)
     last_connection_check = 0
+    api_check_interval = 3600  # فحص API كل ساعة
+    last_api_check = 0
     
     while monitoring_active:
         try:
@@ -9957,6 +10088,23 @@ def monitoring_loop():
                     logger.warning("[WARNING] انقطاع في اتصال MT5 تم اكتشافه - محاولة إعادة الاتصال...")
                     mt5_manager.check_real_connection()
                 last_connection_check = current_time
+            
+            # فحص دوري لحالة API كل ساعة
+            if current_time - last_api_check > api_check_interval:
+                logger.info("[API_CHECK] فحص دوري لحالة API...")
+                try:
+                    # اختبار بسيط للـ API
+                    if GEMINI_AVAILABLE:
+                        test_key = gemini_key_manager.get_current_key() if 'gemini_key_manager' in globals() else None
+                        if test_key:
+                            logger.info("[API_CHECK] ✅ API متاح ويعمل بشكل طبيعي")
+                        else:
+                            logger.warning("[API_CHECK] ⚠️ لا يوجد مفتاح API متاح")
+                    else:
+                        logger.warning("[API_CHECK] ⚠️ Gemini AI غير متوفر")
+                except Exception as api_error:
+                    logger.error(f"[API_CHECK] ❌ خطأ في فحص API: {api_error}")
+                last_api_check = current_time
             
             # مراقبة المستخدمين النشطين فقط
             active_users = list(user_monitoring_active.keys())
@@ -10071,8 +10219,8 @@ def monitoring_loop():
                     logger.info("[RECONNECT] محاولة إعادة اتصال شاملة بسبب أخطاء MT5 المتكررة...")
                     mt5_manager.check_real_connection()
             
-            # انتظار 30 ثانية - تردد موحد لجميع المستخدمين (محدث من 15 ثانية)
-            time.sleep(30)
+            # انتظار دقيقة واحدة - تردد محسن لتقليل استهلاك الموارد
+            time.sleep(60)
             
         except Exception as e:
             consecutive_errors += 1
