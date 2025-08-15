@@ -5572,7 +5572,7 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
             # للسكالبينغ: صفقات صغيرة متكررة بمخاطرة أقل
             position_size = min(capital * 0.01, capital * 0.03)  # 1-3% للسكالبينغ (أقل مخاطرة)
             risk_description = "منخفضة جداً (سكالبينغ سريع)"
-            logger.info(f"[SCALPING_POSITION] حجم صفقة السكالبينغ: ${position_size:.2f} ({(position_size/capital)*100:.1f}% من رأس المال)"
+            logger.info(f"[SCALPING_POSITION] حجم صفقة السكالبينغ: ${position_size:.2f} ({(position_size/capital)*100:.1f}% من رأس المال)")
         else:
             position_size = min(capital * 0.05, capital * 0.10)  # 5-10% للتداول طويل الأمد
             risk_description = "متوسطة (طويل الأمد)"
