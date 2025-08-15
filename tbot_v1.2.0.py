@@ -901,38 +901,52 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                 logger.error(f"[ERROR] خطأ في حساب النقاط: {e}")
                 return 0
         
+        # جلب حجم النقطة (pip size) الخاص بالرمز
+        asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+        
+        # حساب النقاط للأهداف ووقف الخسارة بشكل صحيح
         points1 = 0
         points2 = 0
         stop_points = 0
         
-        # نسخ حساب النقاط الصحيح من التحليل الآلي
         try:
-            logger.debug(f"[DEBUG] حساب النقاط للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}")
+            logger.debug(f"[DEBUG] حساب النقاط للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
             
-            # استخدام نفس الطريقة الصحيحة من التحليل الآلي
-            if target1 and entry_price and target1 != entry_price:
-                points1 = calculate_points_accurately(target1 - entry_price, symbol, capital, current_price)
-                points1 = max(0, points1)  # التأكد من القيمة الإيجابية
-                logger.debug(f"[DEBUG] النقاط للهدف الأول: {points1}")
+            # حساب النقاط للهدف الأول
+            if target1 and entry_price and target1 != entry_price and pip_size > 0:
+                price_diff1 = abs(target1 - entry_price)
+                points1 = price_diff1 / pip_size
+                logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط={points1:.1f}")
                 
-            if target2 and entry_price and target2 != entry_price:
-                points2 = calculate_points_accurately(target2 - entry_price, symbol, capital, current_price)
-                points2 = max(0, points2)  # التأكد من القيمة الإيجابية
-                logger.debug(f"[DEBUG] النقاط للهدف الثاني: {points2}")
+            # حساب النقاط للهدف الثاني
+            if target2 and entry_price and target2 != entry_price and pip_size > 0:
+                price_diff2 = abs(target2 - entry_price)
+                points2 = price_diff2 / pip_size
+                logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط={points2:.1f}")
                 
-            if entry_price and stop_loss and entry_price != stop_loss:
-                stop_points = calculate_points_accurately(abs(entry_price - stop_loss), symbol, capital, current_price)
-                stop_points = max(0, stop_points)  # التأكد من القيمة الإيجابية
-                logger.debug(f"[DEBUG] النقاط لوقف الخسارة: {stop_points}")
+            # حساب النقاط لوقف الخسارة
+            if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
+                price_diff_stop = abs(entry_price - stop_loss)
+                stop_points = price_diff_stop / pip_size
+                logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط={stop_points:.1f}")
                 
             logger.info(f"[POINTS] النقاط المحسوبة للرمز {symbol}: Target1={points1:.1f}, Target2={points2:.1f}, Stop={stop_points:.1f}")
             
         except Exception as e:
             logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
-            # حساب نقاط افتراضية بدلاً من صفر
-            points1 = 25.0 if target1 else 0
-            points2 = 45.0 if target2 else 0  
-            stop_points = 15.0 if stop_loss else 0
+            # حساب نقاط افتراضية بناءً على نوع الرمز
+            if 'JPY' in symbol:
+                points1 = 20.0 if target1 else 0
+                points2 = 35.0 if target2 else 0  
+                stop_points = 10.0 if stop_loss else 0
+            elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+                points1 = 50.0 if target1 else 0
+                points2 = 80.0 if target2 else 0  
+                stop_points = 25.0 if stop_loss else 0
+            else:
+                points1 = 25.0 if target1 else 0
+                points2 = 45.0 if target2 else 0  
+                stop_points = 15.0 if stop_loss else 0
         
         # حساب نسبة المخاطرة/المكافأة
         if not risk_reward_ratio:
@@ -3928,28 +3942,51 @@ class GeminiAnalyzer:
             # جلب رأس المال للمستخدم
             user_capital = get_user_capital(user_id) if user_id else 1000
             
-            # التأكد من وجود قيم صحيحة قبل حساب النقاط
+            # جلب حجم النقطة للرمز وحساب النقاط بشكل صحيح
+            asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+            
             points1 = 0
             points2 = 0
             stop_points = 0
             
             try:
-                if target1 and entry_price and target1 != entry_price:
-                    points1 = calculate_points_accurately(target1 - entry_price, symbol, user_capital, current_price)
-                    points1 = max(0, points1)  # التأكد من القيمة الإيجابية
+                logger.debug(f"[DEBUG] حساب النقاط للتحليل الشامل - الرمز: {symbol}, pip_size: {pip_size}")
+                
+                # حساب النقاط للهدف الأول
+                if target1 and entry_price and target1 != entry_price and pip_size > 0:
+                    price_diff1 = abs(target1 - entry_price)
+                    points1 = price_diff1 / pip_size
+                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط={points1:.1f}")
                     
-                if target2 and entry_price and target2 != entry_price:
-                    points2 = calculate_points_accurately(target2 - entry_price, symbol, user_capital, current_price)
-                    points2 = max(0, points2)  # التأكد من القيمة الإيجابية
+                # حساب النقاط للهدف الثاني
+                if target2 and entry_price and target2 != entry_price and pip_size > 0:
+                    price_diff2 = abs(target2 - entry_price)
+                    points2 = price_diff2 / pip_size
+                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط={points2:.1f}")
                     
-                if entry_price and stop_loss and entry_price != stop_loss:
-                    stop_points = calculate_points_accurately(abs(entry_price - stop_loss), symbol, user_capital, current_price)
-                    stop_points = max(0, stop_points)  # التأكد من القيمة الإيجابية
+                # حساب النقاط لوقف الخسارة
+                if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
+                    price_diff_stop = abs(entry_price - stop_loss)
+                    stop_points = price_diff_stop / pip_size
+                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط={stop_points:.1f}")
                     
-                logger.debug(f"[DEBUG] النقاط المحسوبة: {symbol} - Target1: {points1:.0f}, Target2: {points2:.0f}, Stop: {stop_points:.0f}")
+                logger.info(f"[POINTS_COMPREHENSIVE] النقاط المحسوبة للرمز {symbol}: Target1={points1:.1f}, Target2={points2:.1f}, Stop={stop_points:.1f}")
+                
             except Exception as e:
                 logger.warning(f"[WARNING] خطأ في حساب النقاط للرمز {symbol}: {e}")
-                points1 = points2 = stop_points = 0
+                # حساب نقاط افتراضية بناءً على نوع الرمز
+                if 'JPY' in symbol:
+                    points1 = 20.0 if target1 else 0
+                    points2 = 35.0 if target2 else 0  
+                    stop_points = 10.0 if stop_loss else 0
+                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+                    points1 = 50.0 if target1 else 0
+                    points2 = 80.0 if target2 else 0  
+                    stop_points = 25.0 if stop_loss else 0
+                else:
+                    points1 = 25.0 if target1 else 0
+                    points2 = 45.0 if target2 else 0  
+                    stop_points = 15.0 if stop_loss else 0
             
             # حساب نسبة المخاطرة/المكافأة
             if not risk_reward_ratio:
