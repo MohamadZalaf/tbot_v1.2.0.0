@@ -272,7 +272,7 @@ def send_api_status_report_to_developer(quota_exhausted: bool, error_details: st
     """إرسال تقرير حالة API للمطور"""
     try:
         # ID المطور (يجب تعديله حسب ID المطور الفعلي)
-        DEVELOPER_ID = 123456789  # يجب تغيير هذا ID للمطور الفعلي
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
         
         if quota_exhausted:
             status_emoji = "🚨"
@@ -344,7 +344,7 @@ def handle_api_status_command(message):
     """معالج أمر التحقق من حالة API - للمطور فقط"""
     try:
         user_id = message.from_user.id
-        DEVELOPER_ID = 123456789  # يجب تغيير هذا ID للمطور الفعلي
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
         
         # التحقق من أن المستخدم هو المطور
         if user_id != DEVELOPER_ID:
@@ -389,7 +389,7 @@ def handle_api_reset_command(message):
     """معالج أمر إعادة تعيين حالة API - للمطور فقط"""
     try:
         user_id = message.from_user.id
-        DEVELOPER_ID = 123456789  # يجب تغيير هذا ID للمطور الفعلي
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
         
         # التحقق من أن المستخدم هو المطور
         if user_id != DEVELOPER_ID:
