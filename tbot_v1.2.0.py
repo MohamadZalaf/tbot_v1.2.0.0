@@ -89,6 +89,150 @@ except ImportError:
 
 warnings.filterwarnings('ignore')
 
+# دوال حساب النقاط المحسنة - منسوخة من التحليل الآلي الصحيح
+def get_asset_type_and_pip_size(symbol):
+    """تحديد نوع الأصل وحجم النقطة بدقة"""
+    symbol = symbol.upper()
+    
+    # 💱 الفوركس
+    if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
+        if any(symbol.endswith(yen) for yen in ['JPY']):
+            return 'forex_jpy', 0.01  # أزواج الين
+        else:
+            return 'forex_major', 0.0001  # الأزواج الرئيسية
+    
+    # 🪙 المعادن النفيسة
+    elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+        return 'metals', 0.01  # النقطة = 0.01
+    
+    # 🪙 العملات الرقمية
+    elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
+        if 'BTC' in symbol:
+            return 'crypto_btc', 1.0  # البيتكوين - نقطة = 1 دولار
+        else:
+            return 'crypto_alt', 0.01  # العملات الأخرى
+    
+    # 📈 الأسهم
+    elif any(symbol.startswith(stock) for stock in ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN']):
+        return 'stocks', 1.0  # النقطة = 1 دولار
+    
+    # 📉 المؤشرات
+    elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER', 'SPX']):
+        return 'indices', 1.0  # النقطة = 1 وحدة
+    
+    else:
+        return 'unknown', 0.0001  # افتراضي
+
+def calculate_pip_value(symbol, current_price, contract_size=100000):
+    """حساب قيمة النقطة باستخدام المعادلة الصحيحة"""
+    try:
+        asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+        
+        if asset_type == 'forex_major':
+            # قيمة النقطة = (حجم العقد × حجم النقطة) ÷ سعر الصرف
+            return (contract_size * pip_size) / current_price if current_price > 0 else 10
+        
+        elif asset_type == 'forex_jpy':
+            # للين الياباني
+            return (contract_size * pip_size) / current_price if current_price > 0 else 10
+        
+        elif asset_type == 'metals':
+            # قيمة النقطة = حجم العقد × حجم النقطة
+            return contract_size * pip_size  # 100 أونصة × 0.01 = 1 دولار
+        
+        elif asset_type == 'crypto_btc':
+            # للبيتكوين - قيمة النقطة تعتمد على حجم الصفقة
+            return contract_size / 100000  # تطبيع حجم العقد
+        
+        elif asset_type == 'crypto_alt':
+            # للعملات الرقمية الأخرى
+            return contract_size * pip_size
+        
+        elif asset_type == 'stocks':
+            # قيمة النقطة = عدد الأسهم × 1 (كل نقطة = 1 دولار)
+            shares_count = max(1, contract_size / 5000)  # تحويل حجم العقد لعدد أسهم
+            return shares_count  # كل نقطة × عدد الأسهم
+        
+        elif asset_type == 'indices':
+            # حجم العقد (بالدولار لكل نقطة) - عادة 1-10 دولار
+            return 5.0  # متوسط قيمة للمؤشرات
+        
+        else:
+            return 10.0  # قيمة افتراضية
+            
+    except Exception as e:
+        logger.error(f"خطأ في حساب قيمة النقطة: {e}")
+        return 10.0
+
+def calculate_points_from_price_difference(price_diff, symbol):
+    """حساب عدد النقاط من فرق السعر"""
+    try:
+        asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+        
+        if pip_size > 0:
+            return abs(price_diff) / pip_size
+        else:
+            return 0
+            
+    except Exception as e:
+        logger.error(f"خطأ في حساب النقاط من فرق السعر: {e}")
+        return 0
+
+def calculate_profit_loss(points, pip_value):
+    """حساب الربح أو الخسارة = عدد النقاط × قيمة النقطة"""
+    try:
+        return points * pip_value
+    except Exception as e:
+        logger.error(f"خطأ في حساب الربح/الخسارة: {e}")
+        return 0
+
+def calculate_points_accurately(price_diff, symbol, capital=None, current_price=None):
+    """حساب النقاط بالمعادلات المالية الصحيحة"""
+    try:
+        if not price_diff or price_diff == 0 or not current_price:
+            return 0
+        
+        # الحصول على رأس المال
+        if capital is None:
+            capital = 1000
+        
+        # حساب عدد النقاط من فرق السعر
+        points = calculate_points_from_price_difference(price_diff, symbol)
+        
+        # حساب قيمة النقطة
+        pip_value = calculate_pip_value(symbol, current_price)
+        
+        # حساب الربح/الخسارة المتوقع
+        potential_profit_loss = calculate_profit_loss(points, pip_value)
+        
+        # تطبيق إدارة المخاطر بناءً على رأس المال
+        if capital > 0:
+            # نسبة المخاطرة المناسبة حسب حجم الحساب
+            if capital >= 100000:
+                max_risk_percentage = 0.01  # 1% للحسابات الكبيرة جداً
+            elif capital >= 50000:
+                max_risk_percentage = 0.015  # 1.5% للحسابات الكبيرة
+            elif capital >= 10000:
+                max_risk_percentage = 0.02   # 2% للحسابات المتوسطة
+            elif capital >= 5000:
+                max_risk_percentage = 0.025  # 2.5% للحسابات الصغيرة
+            else:
+                max_risk_percentage = 0.03   # 3% للحسابات الصغيرة جداً
+            
+            max_risk_amount = capital * max_risk_percentage
+            
+            # تقليل النقاط إذا كانت المخاطرة عالية جداً
+            if potential_profit_loss > max_risk_amount:
+                adjustment_factor = max_risk_amount / potential_profit_loss
+                points = points * adjustment_factor
+                logger.info(f"تم تعديل النقاط للرمز {symbol} من {points/adjustment_factor:.1f} إلى {points:.1f} لإدارة المخاطر")
+        
+        return max(0, points)
+        
+    except Exception as e:
+        logger.error(f"خطأ في حساب النقاط للرمز {symbol}: {e}")
+        return 0
+
 # دالة تنسيق رسائل الإشعارات المختصرة
 def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
     """تنسيق رسائل الإشعارات المختصرة باستخدام أسلوب التحليل اليدوي الشامل مع AI"""
@@ -97,8 +241,11 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         current_price = price_data.get('last', price_data.get('bid', 0))
         action = analysis.get('action')
         confidence = analysis.get('confidence')
-        # استخدام الوقت الحالي بدلاً من وقت البيانات لضمان الدقة
-        formatted_time = get_current_time_for_user(user_id)
+        # استخدام نفس منطق الوقت من التحليل اليدوي الصحيح
+        if user_id:
+            formatted_time = format_time_for_user(user_id)
+        else:
+            formatted_time = f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (التوقيت المحلي)"
         
         # التحقق من صحة البيانات الأساسية
         if current_price <= 0:
@@ -358,46 +505,27 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         points2 = 0
         stop_points = 0
         
+        # نسخ حساب النقاط الصحيح من التحليل الآلي
         try:
             logger.debug(f"[DEBUG] حساب النقاط للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}")
             
-            # التأكد من وجود قيم صحيحة قبل الحساب
-            if target1 and entry_price and abs(target1 - entry_price) > 0.00001:
-                points1 = calc_points_for_symbol(target1 - entry_price, symbol)
+            # استخدام نفس الطريقة الصحيحة من التحليل الآلي
+            if target1 and entry_price and target1 != entry_price:
+                points1 = calculate_points_accurately(target1 - entry_price, symbol, capital, current_price)
+                points1 = max(0, points1)  # التأكد من القيمة الإيجابية
                 logger.debug(f"[DEBUG] النقاط للهدف الأول: {points1}")
-            else:
-                logger.warning(f"[WARNING] قيم غير صحيحة للهدف الأول: target1={target1}, entry={entry_price}")
                 
-            if target2 and entry_price and abs(target2 - entry_price) > 0.00001:
-                points2 = calc_points_for_symbol(target2 - entry_price, symbol)
+            if target2 and entry_price and target2 != entry_price:
+                points2 = calculate_points_accurately(target2 - entry_price, symbol, capital, current_price)
+                points2 = max(0, points2)  # التأكد من القيمة الإيجابية
                 logger.debug(f"[DEBUG] النقاط للهدف الثاني: {points2}")
-            else:
-                logger.warning(f"[WARNING] قيم غير صحيحة للهدف الثاني: target2={target2}, entry={entry_price}")
                 
-            if entry_price and stop_loss and abs(entry_price - stop_loss) > 0.00001:
-                stop_points = calc_points_for_symbol(abs(entry_price - stop_loss), symbol)
+            if entry_price and stop_loss and entry_price != stop_loss:
+                stop_points = calculate_points_accurately(abs(entry_price - stop_loss), symbol, capital, current_price)
+                stop_points = max(0, stop_points)  # التأكد من القيمة الإيجابية
                 logger.debug(f"[DEBUG] النقاط لوقف الخسارة: {stop_points}")
-            else:
-                logger.warning(f"[WARNING] قيم غير صحيحة لوقف الخسارة: entry={entry_price}, stop={stop_loss}")
                 
             logger.info(f"[POINTS] النقاط المحسوبة للرمز {symbol}: Target1={points1:.1f}, Target2={points2:.1f}, Stop={stop_points:.1f}")
-            
-            # التأكد من أن النقاط ليست صفراً - إذا كانت كذلك احسبها بطريقة بديلة
-            if points1 == 0 and target1 and entry_price:
-                # حساب بديل بنسبة مئوية
-                price_diff_pct = abs((target1 - entry_price) / entry_price) * 100
-                points1 = price_diff_pct * 10  # تحويل النسبة المئوية إلى نقاط تقريبية
-                logger.info(f"[POINTS_FALLBACK] حساب بديل للهدف الأول: {points1:.1f} نقطة")
-                
-            if points2 == 0 and target2 and entry_price:
-                price_diff_pct = abs((target2 - entry_price) / entry_price) * 100
-                points2 = price_diff_pct * 10
-                logger.info(f"[POINTS_FALLBACK] حساب بديل للهدف الثاني: {points2:.1f} نقطة")
-                
-            if stop_points == 0 and stop_loss and entry_price:
-                price_diff_pct = abs((stop_loss - entry_price) / entry_price) * 100
-                stop_points = price_diff_pct * 10
-                logger.info(f"[POINTS_FALLBACK] حساب بديل لوقف الخسارة: {stop_points:.1f} نقطة")
             
         except Exception as e:
             logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
@@ -3117,8 +3245,11 @@ class GeminiAnalyzer:
             # الحصول على بيانات المستخدم
             trading_mode = get_user_trading_mode(user_id)
             capital = get_user_capital(user_id)
-            # استخدام الوقت الحالي للمستخدم بدلاً من وقت البيانات
-            formatted_time = get_current_time_for_user(user_id)
+            # استخدام نفس منطق الوقت من التحليل اليدوي الصحيح  
+            if user_id:
+                formatted_time = format_time_for_user(user_id)
+            else:
+                formatted_time = f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (التوقيت المحلي)"
             
             # البيانات الأساسية
             current_price = price_data.get('last', price_data.get('bid', 0))
