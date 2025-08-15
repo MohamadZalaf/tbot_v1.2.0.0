@@ -211,8 +211,39 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         stop_loss = analysis.get('stop_loss') or analysis.get('sl')
         risk_reward_ratio = analysis.get('risk_reward')
         
-        # إذا لم تكن متوفرة من AI، احسبها من المؤشرات الفنية (نفس طريقة التحليل اليدوي)
-        if not all([target1, target2, stop_loss]):
+        # التحقق من صحة القيم المستخرجة من AI وتطبيق قواعد نمط التداول
+        ai_values_valid = True
+        if target1 and target2 and stop_loss and entry_price:
+            # التحقق من منطقية القيم
+            if trading_mode == 'scalping':
+                # للسكالبينغ: التأكد من أن الأهداف قريبة (1-3%) ووقف الخسارة ضيق (<1%)
+                if action == 'BUY':
+                    tp1_pct = abs((target1 - entry_price) / entry_price) * 100
+                    tp2_pct = abs((target2 - entry_price) / entry_price) * 100
+                    sl_pct = abs((entry_price - stop_loss) / entry_price) * 100
+                    
+                    if tp1_pct > 3 or tp2_pct > 5 or sl_pct > 1.5:
+                        logger.warning(f"[SCALPING_CHECK] قيم AI غير مناسبة للسكالبينغ للرمز {symbol}: TP1={tp1_pct:.1f}%, TP2={tp2_pct:.1f}%, SL={sl_pct:.1f}%")
+                        ai_values_valid = False
+                elif action == 'SELL':
+                    tp1_pct = abs((entry_price - target1) / entry_price) * 100
+                    tp2_pct = abs((entry_price - target2) / entry_price) * 100
+                    sl_pct = abs((stop_loss - entry_price) / entry_price) * 100
+                    
+                    if tp1_pct > 3 or tp2_pct > 5 or sl_pct > 1.5:
+                        logger.warning(f"[SCALPING_CHECK] قيم AI غير مناسبة للسكالبينغ للرمز {symbol}: TP1={tp1_pct:.1f}%, TP2={tp2_pct:.1f}%, SL={sl_pct:.1f}%")
+                        ai_values_valid = False
+                        
+                if ai_values_valid:
+                    logger.info(f"[AI_SUCCESS] استخدام قيم AI للسكالبينغ للرمز {symbol}: TP1={target1:.5f}, TP2={target2:.5f}, SL={stop_loss:.5f}")
+            else:
+                logger.info(f"[AI_SUCCESS] استخدام قيم AI للتداول طويل الأمد للرمز {symbol}: TP1={target1:.5f}, TP2={target2:.5f}, SL={stop_loss:.5f}")
+        else:
+            ai_values_valid = False
+            logger.debug(f"[AI_MISSING] قيم AI مفقودة للرمز {symbol}: TP1={target1}, TP2={target2}, SL={stop_loss}, Entry={entry_price}")
+        
+        # إذا لم تكن متوفرة من AI أو غير صالحة، احسبها من المؤشرات الفنية
+        if not ai_values_valid or not all([target1, target2, stop_loss]):
             # استخدام مستويات الدعم والمقاومة الحقيقية من MT5
             resistance = indicators.get('resistance')
             support = indicators.get('support')
@@ -248,24 +279,28 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                         target2 = target2 or current_price + (atr * 2.0)
                         stop_loss = stop_loss or current_price - (atr * 1.0)
                 else:
-                    # نسب افتراضية حسب النمط
+                    # نسب افتراضية حسب النمط - محسنة للسكالبينغ
                     if trading_mode == 'scalping':
-                        profit_pct, loss_pct = 0.015, 0.005  # 1.5%/0.5%
+                        # نسب دقيقة للسكالبينغ
+                        tp1_pct, tp2_pct, sl_pct = 0.015, 0.025, 0.005  # TP1: 1.5%, TP2: 2.5%, SL: 0.5%
+                        logger.info(f"[SCALPING] استخدام نسب السكالبينغ للرمز {symbol}: TP1={tp1_pct*100}%, TP2={tp2_pct*100}%, SL={sl_pct*100}%")
                     else:
-                        profit_pct, loss_pct = 0.05, 0.02   # 5%/2%
+                        # نسب للتداول طويل الأمد
+                        tp1_pct, tp2_pct, sl_pct = 0.05, 0.08, 0.02  # TP1: 5%, TP2: 8%, SL: 2%
+                        logger.info(f"[LONGTERM] استخدام نسب التداول طويل الأمد للرمز {symbol}: TP1={tp1_pct*100}%, TP2={tp2_pct*100}%, SL={sl_pct*100}%")
                     
                     if action == 'BUY':
-                        target1 = target1 or current_price * (1 + profit_pct)
-                        target2 = target2 or current_price * (1 + profit_pct * 2)
-                        stop_loss = stop_loss or current_price * (1 - loss_pct)
+                        target1 = target1 or current_price * (1 + tp1_pct)
+                        target2 = target2 or current_price * (1 + tp2_pct)
+                        stop_loss = stop_loss or current_price * (1 - sl_pct)
                     elif action == 'SELL':
-                        target1 = target1 or current_price * (1 - profit_pct)
-                        target2 = target2 or current_price * (1 - profit_pct * 2)
-                        stop_loss = stop_loss or current_price * (1 + loss_pct)
-                    else:
-                        target1 = target1 or current_price * (1 + profit_pct)
-                        target2 = target2 or current_price * (1 + profit_pct * 2)
-                        stop_loss = stop_loss or current_price * (1 - loss_pct)
+                        target1 = target1 or current_price * (1 - tp1_pct)
+                        target2 = target2 or current_price * (1 - tp2_pct)
+                        stop_loss = stop_loss or current_price * (1 + sl_pct)
+                    else:  # HOLD
+                        target1 = target1 or current_price * (1 + tp1_pct)
+                        target2 = target2 or current_price * (1 + tp2_pct)
+                        stop_loss = stop_loss or current_price * (1 - sl_pct)
 
         # حساب النقاط بدقة مع ضمان قيم صحيحة
         def calc_points_for_symbol(price_diff, symbol_name):
@@ -879,8 +914,15 @@ class MT5Manager:
                 
                 # التحقق من أن البيانات حديثة (مع مرونة أكبر لبعض الأسواق)
                 try:
+                    # تحويل وقت MT5 مع التعامل الصحيح للمنطقة الزمنية
                     tick_time = datetime.fromtimestamp(tick.time)
-                    time_diff = datetime.now() - tick_time
+                    if TIMEZONE_AVAILABLE:
+                        # MT5 عادة يعطي التوقيت بـ UTC، لذلك نحوله
+                        tick_time = pytz.UTC.localize(tick_time)
+                        current_utc = pytz.UTC.localize(datetime.utcnow())
+                        time_diff = current_utc - tick_time
+                    else:
+                        time_diff = datetime.now() - tick_time
                     
                     # 15 دقيقة بدلاً من 5 للمرونة أكثر
                     if time_diff.total_seconds() > 900:
@@ -1013,7 +1055,12 @@ class MT5Manager:
                     tick = mt5.symbol_info_tick("EURUSD")
                     if tick:
                         tick_time = datetime.fromtimestamp(tick.time)
-                        age_seconds = (datetime.now() - tick_time).total_seconds()
+                        if TIMEZONE_AVAILABLE:
+                            tick_time = pytz.UTC.localize(tick_time)
+                            current_utc = pytz.UTC.localize(datetime.utcnow())
+                            age_seconds = (current_utc - tick_time).total_seconds()
+                        else:
+                            age_seconds = (datetime.now() - tick_time).total_seconds()
                         status_info['data_freshness'] = f"{age_seconds:.0f} ثانية"
                         
                 except Exception as e:
@@ -1068,7 +1115,12 @@ class MT5Manager:
                 if tick is not None and hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0:
                     # التحقق من أن البيانات حديثة (ليست قديمة)
                     tick_time = datetime.fromtimestamp(tick.time)
-                    time_diff = datetime.now() - tick_time
+                    if TIMEZONE_AVAILABLE:
+                        tick_time = pytz.UTC.localize(tick_time)
+                        current_utc = pytz.UTC.localize(datetime.utcnow())
+                        time_diff = current_utc - tick_time
+                    else:
+                        time_diff = datetime.now() - tick_time
                     
                     # زيادة مرونة وقت البيانات إلى 15 دقيقة
                     if time_diff.total_seconds() > 900:
@@ -2225,13 +2277,18 @@ class GeminiAnalyzer:
                     
                     تعليمات خاصة للسكالبينغ:
                     - ركز على الفرص قصيرة المدى (دقائق إلى ساعات)
-                    - أهداف ربح صغيرة (1-2%)
-                    - وقف خسارة ضيق (0.5-1%)
+                    - أهداف ربح صغيرة (1-2%) - يجب تحديد TP1 و TP2 بدقة
+                    - وقف خسارة ضيق (0.5-1%) - يجب تحديد SL بدقة
                     - تحليل سريع وفوري
                     - ثقة عالية مطلوبة (80%+)
                     - ركز على التحركات السريعة والمؤشرات قصيرة المدى
                     - حجم صفقات أصغر لتقليل المخاطر
                     - اهتم بـ RSI و MACD للإشارات السريعة
+                    
+                    ⚠️ مهم جداً للسكالبينغ:
+                    - يجب تحديد TP1 (الهدف الأول) و TP2 (الهدف الثاني) و SL (وقف الخسارة) بأرقام دقيقة
+                    - استخدم نسب صغيرة: TP1 = +1.5%, TP2 = +2.5%, SL = -0.5% من سعر الدخول
+                    - اكتب القيم بوضوح: "TP1: [رقم]" و "TP2: [رقم]" و "SL: [رقم]"
                     """
                 else:
                     trading_mode_instructions = """
@@ -2590,13 +2647,19 @@ class GeminiAnalyzer:
                     r'entry\s*(?:price)?\s*[:：]?\s*([\d\.]+)'
                 ])
                 target1_ai = _find_number([
-                    r'(?:TP1|الهدف\s*الأول)\s*[:：]?\s*([\d\.]+)'
+                    r'(?:TP1|الهدف\s*الأول|Target\s*1|T1)\s*[:：]?\s*([\d\.]+)',
+                    r'هدف\s*أول\s*[:：]?\s*([\d\.]+)',
+                    r'الهدف\s*1\s*[:：]?\s*([\d\.]+)'
                 ])
                 target2_ai = _find_number([
-                    r'(?:TP2|الهدف\s*الثاني)\s*[:：]?\s*([\d\.]+)'
+                    r'(?:TP2|الهدف\s*الثاني|Target\s*2|T2)\s*[:：]?\s*([\d\.]+)',
+                    r'هدف\s*ثاني\s*[:：]?\s*([\d\.]+)',
+                    r'الهدف\s*2\s*[:：]?\s*([\d\.]+)'
                 ])
                 stop_loss_ai = _find_number([
-                    r'(?:SL|وقف\s*الخسارة)\s*[:：]?\s*([\d\.]+)'
+                    r'(?:SL|وقف\s*الخسارة|Stop\s*Loss)\s*[:：]?\s*([\d\.]+)',
+                    r'إيقاف\s*الخسارة\s*[:：]?\s*([\d\.]+)',
+                    r'وقف\s*خسارة\s*[:：]?\s*([\d\.]+)'
                 ])
                 risk_reward_ai = _find_number([
                     r'(?:RR|R\s*/\s*R|Risk\s*/\s*Reward|نسبة\s*المخاطرة\s*/\s*المكافأة)\s*[:：]?\s*1\s*[:：]\s*([\d\.]+)',
@@ -2691,8 +2754,17 @@ class GeminiAnalyzer:
             trading_mode = get_user_trading_mode(user_id)
             
             if trading_mode == 'scalping':
-                # للسكالبينغ، نحتاج ثقة أعلى
-                return min(confidence * 0.9, 95.0)  # تقليل الثقة قليلاً للحذر
+                # للسكالبينغ، نحتاج ثقة أعلى وتحليل أكثر دقة
+                # إذا كانت الثقة أقل من 75%، نقللها أكثر لأن السكالبينغ يحتاج دقة عالية
+                if confidence < 75:
+                    adjusted_confidence = confidence * 0.8  # تقليل أكبر للثقة المنخفضة
+                    logger.debug(f"[SCALPING_CONFIDENCE] ثقة منخفضة للسكالبينغ: {confidence:.1f}% -> {adjusted_confidence:.1f}%")
+                    return min(adjusted_confidence, 95.0)
+                else:
+                    # ثقة عالية، تقليل طفيف فقط
+                    adjusted_confidence = confidence * 0.95
+                    logger.debug(f"[SCALPING_CONFIDENCE] ثقة جيدة للسكالبينغ: {confidence:.1f}% -> {adjusted_confidence:.1f}%")
+                    return min(adjusted_confidence, 95.0)
             elif trading_mode == 'longterm':
                 # للتداول طويل المدى، يمكن قبول ثقة أقل
                 return min(confidence * 1.1, 95.0)  # زيادة الثقة قليلاً
@@ -3310,8 +3382,14 @@ class GeminiAnalyzer:
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             message += f"💱 {symbol} | {symbol_info['name']} {symbol_info['emoji']}\n"
             message += f"📡 مصدر البيانات: 🔗 MetaTrader5 (لحظي - بيانات حقيقية)\n"
+            message += f"🌍 مصدر التوقيت: خادم MT5 - محول لمنطقتك الزمنية\n"
             message += f"💰 السعر الحالي: {current_price:,.5f}\n"
             message += f"➡️ التغيير اليومي: {daily_change}\n"
+            # استخدام التوقيت المصحح حسب المنطقة الزمنية للمستخدم
+            if user_id:
+                formatted_time = format_time_for_user(user_id)
+            else:
+                formatted_time = f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (التوقيت المحلي)"
             message += f"⏰ وقت التحليل: {formatted_time}\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -4936,10 +5014,11 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         target = None
         stop_loss = None
         if current_price:
-            # تحديد النسب حسب نمط التداول
+            # تحديد النسب حسب نمط التداول مع تحسينات للسكالبينغ
             if trading_mode == 'scalping':
                 profit_pct = 0.015  # 1.5% للسكالبينغ
                 loss_pct = 0.005   # 0.5% وقف خسارة
+                logger.debug(f"[SCALPING_MANUAL] تطبيق نسب السكالبينغ اليدوية: ربح={profit_pct*100}%, خسارة={loss_pct*100}%")
             else:  # longterm
                 profit_pct = 0.05   # 5% للتداول طويل الأمد
                 loss_pct = 0.02     # 2% وقف خسارة
@@ -4957,8 +5036,10 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         
         # حساب حجم الصفقة المناسب حسب نمط التداول
         if trading_mode == 'scalping':
-            position_size = min(capital * 0.02, capital * 0.05)  # 2-5% للسكالبينغ
-            risk_description = "منخفضة (سكالبينغ)"
+            # للسكالبينغ: صفقات صغيرة متكررة بمخاطرة أقل
+            position_size = min(capital * 0.01, capital * 0.03)  # 1-3% للسكالبينغ (أقل مخاطرة)
+            risk_description = "منخفضة جداً (سكالبينغ سريع)"
+            logger.info(f"[SCALPING_POSITION] حجم صفقة السكالبينغ: ${position_size:.2f} ({(position_size/capital)*100:.1f}% من رأس المال)"
         else:
             position_size = min(capital * 0.05, capital * 0.10)  # 5-10% للتداول طويل الأمد
             risk_description = "متوسطة (طويل الأمد)"
@@ -7138,7 +7219,9 @@ def handle_alerts_log(call):
                 message_text += f"**{i}.** {symbol} - {action}\n"
                 message_text += f"   💪 قوة: {confidence:.1f}%\n"
                 message_text += f"   {feedback_emoji} تقييم: {feedback}\n"
-                message_text += f"   🕐 {formatted_time}\n\n"
+                # استخدام التوقيت المصحح للمستخدم
+                user_formatted_time = format_time_for_user(user_id, datetime.fromisoformat(trade_data.get('timestamp')))
+                message_text += f"   🕐 {user_formatted_time}\n\n"
         
         # إحصائيات التقييم
         stats = TradeDataManager.get_user_feedback_stats(user_id)
