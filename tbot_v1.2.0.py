@@ -9293,7 +9293,7 @@ def handle_custom_capital_input(message):
 
 # ===== معالجات قواعد التحليل =====
 
-@bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('state') == 'waiting_for_analysis_rule')
+@bot.message_handler(func=lambda message: isinstance(user_states.get(message.from_user.id, {}), dict) and user_states.get(message.from_user.id, {}).get('state') == 'waiting_for_analysis_rule')
 def handle_analysis_rule_input(message):
     """معالج إدخال قاعدة التحليل الجديدة"""
     try:
@@ -9396,7 +9396,7 @@ def handle_analysis_rule_input(message):
         bot.reply_to(message, "❌ حدث خطأ في معالجة القاعدة. يرجى المحاولة مرة أخرى.")
         user_states.pop(message.from_user.id, None)
 
-@bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('state') == 'waiting_for_rule_modification')
+@bot.message_handler(func=lambda message: isinstance(user_states.get(message.from_user.id, {}), dict) and user_states.get(message.from_user.id, {}).get('state') == 'waiting_for_rule_modification')
 def handle_rule_modification_input(message):
     """معالج تعديل قاعدة التحليل"""
     try:
@@ -10072,8 +10072,10 @@ def monitoring_loop():
     logger.info("[RUNNING] بدء حلقة المراقبة...")
     consecutive_errors = 0
     max_consecutive_errors = 5
-    connection_check_interval = 300  # فحص الاتصال كل 5 دقائق
+    connection_check_interval = 3600  # فحص الاتصال كل ساعة (3600 ثانية)
     last_connection_check = 0
+    api_check_interval = 3600  # فحص API كل ساعة
+    last_api_check = 0
     
     while monitoring_active:
         try:
@@ -10086,6 +10088,23 @@ def monitoring_loop():
                     logger.warning("[WARNING] انقطاع في اتصال MT5 تم اكتشافه - محاولة إعادة الاتصال...")
                     mt5_manager.check_real_connection()
                 last_connection_check = current_time
+            
+            # فحص دوري لحالة API كل ساعة
+            if current_time - last_api_check > api_check_interval:
+                logger.info("[API_CHECK] فحص دوري لحالة API...")
+                try:
+                    # اختبار بسيط للـ API
+                    if GEMINI_AVAILABLE:
+                        test_key = gemini_key_manager.get_current_key() if 'gemini_key_manager' in globals() else None
+                        if test_key:
+                            logger.info("[API_CHECK] ✅ API متاح ويعمل بشكل طبيعي")
+                        else:
+                            logger.warning("[API_CHECK] ⚠️ لا يوجد مفتاح API متاح")
+                    else:
+                        logger.warning("[API_CHECK] ⚠️ Gemini AI غير متوفر")
+                except Exception as api_error:
+                    logger.error(f"[API_CHECK] ❌ خطأ في فحص API: {api_error}")
+                last_api_check = current_time
             
             # مراقبة المستخدمين النشطين فقط
             active_users = list(user_monitoring_active.keys())
@@ -10200,8 +10219,8 @@ def monitoring_loop():
                     logger.info("[RECONNECT] محاولة إعادة اتصال شاملة بسبب أخطاء MT5 المتكررة...")
                     mt5_manager.check_real_connection()
             
-            # انتظار 30 ثانية - تردد موحد لجميع المستخدمين (محدث من 15 ثانية)
-            time.sleep(30)
+            # انتظار دقيقة واحدة - تردد محسن لتقليل استهلاك الموارد
+            time.sleep(60)
             
         except Exception as e:
             consecutive_errors += 1
