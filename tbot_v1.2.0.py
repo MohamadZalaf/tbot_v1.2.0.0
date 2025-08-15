@@ -89,6 +89,333 @@ except ImportError:
 
 warnings.filterwarnings('ignore')
 
+# متغيرات نظام كشف نفاذ رصيد API
+API_QUOTA_EXHAUSTED = False
+API_QUOTA_NOTIFICATION_SENT = False
+LAST_API_ERROR_TIME = None
+API_ERROR_COUNT = 0
+MAX_API_ERRORS_BEFORE_NOTIFICATION = 3
+
+# دوال نظام كشف وإدارة نفاذ رصيد API
+def check_api_quota_exhausted(error_message: str) -> bool:
+    """كشف ما إذا كان رصيد API قد نفد"""
+    global API_QUOTA_EXHAUSTED, API_ERROR_COUNT, LAST_API_ERROR_TIME
+    
+    error_str = str(error_message).lower()
+    quota_indicators = [
+        'quota', 'limit', 'rate limit', 'exceeded', 'exhausted',
+        'resource_exhausted', '429', 'too many requests',
+        'quota exceeded', 'billing', 'insufficient quota'
+    ]
+    
+    # التحقق من وجود مؤشرات نفاذ الرصيد
+    quota_exhausted = any(indicator in error_str for indicator in quota_indicators)
+    
+    if quota_exhausted:
+        API_QUOTA_EXHAUSTED = True
+        logger.error(f"[API_QUOTA] تم اكتشاف نفاذ رصيد API: {error_message}")
+        return True
+    
+    # عد الأخطاء المتتالية
+    current_time = datetime.now()
+    if LAST_API_ERROR_TIME is None or (current_time - LAST_API_ERROR_TIME).seconds > 300:  # 5 دقائق
+        API_ERROR_COUNT = 1
+    else:
+        API_ERROR_COUNT += 1
+    
+    LAST_API_ERROR_TIME = current_time
+    
+    # إذا كان هناك أخطاء متكررة، افترض نفاذ الرصيد
+    if API_ERROR_COUNT >= MAX_API_ERRORS_BEFORE_NOTIFICATION:
+        API_QUOTA_EXHAUSTED = True
+        logger.warning(f"[API_QUOTA] افتراض نفاذ رصيد API بعد {API_ERROR_COUNT} أخطاء متتالية")
+        return True
+    
+    return False
+
+def send_api_quota_exhausted_notification():
+    """إرسال إشعار نفاذ رصيد API لجميع المستخدمين المسجلين"""
+    global API_QUOTA_NOTIFICATION_SENT
+    
+    if API_QUOTA_NOTIFICATION_SENT:
+        return  # تم إرسال الإشعار بالفعل
+    
+    try:
+        # رسالة الإشعار
+        notification_message = """
+🚨 **إشعار مهم من إدارة البوت** 🚨
+
+⚠️ **تم استنفاد رصيد API الخاص بالذكاء الاصطناعي**
+
+📢 **ما يعني هذا:**
+• تم استهلاك الحد المسموح لاستخدام خدمة الذكاء الاصطناعي
+• قد تتأثر جودة التحليلات مؤقتاً
+• سيتم استخدام التحليل الأساسي كبديل
+
+🔄 **ما نقوم به:**
+• ⏰ سيتم تجديد الرصيد تلقائياً مع بداية الدورة القادمة
+• 🛠️ جاري العمل على تحسين إدارة الاستهلاك
+• 📈 التحليل الأساسي سيبقى متاحاً
+
+💡 **نصائح مؤقتة:**
+• استخدم التحليل الفني التقليدي
+• تابع الأخبار الاقتصادية المهمة
+• لا تعتمد على التوصيات فقط - استخدم إدارة المخاطر
+
+🙏 **نعتذر عن الإزعاج** ونعدكم بحل سريع!
+
+───────────────────────
+🤖 **بوت التداول v1.2.0** | نظام الإشعارات الذكي
+        """
+
+        # جلب جميع المستخدمين المسجلين
+        active_users = []
+        for user_id, session in user_sessions.items():
+            if session.get('authenticated', False):
+                active_users.append(user_id)
+        
+        # إرسال الإشعار لكل مستخدم
+        sent_count = 0
+        failed_count = 0
+        
+        for user_id in active_users:
+            try:
+                bot.send_message(
+                    chat_id=user_id,
+                    text=notification_message,
+                    parse_mode='Markdown'
+                )
+                sent_count += 1
+                logger.info(f"[API_QUOTA_NOTIFICATION] تم إرسال إشعار نفاذ API للمستخدم {user_id}")
+            except Exception as send_error:
+                failed_count += 1
+                logger.error(f"[API_QUOTA_NOTIFICATION] فشل إرسال إشعار للمستخدم {user_id}: {send_error}")
+        
+        API_QUOTA_NOTIFICATION_SENT = True
+        logger.info(f"[API_QUOTA_NOTIFICATION] تم إرسال إشعار نفاذ API لـ {sent_count} مستخدم، فشل {failed_count}")
+        
+    except Exception as e:
+        logger.error(f"[API_QUOTA_NOTIFICATION] خطأ في إرسال إشعارات نفاذ API: {e}")
+
+def reset_api_quota_status():
+    """إعادة تعيين حالة رصيد API عند النجاح"""
+    global API_QUOTA_EXHAUSTED, API_QUOTA_NOTIFICATION_SENT, API_ERROR_COUNT
+    
+    if API_QUOTA_EXHAUSTED:
+        # إرسال إشعار استعادة الخدمة
+        send_api_restored_notification()
+        send_api_status_report_to_developer(False)
+        
+        API_QUOTA_EXHAUSTED = False
+        API_QUOTA_NOTIFICATION_SENT = False
+        API_ERROR_COUNT = 0
+        logger.info("[API_QUOTA] تم إعادة تعيين حالة رصيد API - العمل طبيعي")
+
+def send_api_restored_notification():
+    """إرسال إشعار استعادة خدمة API"""
+    try:
+        # رسالة الإشعار
+        notification_message = """
+✅ **إشعار: تم استعادة خدمة الذكاء الاصطناعي** ✅
+
+🎉 **أخبار سارة!**
+• تم تجديد رصيد API بنجاح
+• عادت خدمة الذكاء الاصطناعي للعمل بكامل طاقتها
+• جميع ميزات التحليل المتقدم متاحة الآن
+
+🚀 **ما تم استعادته:**
+• 🧠 التحليل الذكي المتقدم
+• 📊 حساب نسبة النجاح الدقيقة  
+• 🎯 التوصيات المخصصة
+• 📈 التحليل التفصيلي للمؤشرات
+
+💡 **يمكنك الآن:**
+• الحصول على تحليلات دقيقة ومفصلة
+• الاستفادة من جميع ميزات البوت
+• الحصول على توصيات مخصصة لنمط تداولك
+
+🙏 **شكراً لصبركم!** نعدكم بخدمة أفضل دائماً
+
+───────────────────────
+🤖 **بوت التداول v1.2.0** | عودة الخدمة الذكية
+        """
+
+        # جلب جميع المستخدمين المسجلين
+        active_users = []
+        for user_id, session in user_sessions.items():
+            if session.get('authenticated', False):
+                active_users.append(user_id)
+        
+        # إرسال الإشعار لكل مستخدم
+        sent_count = 0
+        failed_count = 0
+        
+        for user_id in active_users:
+            try:
+                bot.send_message(
+                    chat_id=user_id,
+                    text=notification_message,
+                    parse_mode='Markdown'
+                )
+                sent_count += 1
+                logger.info(f"[API_RESTORED] تم إرسال إشعار استعادة API للمستخدم {user_id}")
+            except Exception as send_error:
+                failed_count += 1
+                logger.error(f"[API_RESTORED] فشل إرسال إشعار استعادة للمستخدم {user_id}: {send_error}")
+        
+        logger.info(f"[API_RESTORED] تم إرسال إشعار استعادة API لـ {sent_count} مستخدم، فشل {failed_count}")
+        
+    except Exception as e:
+        logger.error(f"[API_RESTORED] خطأ في إرسال إشعارات استعادة API: {e}")
+
+def send_api_status_report_to_developer(quota_exhausted: bool, error_details: str = ""):
+    """إرسال تقرير حالة API للمطور"""
+    try:
+        # ID المطور (يجب تعديله حسب ID المطور الفعلي)
+        DEVELOPER_ID = 123456789  # يجب تغيير هذا ID للمطور الفعلي
+        
+        if quota_exhausted:
+            status_emoji = "🚨"
+            status_text = "نفاذ رصيد API"
+            details = f"""
+📊 **تفاصيل المشكلة:**
+• العدد التراكمي للأخطاء: {API_ERROR_COUNT}
+• آخر خطأ: {error_details[:200]}...
+• الوقت: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+👥 **تأثير على المستخدمين:**
+• عدد المستخدمين النشطين: {len([u for u, s in user_sessions.items() if s.get('authenticated')])}
+• تم إرسال إشعار: {'✅ نعم' if API_QUOTA_NOTIFICATION_SENT else '❌ لا'}
+            """
+        else:
+            status_emoji = "✅"
+            status_text = "استعادة خدمة API"
+            details = """
+🎉 **الخدمة عادت للعمل طبيعياً**
+• تم تجديد الرصيد تلقائياً
+• جميع الميزات متاحة
+            """
+        
+        developer_message = f"""
+{status_emoji} **تقرير نظام API - بوت التداول**
+
+📋 **الحالة:** {status_text}
+{details}
+
+🔧 **إجراءات مقترحة:**
+• مراقبة استهلاك API
+• تحسين خوارزميات التحليل
+• إضافة آليات توفير إضافية
+
+───────────────────────
+🤖 **تقرير تلقائي من بوت التداول v1.2.0**
+        """
+        
+        try:
+            bot.send_message(
+                chat_id=DEVELOPER_ID,
+                text=developer_message,
+                parse_mode='Markdown'
+            )
+            logger.info(f"[API_REPORT] تم إرسال تقرير حالة API للمطور")
+        except Exception as dev_send_error:
+            logger.error(f"[API_REPORT] فشل إرسال تقرير للمطور: {dev_send_error}")
+        
+    except Exception as e:
+        logger.error(f"[API_REPORT] خطأ في إنشاء تقرير حالة API: {e}")
+
+def get_api_usage_statistics():
+    """الحصول على إحصائيات استخدام API"""
+    try:
+        stats = {
+            'quota_exhausted': API_QUOTA_EXHAUSTED,
+            'notification_sent': API_QUOTA_NOTIFICATION_SENT,
+            'error_count': API_ERROR_COUNT,
+            'last_error_time': LAST_API_ERROR_TIME,
+            'active_users': len([u for u, s in user_sessions.items() if s.get('authenticated', False)])
+        }
+        return stats
+    except Exception as e:
+        logger.error(f"[API_STATS] خطأ في جلب إحصائيات API: {e}")
+        return {}
+
+@bot.message_handler(commands=['api_status'])
+def handle_api_status_command(message):
+    """معالج أمر التحقق من حالة API - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 123456789  # يجب تغيير هذا ID للمطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        # جلب إحصائيات API
+        stats = get_api_usage_statistics()
+        
+        status_message = f"""
+📊 **تقرير حالة API - بوت التداول**
+
+🔍 **الحالة الحالية:**
+• رصيد API: {'🚨 منتهي' if stats.get('quota_exhausted') else '✅ متاح'}
+• عدد الأخطاء: {stats.get('error_count', 0)}
+• إشعار مُرسل: {'✅ نعم' if stats.get('notification_sent') else '❌ لا'}
+
+👥 **المستخدمين:**
+• المستخدمين النشطين: {stats.get('active_users', 0)}
+
+⏰ **آخر خطأ:**
+• الوقت: {stats.get('last_error_time', 'لا يوجد').strftime('%Y-%m-%d %H:%M:%S') if stats.get('last_error_time') else 'لا يوجد'}
+
+🛠️ **أوامر التحكم:**
+• `/api_reset` - إعادة تعيين حالة API
+• `/api_test` - اختبار API
+• `/api_notify` - إرسال إشعار تجريبي
+
+───────────────────────
+🤖 **نظام مراقبة API v1.2.0**
+        """
+        
+        bot.reply_to(message, status_message, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"[API_STATUS_CMD] خطأ في معالجة أمر حالة API: {e}")
+        bot.reply_to(message, f"❌ خطأ في جلب حالة API: {str(e)}")
+
+@bot.message_handler(commands=['api_reset'])
+def handle_api_reset_command(message):
+    """معالج أمر إعادة تعيين حالة API - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 123456789  # يجب تغيير هذا ID للمطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        # إعادة تعيين حالة API يدوياً
+        global API_QUOTA_EXHAUSTED, API_QUOTA_NOTIFICATION_SENT, API_ERROR_COUNT, LAST_API_ERROR_TIME
+        
+        old_status = API_QUOTA_EXHAUSTED
+        API_QUOTA_EXHAUSTED = False
+        API_QUOTA_NOTIFICATION_SENT = False
+        API_ERROR_COUNT = 0
+        LAST_API_ERROR_TIME = None
+        
+        if old_status:
+            send_api_restored_notification()
+            bot.reply_to(message, "✅ **تم إعادة تعيين حالة API**\n\n• تم إرسال إشعار الاستعادة للمستخدمين\n• حالة API: متاح الآن")
+        else:
+            bot.reply_to(message, "ℹ️ **حالة API كانت طبيعية بالفعل**\n\n• لا حاجة لإعادة تعيين")
+        
+        logger.info(f"[API_RESET_CMD] تم إعادة تعيين حالة API يدوياً بواسطة المطور {user_id}")
+        
+    except Exception as e:
+        logger.error(f"[API_RESET_CMD] خطأ في معالجة أمر إعادة تعيين API: {e}")
+        bot.reply_to(message, f"❌ خطأ في إعادة تعيين API: {str(e)}")
+
 # دوال حساب النقاط المحسنة - منسوخة من التحليل الآلي الصحيح
 def get_asset_type_and_pip_size(symbol):
     """تحديد نوع الأصل وحجم النقطة بدقة"""
@@ -2772,11 +3099,27 @@ class GeminiAnalyzer:
             response = None
             try:
                 response = chat.send_message(prompt)
+                # إعادة تعيين حالة API عند النجاح
+                reset_api_quota_status()
             except Exception as rate_e:
+                # كشف نفاذ رصيد API
+                if check_api_quota_exhausted(str(rate_e)):
+                    send_api_quota_exhausted_notification()
+                    send_api_status_report_to_developer(True, str(rate_e))
+                
                 if GEMINI_ROTATE_ON_RATE_LIMIT and ("429" in str(rate_e) or "rate" in str(rate_e).lower() or "quota" in str(rate_e).lower()):
-                    gemini_key_manager.rotate_key()
-                    chat = chat_session_manager.reset_session(symbol)
-                    response = chat.send_message(prompt)
+                    try:
+                        gemini_key_manager.rotate_key()
+                        chat = chat_session_manager.reset_session(symbol)
+                        response = chat.send_message(prompt)
+                        # إعادة تعيين حالة API عند النجاح
+                        reset_api_quota_status()
+                    except Exception as retry_error:
+                        # كشف نفاذ رصيد API في المحاولة الثانية
+                        if check_api_quota_exhausted(str(retry_error)):
+                            send_api_quota_exhausted_notification()
+                            send_api_status_report_to_developer(True, str(retry_error))
+                        raise retry_error
                 else:
                     raise
             analysis_text = getattr(response, 'text', '') or (response.candidates[0].content.parts[0].text if getattr(response, 'candidates', None) else '')
