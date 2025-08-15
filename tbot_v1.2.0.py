@@ -1338,7 +1338,7 @@ class MT5Manager:
                 else:
                     indicators['macd_interpretation'] = 'محايد'
             
-            # حجم التداول - تحليل متقدم مع معالجة الأخطاء
+            # حجم التداول - تحليل متقدم مع معالجة الأخطاء محسنة
             try:
                 # التأكد من وجود عمود tick_volume صحيح
                 if 'tick_volume' in df.columns and len(df) > 0:
@@ -1347,72 +1347,178 @@ class MT5Manager:
                     # التأكد من أن الحجم رقم صحيح
                     if pd.isna(indicators['current_volume']) or indicators['current_volume'] <= 0:
                         # استخدام real_volume كبديل
-                        if 'real_volume' in df.columns:
-                            indicators['current_volume'] = df['real_volume'].iloc[-1]
+                        if 'real_volume' in df.columns and len(df) > 0:
+                            real_vol = df['real_volume'].iloc[-1]
+                            if not pd.isna(real_vol) and real_vol > 0:
+                                indicators['current_volume'] = real_vol
+                            else:
+                                # استخدام متوسط الحجم من البيانات المتاحة
+                                valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
+                                if len(valid_volumes) > 0:
+                                    indicators['current_volume'] = valid_volumes.mean()
+                                else:
+                                    indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
                         else:
-                            indicators['current_volume'] = 1  # قيمة افتراضية
+                            # محاولة حساب من البيانات المتاحة
+                            valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
+                            if len(valid_volumes) > 0:
+                                indicators['current_volume'] = valid_volumes.iloc[-1]
+                            else:
+                                indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
                 else:
                     logger.warning(f"[WARNING] عمود الحجم غير متوفر لـ {symbol}")
-                    indicators['current_volume'] = 1  # قيمة افتراضية
+                    # محاولة استخدام بيانات الحجم من المصادر الأخرى
+                    current_tick = self.get_live_price(symbol)
+                    if current_tick and current_tick.get('volume', 0) > 0:
+                        indicators['current_volume'] = current_tick['volume']
+                        logger.info(f"[INFO] تم استخدام حجم التداول من البيانات اللحظية لـ {symbol}")
+                    else:
+                        indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
                     
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في جلب الحجم الحالي لـ {symbol}: {e}")
-                indicators['current_volume'] = 1  # قيمة افتراضية
-            
-            if len(df) >= 20:
+                # محاولة الحصول على حجم من البيانات اللحظية كملاذ أخير
                 try:
-                    indicators['avg_volume'] = df['tick_volume'].rolling(window=20).mean().iloc[-1]
-                    
-                    # التأكد من صحة متوسط الحجم
-                    if pd.isna(indicators['avg_volume']) or indicators['avg_volume'] <= 0:
-                        indicators['avg_volume'] = indicators['current_volume']
-                    
-                    indicators['volume_ratio'] = indicators['current_volume'] / indicators['avg_volume']
-                except Exception as e:
-                    logger.warning(f"[WARNING] فشل في حساب متوسط الحجم لـ {symbol}: {e}")
-                    indicators['avg_volume'] = indicators['current_volume']
+                    current_tick = self.get_live_price(symbol)
+                    if current_tick and current_tick.get('volume', 0) > 0:
+                        indicators['current_volume'] = current_tick['volume']
+                        logger.info(f"[INFO] تم استخدام حجم التداول من البيانات اللحظية كملاذ أخير لـ {symbol}")
+                    else:
+                        indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+                except:
+                    indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+            
+            # حساب متوسط الحجم ونسبة الحجم - محسن
+            try:
+                if len(df) >= 20:
+                    # حساب متوسط الحجم مع تنظيف البيانات
+                    valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
+                    if len(valid_volumes) >= 10:  # نحتاج على الأقل 10 نقاط صحيحة
+                        indicators['avg_volume'] = valid_volumes.rolling(window=min(20, len(valid_volumes))).mean().iloc[-1]
+                    else:
+                        indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                elif len(df) >= 5:
+                    # للبيانات المحدودة، استخدم ما متاح
+                    valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
+                    if len(valid_volumes) > 0:
+                        indicators['avg_volume'] = valid_volumes.mean()
+                    else:
+                        indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                else:
+                    # بيانات قليلة جداً
+                    indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                
+                # التأكد من صحة متوسط الحجم
+                if pd.isna(indicators['avg_volume']) or indicators['avg_volume'] <= 0:
+                    indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                
+                # حساب نسبة الحجم
+                current_vol = indicators.get('current_volume', 1000)
+                avg_vol = indicators.get('avg_volume', 1000)
+                
+                if avg_vol > 0:
+                    indicators['volume_ratio'] = current_vol / avg_vol
+                else:
                     indicators['volume_ratio'] = 1.0
+                    
+            except Exception as e:
+                logger.warning(f"[WARNING] فشل في حساب متوسط الحجم لـ {symbol}: {e}")
+                # قيم افتراضية آمنة
+                indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                indicators['volume_ratio'] = 1.0
                 
-                # حجم التداول لآخر 5 فترات للمقارنة
-                indicators['volume_trend_5'] = df['tick_volume'].tail(5).mean()
-                indicators['volume_trend_10'] = df['tick_volume'].tail(10).mean()
+            # حساب مؤشرات الحجم الإضافية - محسن
+            try:
+                # حجم التداول لآخر 5 و 10 فترات للمقارنة
+                valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
+                if len(valid_volumes) >= 5:
+                    indicators['volume_trend_5'] = valid_volumes.tail(5).mean()
+                else:
+                    indicators['volume_trend_5'] = indicators.get('current_volume', 1000)
                 
-                # Volume Moving Average (VMA)
-                indicators['volume_ma_9'] = df['tick_volume'].rolling(window=9).mean().iloc[-1]
-                indicators['volume_ma_21'] = df['tick_volume'].rolling(window=21).mean().iloc[-1] if len(df) >= 21 else indicators['avg_volume']
+                if len(valid_volumes) >= 10:
+                    indicators['volume_trend_10'] = valid_volumes.tail(10).mean()
+                else:
+                    indicators['volume_trend_10'] = indicators.get('current_volume', 1000)
                 
-                # Volume Rate of Change
-                if len(df) >= 10:
-                    indicators['volume_roc'] = ((indicators['current_volume'] - df['tick_volume'].iloc[-10]) / df['tick_volume'].iloc[-10]) * 100
+                # Volume Moving Average (VMA) - محسن
+                if len(valid_volumes) >= 9:
+                    indicators['volume_ma_9'] = valid_volumes.rolling(window=9).mean().iloc[-1]
+                else:
+                    indicators['volume_ma_9'] = indicators.get('avg_volume', 1000)
                 
-                # تفسير حجم التداول المتقدم
+                if len(valid_volumes) >= 21:
+                    indicators['volume_ma_21'] = valid_volumes.rolling(window=21).mean().iloc[-1]
+                else:
+                    indicators['volume_ma_21'] = indicators.get('avg_volume', 1000)
+                
+                # Volume Rate of Change - محسن
+                if len(valid_volumes) >= 10:
+                    vol_10_ago = valid_volumes.iloc[-10] if len(valid_volumes) >= 10 else valid_volumes.iloc[0]
+                    current_vol = indicators.get('current_volume', 1000)
+                    if vol_10_ago > 0:
+                        indicators['volume_roc'] = ((current_vol - vol_10_ago) / vol_10_ago) * 100
+                    else:
+                        indicators['volume_roc'] = 0
+                else:
+                    indicators['volume_roc'] = 0
+                    
+            except Exception as e:
+                logger.warning(f"[WARNING] فشل في حساب مؤشرات الحجم الإضافية لـ {symbol}: {e}")
+                # قيم افتراضية آمنة
+                current_vol = indicators.get('current_volume', 1000)
+                indicators['volume_trend_5'] = current_vol
+                indicators['volume_trend_10'] = current_vol
+                indicators['volume_ma_9'] = current_vol
+                indicators['volume_ma_21'] = current_vol
+                indicators['volume_roc'] = 0
+                
+            # تفسير حجم التداول المتقدم - يتم حسابه دائماً
+            try:
                 volume_signals = []
-                if indicators['volume_ratio'] > 2.0:
+                volume_ratio = indicators.get('volume_ratio', 1.0)
+                
+                # تصنيف نسبة الحجم
+                if volume_ratio > 2.0:
                     volume_signals.append('حجم عالي جداً - اهتمام قوي')
-                elif indicators['volume_ratio'] > 1.5:
+                elif volume_ratio >= 1.5:  # تغيير من > إلى >= لتطابق 1.5 تماماً
                     volume_signals.append('حجم عالي - نشاط متزايد')
-                elif indicators['volume_ratio'] < 0.3:
+                elif volume_ratio <= 0.3:  # تغيير من < إلى <= لتطابق 0.3 تماماً
                     volume_signals.append('حجم منخفض جداً - ضعف اهتمام')
-                elif indicators['volume_ratio'] < 0.5:
+                elif volume_ratio < 0.5:
                     volume_signals.append('حجم منخفض - نشاط محدود')
                 else:
                     volume_signals.append('حجم طبيعي')
                 
                 # تحليل اتجاه حجم التداول
-                if indicators['volume_trend_5'] > indicators['volume_trend_10'] * 1.2:
-                    volume_signals.append('حجم في ازدياد')
-                elif indicators['volume_trend_5'] < indicators['volume_trend_10'] * 0.8:
-                    volume_signals.append('حجم في انخفاض')
+                vol_trend_5 = indicators.get('volume_trend_5', 1000)
+                vol_trend_10 = indicators.get('volume_trend_10', 1000)
+                
+                if vol_trend_10 > 0:  # تجنب القسمة على صفر
+                    if vol_trend_5 > vol_trend_10 * 1.2:
+                        volume_signals.append('حجم في ازدياد')
+                    elif vol_trend_5 < vol_trend_10 * 0.8:
+                        volume_signals.append('حجم في انخفاض')
                 
                 # Volume-Price Analysis (VPA)
                 price_change = indicators.get('price_change_pct', 0)
-                if abs(price_change) > 0.5 and indicators['volume_ratio'] > 1.5:
+                if abs(price_change) > 0.5 and volume_ratio > 1.5:
                     volume_signals.append('تأكيد قوي للحركة السعرية')
-                elif abs(price_change) > 0.5 and indicators['volume_ratio'] < 0.8:
+                elif abs(price_change) > 0.5 and volume_ratio < 0.8:
                     volume_signals.append('ضعف في تأكيد الحركة السعرية')
                 
+                # ضمان وجود تفسير دائماً
+                if not volume_signals:
+                    volume_signals.append('حجم طبيعي - نشاط عادي')
+                
                 indicators['volume_interpretation'] = ' | '.join(volume_signals)
-                indicators['volume_strength'] = 'قوي' if indicators['volume_ratio'] > 1.5 else 'متوسط' if indicators['volume_ratio'] > 0.8 else 'ضعيف'
+                indicators['volume_strength'] = 'قوي' if volume_ratio > 1.5 else 'متوسط' if volume_ratio > 0.8 else 'ضعيف'
+                
+            except Exception as e:
+                logger.warning(f"[WARNING] فشل في تفسير حجم التداول لـ {symbol}: {e}")
+                # قيم افتراضية آمنة
+                indicators['volume_interpretation'] = 'حجم طبيعي - بيانات محدودة'
+                indicators['volume_strength'] = 'متوسط'
             
             # Stochastic Oscillator - تحليل متقدم
             if len(df) >= 14:
