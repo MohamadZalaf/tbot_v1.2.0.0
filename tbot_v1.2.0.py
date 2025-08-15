@@ -422,7 +422,7 @@ def handle_renew_api_context_command(message):
     """معالج أمر تجديد سياق API - لإغلاق جميع المحادثات والبدء من جديد - للمطور فقط"""
     try:
         user_id = message.from_user.id
-        DEVELOPER_ID = 123456789  # يجب تغيير هذا ID للمطور الفعلي
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
         
         # التحقق من أن المستخدم هو المطور
         if user_id != DEVELOPER_ID:
