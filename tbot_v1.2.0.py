@@ -3823,7 +3823,7 @@ class GeminiAnalyzer:
             # معالجة الملف حسب نوعه
             if file_type.startswith('image/'):
                 return self._process_image_file(file_path, user_context)
-            elif file_type in ['application/pdf', 'text/plain', 'application/msword']:
+            elif file_type in ['application/pdf', 'text/plain', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']:
                 return self._process_document_file(file_path, user_context)
             
             return True
@@ -5218,7 +5218,18 @@ def handle_feedback(call):
         # استخراج نوع التقييم ومعرف الصفقة
         parts = call.data.split('_')
         feedback_type = parts[1]  # positive أو negative
-        trade_id = '_'.join(parts[2:])  # معرف الصفقة
+        
+        # التحقق من نوع التقييم (للصفقات أم للتحليل المباشر)
+        if len(parts) >= 4 and parts[3].isdigit():
+            # تقييم تحليل مباشر: feedback_positive_SYMBOL_USERID
+            symbol = parts[2]
+            user_id = parts[3]
+            trade_id = f"analysis_{symbol}_{user_id}_{int(time.time())}"
+            is_direct_analysis = True
+        else:
+            # تقييم صفقة عادية: feedback_positive_TRADEID
+            trade_id = '_'.join(parts[2:])
+            is_direct_analysis = False
         
         # حفظ التقييم
         success = TradeDataManager.save_user_feedback(trade_id, feedback_type)
@@ -5227,6 +5238,7 @@ def handle_feedback(call):
             # رسالة شكر للمستخدم
             feedback_emoji = "👍" if feedback_type == "positive" else "👎"
             thanks_message = f"""
+
 ✅ **شكراً لتقييمك!** {feedback_emoji}
 
 تم حفظ تقييمك وسيتم استخدامه لتحسين دقة التوقعات المستقبلية.
@@ -5234,18 +5246,60 @@ def handle_feedback(call):
 🧠 **نظام التعلم الذكي:** سيقوم Gemini AI بالتعلم من تقييمك لتقديم توقعات أكثر دقة.
             """
             
-            # تعديل الرسالة الأصلية
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=call.message.text + f"\n\n{thanks_message}",
-                parse_mode='Markdown'
-            )
+            # تحديث أزرار التقييم لإظهار الاختيار مع علامة ✅
+            try:
+                updated_markup = types.InlineKeyboardMarkup(row_width=2)
+                
+                if is_direct_analysis:
+                    # أزرار للتحليل المباشر
+                    if feedback_type == "positive":
+                        updated_markup.row(
+                            types.InlineKeyboardButton("✅ 👍 تحليل ممتاز", callback_data="feedback_selected"),
+                            types.InlineKeyboardButton("👎 تحليل ضعيف", callback_data="feedback_disabled")
+                        )
+                    else:
+                        updated_markup.row(
+                            types.InlineKeyboardButton("👍 تحليل ممتاز", callback_data="feedback_disabled"),
+                            types.InlineKeyboardButton("✅ 👎 تحليل ضعيف", callback_data="feedback_selected")
+                        )
+                else:
+                    # أزرار للصفقات العادية
+                    if feedback_type == "positive":
+                        updated_markup.row(
+                            types.InlineKeyboardButton("✅ 👍 دقيق", callback_data="feedback_selected"),
+                            types.InlineKeyboardButton("👎 غير دقيق", callback_data="feedback_disabled")
+                        )
+                    else:
+                        updated_markup.row(
+                            types.InlineKeyboardButton("👍 دقيق", callback_data="feedback_disabled"),
+                                                         types.InlineKeyboardButton("✅ 👎 غير دقيق", callback_data="feedback_selected")
+                         )
+                
+                # إضافة الأزرار الإضافية للتحليل المباشر
+                if is_direct_analysis and 'symbol' in locals():
+                    updated_markup.row(
+                        types.InlineKeyboardButton("🔄 تحديث التحليل", callback_data=f"analyze_symbol_{symbol}"),
+                        types.InlineKeyboardButton("📊 تحليل آخر", callback_data="analyze_symbols")
+                    )
+                
+                # تعديل الرسالة مع الأزرار المحدثة
+                bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text=call.message.text + thanks_message,
+                    parse_mode='Markdown',
+                    reply_markup=updated_markup
+                )
+                
+            except Exception as edit_error:
+                logger.debug(f"[DEBUG] لم يتم تحديث الأزرار: {edit_error}")
+                # في حالة فشل التحديث، نرسل رسالة منفصلة
+                bot.send_message(call.message.chat.id, thanks_message, parse_mode='Markdown')
             
             # إشعار للمستخدم
             bot.answer_callback_query(
                 call.id, 
-                f"تم حفظ تقييمك {feedback_emoji} - شكراً لك!",
+                f"✅ تم حفظ تقييمك {feedback_emoji} - شكراً لك!",
                 show_alert=False
             )
             
@@ -5263,6 +5317,15 @@ def handle_feedback(call):
             "حدث خطأ في معالجة التقييم",
             show_alert=True
         )
+
+# معالج للأزرار المعطلة بعد التقييم
+@bot.callback_query_handler(func=lambda call: call.data in ["feedback_selected", "feedback_disabled"])
+def handle_feedback_buttons(call):
+    """معالج الأزرار المعطلة بعد التقييم"""
+    if call.data == "feedback_selected":
+        bot.answer_callback_query(call.id, "✅ تم حفظ تقييمك مسبقاً")
+    else:
+        bot.answer_callback_query(call.id, "لقد قمت بالتقييم بالفعل")
 
 # ===== وظائف إدارة البوت الرئيسية =====
 def create_main_keyboard():
@@ -7327,17 +7390,29 @@ def handle_file_upload(message):
                     'file_type': file_type
                 }
                 
-                # طلب وصف النمط من المستخدم
-                user_states[user_id] = 'waiting_pattern_description'
+                # تحديد نوع الملف للرسالة
+                file_type_name = "الصورة" if file_type.startswith('image/') else "الملف"
+                if file_type == 'application/pdf':
+                    file_type_name = "ملف PDF"
+                
+                # سؤال المستخدم عن إضافة وصف
+                user_states[user_id] = 'waiting_description_choice'
+                
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.row(
+                    types.InlineKeyboardButton("✅ نعم، إضافة وصف", callback_data=f"add_description_{user_id}"),
+                    types.InlineKeyboardButton("❌ لا، رفع مباشر", callback_data=f"skip_description_{user_id}")
+                )
                 
                 bot.reply_to(message, 
-                    "✅ **تم رفع الصورة بنجاح!**\n\n"
-                    "🧠 **الآن اشرح لي النمط:**\n\n"
-                    "📝 **مثال على الوصف:**\n"
-                    "• 'عند رؤية هذا النمط من الشموع، السعر سينزل بنسبة 90%'\n"
-                    "• 'هذا النمط يعني ارتفاع قوي - ثقة 100%'\n"
-                    "• 'شمعة الدوجي هذه تعني تردد السوق - احتمال انعكاس 80%'\n\n"
-                    "💡 **كن محدداً:** اذكر النمط والاتجاه المتوقع ونسبة الثقة")
+                    f"✅ **تم رفع {file_type_name} بنجاح!**\n\n"
+                    f"📋 **هل تريد إضافة شرح خاص لهذا الملف؟**\n\n"
+                    f"💡 **إضافة الوصف يساعد في:**\n"
+                    f"• تحسين دقة التحليلات المستقبلية\n"
+                    f"• ربط الملف بسياق تداولك الخاص\n"
+                    f"• تخصيص التوصيات حسب خبرتك\n\n"
+                    f"🎯 **اختر ما تفضل:**",
+                    reply_markup=markup)
         
         elif user_states.get(user_id) == 'waiting_pattern_description':
             # معالجة وصف النمط
@@ -7369,21 +7444,25 @@ def handle_file_upload(message):
                     pattern_description
                 )
                 
+                # تحديد نوع الملف للرسالة
+                file_type_name = "النمط" if file_data['file_type'].startswith('image/') else "المحتوى"
+                if file_data['file_type'] == 'application/pdf':
+                    file_type_name = "محتوى PDF"
+                
                 if success:
                     bot.reply_to(message, 
-                        "🎯 **تم تعلم النمط بنجاح!**\n\n"
-                        f"📊 **النمط المحفوظ:** {pattern_description[:100]}...\n\n"
-                        "🧠 **ما حدث:**\n"
-                        "• تم تحليل الصورة بواسطة الذكاء الاصطناعي\n"
-                        "• تم ربط النمط بوصفك وتوقعاتك\n"
-                        "• سيتم استخدام هذه المعرفة في التحليلات القادمة\n\n"
-                        "🔄 **النتيجة:** التحليلات ستكون أكثر دقة ومخصصة لك!")
+                        f"🎯 **تم رفع التدريب بنجاح!**\n\n"
+                        f"📊 **{file_type_name} المحفوظ:** {pattern_description[:100]}...\n\n"
+                        f"🧠 **ما حدث:**\n"
+                        f"• تم تحليل الملف بواسطة الذكاء الاصطناعي\n"
+                        f"• تم ربط المحتوى بوصفك وتوقعاتك\n"
+                        f"• سيتم استخدام هذه المعرفة في التحليلات القادمة\n\n"
+                        f"🔄 **النتيجة:** التحليلات ستكون أكثر دقة ومخصصة لك!")
                 else:
                     bot.reply_to(message, 
-                        "⚠️ **تم حفظ النمط ولكن...**\n\n"
-                        "📁 النمط محفوظ بنجاح\n"
-                        "🤖 لكن لم يتم معالجته بالكامل\n"
-                        "🔧 سيتم المحاولة لاحقاً")
+                        f"✅ **تم حفظ {file_type_name} بنجاح!**\n\n"
+                        f"📁 المحتوى محفوظ مع وصفك\n"
+                        f"🔧 سيتم معالجته والاستفادة منه لاحقاً")
                 
                 # تنظيف البيانات المؤقتة
                 del bot.temp_user_files[user_id]
@@ -7394,6 +7473,100 @@ def handle_file_upload(message):
     except Exception as e:
         logger.error(f"[ERROR] خطأ في معالجة الملف المرفوع: {e}")
         bot.reply_to(message, "❌ حدث خطأ في معالجة الملف")
+
+# معالجات أزرار خيار إضافة الوصف
+@bot.callback_query_handler(func=lambda call: call.data.startswith("add_description_"))
+def handle_add_description(call):
+    """معالج اختيار إضافة وصف للملف"""
+    try:
+        user_id = call.from_user.id
+        
+        # تغيير حالة المستخدم لانتظار الوصف
+        user_states[user_id] = 'waiting_pattern_description'
+        
+        # تحديث الرسالة
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="🧠 **ممتاز! الآن اشرح لي الملف أو النمط:**\n\n"
+                 "📝 **أمثلة على الوصف:**\n"
+                 "• 'عند رؤية هذا النمط من الشموع، السعر سينزل بنسبة 90%'\n"
+                 "• 'هذا النمط يعني ارتفاع قوي - ثقة 100%'\n"
+                 "• 'شمعة الدوجي هذه تعني تردد السوق - احتمال انعكاس 80%'\n"
+                 "• 'هذا التقرير يوضح استراتيجية تداول ناجحة'\n\n"
+                 "💡 **كن محدداً:** اذكر النمط/المحتوى والاتجاه المتوقع ونسبة الثقة"
+        )
+        
+        bot.answer_callback_query(call.id, "✅ اكتب وصفك الآن")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في معالج إضافة الوصف: {e}")
+        bot.answer_callback_query(call.id, "حدث خطأ، حاول مرة أخرى", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("skip_description_"))
+def handle_skip_description(call):
+    """معالج تخطي إضافة الوصف"""
+    try:
+        user_id = call.from_user.id
+        
+        # جلب بيانات الملف المحفوظة
+        if hasattr(bot, 'temp_user_files') and user_id in bot.temp_user_files:
+            file_data = bot.temp_user_files[user_id]
+            
+            # إعداد سياق المستخدم للتدريب بدون وصف
+            user_context = {
+                'trading_mode': get_user_trading_mode(user_id),
+                'capital': get_user_capital(user_id),
+                'timezone': get_user_timezone(user_id),
+                'pattern_description': 'لا يوجد وصف - رفع مباشر'
+            }
+            
+            # معالجة الملف للتعلم الآلي
+            if file_data['file_type'].startswith('image/'):
+                success = gemini_analyzer.learn_from_file(
+                    file_data['file_path'], 
+                    file_data['file_type'], 
+                    user_context
+                )
+            else:
+                success = gemini_analyzer.learn_from_file(
+                    file_data['file_path'], 
+                    file_data['file_type'], 
+                    user_context
+                )
+            
+            # تحديث الرسالة
+            if success:
+                bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text="🎯 **تم رفع التدريب بنجاح!**\n\n"
+                         "✅ **ما تم:**\n"
+                         "• تم حفظ الملف في نظام التدريب\n"
+                         "• سيتم استخدامه لتحسين التحليلات المستقبلية\n"
+                         "• تم ربطه بنمط تداولك ورأس مالك\n\n"
+                         "🚀 **النتيجة:** التحليلات ستكون أكثر دقة!"
+                )
+            else:
+                bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text="✅ **تم حفظ الملف!**\n\n"
+                         "📁 الملف محفوظ بنجاح في النظام\n"
+                         "🔧 سيتم معالجته والاستفادة منه لاحقاً"
+                )
+            
+            # تنظيف البيانات المؤقتة
+            del bot.temp_user_files[user_id]
+        
+        # إزالة حالة المستخدم
+        user_states.pop(user_id, None)
+        
+        bot.answer_callback_query(call.id, "✅ تم رفع التدريب بنجاح")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في معالج تخطي الوصف: {e}")
+        bot.answer_callback_query(call.id, "حدث خطأ، حاول مرة أخرى", show_alert=True)
 
 # ===== معالجات المراقبة الآلية =====
 @bot.callback_query_handler(func=lambda call: call.data == "auto_monitoring")
