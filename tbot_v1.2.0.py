@@ -363,7 +363,7 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         if target2:
             body += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
         body += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
-                body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
+        body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
         body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
         
         # الأخبار الاقتصادية
@@ -1338,7 +1338,7 @@ class MT5Manager:
                 else:
                     indicators['macd_interpretation'] = 'محايد'
             
-            # حجم التداول - تحليل متقدم مع معالجة الأخطاء
+            # حجم التداول - تحليل متقدم مع معالجة الأخطاء محسنة
             try:
                 # التأكد من وجود عمود tick_volume صحيح
                 if 'tick_volume' in df.columns and len(df) > 0:
@@ -1347,72 +1347,178 @@ class MT5Manager:
                     # التأكد من أن الحجم رقم صحيح
                     if pd.isna(indicators['current_volume']) or indicators['current_volume'] <= 0:
                         # استخدام real_volume كبديل
-                        if 'real_volume' in df.columns:
-                            indicators['current_volume'] = df['real_volume'].iloc[-1]
+                        if 'real_volume' in df.columns and len(df) > 0:
+                            real_vol = df['real_volume'].iloc[-1]
+                            if not pd.isna(real_vol) and real_vol > 0:
+                                indicators['current_volume'] = real_vol
+                            else:
+                                # استخدام متوسط الحجم من البيانات المتاحة
+                                valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
+                                if len(valid_volumes) > 0:
+                                    indicators['current_volume'] = valid_volumes.mean()
+                                else:
+                                    indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
                         else:
-                            indicators['current_volume'] = 1  # قيمة افتراضية
+                            # محاولة حساب من البيانات المتاحة
+                            valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
+                            if len(valid_volumes) > 0:
+                                indicators['current_volume'] = valid_volumes.iloc[-1]
+                            else:
+                                indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
                 else:
                     logger.warning(f"[WARNING] عمود الحجم غير متوفر لـ {symbol}")
-                    indicators['current_volume'] = 1  # قيمة افتراضية
+                    # محاولة استخدام بيانات الحجم من المصادر الأخرى
+                    current_tick = self.get_live_price(symbol)
+                    if current_tick and current_tick.get('volume', 0) > 0:
+                        indicators['current_volume'] = current_tick['volume']
+                        logger.info(f"[INFO] تم استخدام حجم التداول من البيانات اللحظية لـ {symbol}")
+                    else:
+                        indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
                     
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في جلب الحجم الحالي لـ {symbol}: {e}")
-                indicators['current_volume'] = 1  # قيمة افتراضية
-            
-            if len(df) >= 20:
+                # محاولة الحصول على حجم من البيانات اللحظية كملاذ أخير
                 try:
-                    indicators['avg_volume'] = df['tick_volume'].rolling(window=20).mean().iloc[-1]
-                    
-                    # التأكد من صحة متوسط الحجم
-                    if pd.isna(indicators['avg_volume']) or indicators['avg_volume'] <= 0:
-                        indicators['avg_volume'] = indicators['current_volume']
-                    
-                    indicators['volume_ratio'] = indicators['current_volume'] / indicators['avg_volume']
-                except Exception as e:
-                    logger.warning(f"[WARNING] فشل في حساب متوسط الحجم لـ {symbol}: {e}")
-                    indicators['avg_volume'] = indicators['current_volume']
+                    current_tick = self.get_live_price(symbol)
+                    if current_tick and current_tick.get('volume', 0) > 0:
+                        indicators['current_volume'] = current_tick['volume']
+                        logger.info(f"[INFO] تم استخدام حجم التداول من البيانات اللحظية كملاذ أخير لـ {symbol}")
+                    else:
+                        indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+                except:
+                    indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+            
+            # حساب متوسط الحجم ونسبة الحجم - محسن
+            try:
+                if len(df) >= 20:
+                    # حساب متوسط الحجم مع تنظيف البيانات
+                    valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
+                    if len(valid_volumes) >= 10:  # نحتاج على الأقل 10 نقاط صحيحة
+                        indicators['avg_volume'] = valid_volumes.rolling(window=min(20, len(valid_volumes))).mean().iloc[-1]
+                    else:
+                        indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                elif len(df) >= 5:
+                    # للبيانات المحدودة، استخدم ما متاح
+                    valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
+                    if len(valid_volumes) > 0:
+                        indicators['avg_volume'] = valid_volumes.mean()
+                    else:
+                        indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                else:
+                    # بيانات قليلة جداً
+                    indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                
+                # التأكد من صحة متوسط الحجم
+                if pd.isna(indicators['avg_volume']) or indicators['avg_volume'] <= 0:
+                    indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                
+                # حساب نسبة الحجم
+                current_vol = indicators.get('current_volume', 1000)
+                avg_vol = indicators.get('avg_volume', 1000)
+                
+                if avg_vol > 0:
+                    indicators['volume_ratio'] = current_vol / avg_vol
+                else:
                     indicators['volume_ratio'] = 1.0
+                    
+            except Exception as e:
+                logger.warning(f"[WARNING] فشل في حساب متوسط الحجم لـ {symbol}: {e}")
+                # قيم افتراضية آمنة
+                indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                indicators['volume_ratio'] = 1.0
                 
-                # حجم التداول لآخر 5 فترات للمقارنة
-                indicators['volume_trend_5'] = df['tick_volume'].tail(5).mean()
-                indicators['volume_trend_10'] = df['tick_volume'].tail(10).mean()
+            # حساب مؤشرات الحجم الإضافية - محسن
+            try:
+                # حجم التداول لآخر 5 و 10 فترات للمقارنة
+                valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
+                if len(valid_volumes) >= 5:
+                    indicators['volume_trend_5'] = valid_volumes.tail(5).mean()
+                else:
+                    indicators['volume_trend_5'] = indicators.get('current_volume', 1000)
                 
-                # Volume Moving Average (VMA)
-                indicators['volume_ma_9'] = df['tick_volume'].rolling(window=9).mean().iloc[-1]
-                indicators['volume_ma_21'] = df['tick_volume'].rolling(window=21).mean().iloc[-1] if len(df) >= 21 else indicators['avg_volume']
+                if len(valid_volumes) >= 10:
+                    indicators['volume_trend_10'] = valid_volumes.tail(10).mean()
+                else:
+                    indicators['volume_trend_10'] = indicators.get('current_volume', 1000)
                 
-                # Volume Rate of Change
-                if len(df) >= 10:
-                    indicators['volume_roc'] = ((indicators['current_volume'] - df['tick_volume'].iloc[-10]) / df['tick_volume'].iloc[-10]) * 100
+                # Volume Moving Average (VMA) - محسن
+                if len(valid_volumes) >= 9:
+                    indicators['volume_ma_9'] = valid_volumes.rolling(window=9).mean().iloc[-1]
+                else:
+                    indicators['volume_ma_9'] = indicators.get('avg_volume', 1000)
                 
-                # تفسير حجم التداول المتقدم
+                if len(valid_volumes) >= 21:
+                    indicators['volume_ma_21'] = valid_volumes.rolling(window=21).mean().iloc[-1]
+                else:
+                    indicators['volume_ma_21'] = indicators.get('avg_volume', 1000)
+                
+                # Volume Rate of Change - محسن
+                if len(valid_volumes) >= 10:
+                    vol_10_ago = valid_volumes.iloc[-10] if len(valid_volumes) >= 10 else valid_volumes.iloc[0]
+                    current_vol = indicators.get('current_volume', 1000)
+                    if vol_10_ago > 0:
+                        indicators['volume_roc'] = ((current_vol - vol_10_ago) / vol_10_ago) * 100
+                    else:
+                        indicators['volume_roc'] = 0
+                else:
+                    indicators['volume_roc'] = 0
+                    
+            except Exception as e:
+                logger.warning(f"[WARNING] فشل في حساب مؤشرات الحجم الإضافية لـ {symbol}: {e}")
+                # قيم افتراضية آمنة
+                current_vol = indicators.get('current_volume', 1000)
+                indicators['volume_trend_5'] = current_vol
+                indicators['volume_trend_10'] = current_vol
+                indicators['volume_ma_9'] = current_vol
+                indicators['volume_ma_21'] = current_vol
+                indicators['volume_roc'] = 0
+                
+            # تفسير حجم التداول المتقدم - يتم حسابه دائماً
+            try:
                 volume_signals = []
-                if indicators['volume_ratio'] > 2.0:
+                volume_ratio = indicators.get('volume_ratio', 1.0)
+                
+                # تصنيف نسبة الحجم
+                if volume_ratio > 2.0:
                     volume_signals.append('حجم عالي جداً - اهتمام قوي')
-                elif indicators['volume_ratio'] > 1.5:
+                elif volume_ratio >= 1.5:  # تغيير من > إلى >= لتطابق 1.5 تماماً
                     volume_signals.append('حجم عالي - نشاط متزايد')
-                elif indicators['volume_ratio'] < 0.3:
+                elif volume_ratio <= 0.3:  # تغيير من < إلى <= لتطابق 0.3 تماماً
                     volume_signals.append('حجم منخفض جداً - ضعف اهتمام')
-                elif indicators['volume_ratio'] < 0.5:
+                elif volume_ratio < 0.5:
                     volume_signals.append('حجم منخفض - نشاط محدود')
                 else:
                     volume_signals.append('حجم طبيعي')
                 
                 # تحليل اتجاه حجم التداول
-                if indicators['volume_trend_5'] > indicators['volume_trend_10'] * 1.2:
-                    volume_signals.append('حجم في ازدياد')
-                elif indicators['volume_trend_5'] < indicators['volume_trend_10'] * 0.8:
-                    volume_signals.append('حجم في انخفاض')
+                vol_trend_5 = indicators.get('volume_trend_5', 1000)
+                vol_trend_10 = indicators.get('volume_trend_10', 1000)
+                
+                if vol_trend_10 > 0:  # تجنب القسمة على صفر
+                    if vol_trend_5 > vol_trend_10 * 1.2:
+                        volume_signals.append('حجم في ازدياد')
+                    elif vol_trend_5 < vol_trend_10 * 0.8:
+                        volume_signals.append('حجم في انخفاض')
                 
                 # Volume-Price Analysis (VPA)
                 price_change = indicators.get('price_change_pct', 0)
-                if abs(price_change) > 0.5 and indicators['volume_ratio'] > 1.5:
+                if abs(price_change) > 0.5 and volume_ratio > 1.5:
                     volume_signals.append('تأكيد قوي للحركة السعرية')
-                elif abs(price_change) > 0.5 and indicators['volume_ratio'] < 0.8:
+                elif abs(price_change) > 0.5 and volume_ratio < 0.8:
                     volume_signals.append('ضعف في تأكيد الحركة السعرية')
                 
+                # ضمان وجود تفسير دائماً
+                if not volume_signals:
+                    volume_signals.append('حجم طبيعي - نشاط عادي')
+                
                 indicators['volume_interpretation'] = ' | '.join(volume_signals)
-                indicators['volume_strength'] = 'قوي' if indicators['volume_ratio'] > 1.5 else 'متوسط' if indicators['volume_ratio'] > 0.8 else 'ضعيف'
+                indicators['volume_strength'] = 'قوي' if volume_ratio > 1.5 else 'متوسط' if volume_ratio > 0.8 else 'ضعيف'
+                
+            except Exception as e:
+                logger.warning(f"[WARNING] فشل في تفسير حجم التداول لـ {symbol}: {e}")
+                # قيم افتراضية آمنة
+                indicators['volume_interpretation'] = 'حجم طبيعي - بيانات محدودة'
+                indicators['volume_strength'] = 'متوسط'
             
             # Stochastic Oscillator - تحليل متقدم
             if len(df) >= 14:
@@ -2358,14 +2464,15 @@ class GeminiAnalyzer:
             5. **إدارة المخاطر المتقدمة:** اقترح حجم الصفقة (Lot Size) وحساب الخسارة المحتملة بالنقاط
             6. **تحليل التباين:** لا تتجاهل التباين بين المؤشرات (مثلاً: تقاطع سلبي في MACD مع RSI صاعد)
             
-            7. **⚠️ CRITICAL - نسبة النجاح المحسوبة بناءً على تحليلك:**
+            7. **⚠️ CRITICAL - نسبة النجاح المحسوبة بناءً على تحليلك (0-100%):**
             - احسب نسبة النجاح الفعلية بناءً على قوة الإشارات المتاحة
             - اجمع نقاط جميع المؤشرات واحسب النسبة النهائية
+            - النطاق الكامل: 0% إلى 100% - لا تتردد في استخدام النطاق كاملاً
             - يجب أن تكون النسبة انعكاساً حقيقياً لجودة الإشارات وليس رقماً عشوائياً
             - اكتب بوضوح: "نسبة نجاح الصفقة: X%" حيث X هو الرقم المحسوب من تحليلك
-            - إذا كانت الإشارات متضاربة جداً، اكتب نسبة منخفضة (30-50%)
-            - إذا كانت جميع المؤشرات متفقة وقوية، اكتب نسبة عالية (75-90%)
-            - إذا كانت الإشارات متوسطة، اكتب نسبة متوسطة (55-75%)
+            - إذا كانت الإشارات متضاربة جداً أو معدومة، اكتب نسبة منخفضة (5-35%)
+            - إذا كانت جميع المؤشرات متفقة وقوية، اكتب نسبة عالية (75-95%)
+            - إذا كانت الإشارات متوسطة، اكتب نسبة متوسطة (45-75%)
             
             ## ⚠️ تحذيرات مهمة وقواعد المصداقية:
             
@@ -2379,11 +2486,13 @@ class GeminiAnalyzer:
             - للمؤشرات المتفقة بقوة مع دعم الأخبار ودون تباين: 75-90%
             - تذكر: أنك تعمل ضمن غرفة تداول احترافية ولا يقل تحليلك جودة عن كبار المتداولين والمؤسسات
             
-            **أمثلة على نسب صحيحة:**
+            **أمثلة على نسب صحيحة (نطاق 0-100%):**
+            - إشارة معدومة أو متضاربة جداً: "نسبة نجاح الصفقة: 15%" 
             - إشارة ضعيفة مع تضارب: "نسبة نجاح الصفقة: 28%" 
             - إشارة متوسطة: "نسبة نجاح الصفقة: 54%"
             - إشارة قوية مع دعم أخبار: "نسبة نجاح الصفقة: 83%"
             - إشارة ممتازة نادرة: "نسبة نجاح الصفقة: 91%"
+            - إشارة استثنائية مع توافق مثالي: "نسبة نجاح الصفقة: 97%"
             
             **التحقق النهائي قبل الإجابة:**
             1. هل نسبة النجاح تعكس حقاً قوة/ضعف التحليل؟
@@ -2399,13 +2508,15 @@ class GeminiAnalyzer:
             - تحذيرات مناسبة حسب مستوى المخاطر
             - شرح أسباب النسبة المحسوبة
             
-            **⚠️ مستويات التحذير حسب نسبة النجاح:**
-            - 90%+ : "إشارة استثنائية 💎"
-            - 80-89%: "إشارة عالية الجودة 🔥" 
-            - 70-79%: "إشارة جيدة ✅"
-            - 60-69%: "إشارة متوسطة ⚠️ - مخاطر متوسطة"
-            - 50-59%: "إشارة ضعيفة ⚠️ - مخاطر عالية"
-            - أقل من 50%: "إشارة ضعيفة جداً 🚨 - تجنب التداول"
+            **⚠️ مستويات التحذير حسب نسبة النجاح (0-100%):**
+            - 95%+ : "إشارة استثنائية نادرة 💎"
+            - 85-94%: "إشارة ممتازة 🔥" 
+            - 75-84%: "إشارة عالية الجودة ✅"
+            - 65-74%: "إشارة جيدة 📈"
+            - 50-64%: "إشارة متوسطة ⚠️ - مخاطر متوسطة"
+            - 35-49%: "إشارة ضعيفة ⚠️ - مخاطر عالية"
+            - 20-34%: "إشارة ضعيفة جداً 🚨 - تجنب التداول"
+            - أقل من 20%: "إشارة معدومة 🛑 - لا تتداول"
             
             **🔥 تذكر:** أنت تعمل كخبير احترافي في غرفة تداول مؤسسية. قدم التحليل الكامل والشفاف مع التحذيرات المناسبة. المتداول يعتمد على تحليلك في اتخاذ قرارات مالية مهمة جداً!
             
@@ -2676,11 +2787,11 @@ class GeminiAnalyzer:
             return 65  # متوسط
 
     def _extract_success_rate_from_ai(self, text: str) -> float:
-        """استخراج نسبة النجاح المحددة من الذكاء الاصطناعي"""
+        """استخراج نسبة النجاح المحددة من الذكاء الاصطناعي - محسن لنطاق 0-100%"""
         try:
             import re
             
-            # البحث عن نص "نسبة نجاح الصفقة" متبوعاً برقم ونسبة مئوية
+            # البحث عن نص "نسبة نجاح الصفقة" متبوعاً برقم ونسبة مئوية - نطاق موسع
             patterns = [
                 r'نسبة نجاح الصفقة:?\s*(\d+(?:\.\d+)?)%',
                 r'نسبة النجاح:?\s*(\d+(?:\.\d+)?)%',
@@ -2688,34 +2799,53 @@ class GeminiAnalyzer:
                 r'معدل النجاح:?\s*(\d+(?:\.\d+)?)%',
                 r'success rate:?\s*(\d+(?:\.\d+)?)%',
                 r'نسبة\s+نجاح\s+(?:الصفقة|التداول):?\s*(\d+(?:\.\d+)?)%',
-                # البحث في نهاية النص
+                # أنماط إضافية للتأكد من تغطية شاملة
                 r'النسبة:?\s*(\d+(?:\.\d+)?)%',
                 r'التوقع:?\s*(\d+(?:\.\d+)?)%',
-                # أنماط إضافية للتأكد
                 r'نسبة\s*:\s*(\d+(?:\.\d+)?)%',
-                r'النجاح\s*:\s*(\d+(?:\.\d+)?)%'
+                r'النجاح\s*:\s*(\d+(?:\.\d+)?)%',
+                r'دقة\s+(?:التحليل|التوقع):?\s*(\d+(?:\.\d+)?)%',
+                r'فرصة\s+(?:النجاح|الربح):?\s*(\d+(?:\.\d+)?)%'
             ]
             
+            # البحث في النص كاملاً أولاً
             for pattern in patterns:
                 matches = re.findall(pattern, text, re.IGNORECASE | re.UNICODE)
                 if matches:
-                    success_rate = float(matches[-1])  # أخذ آخر نتيجة
-                    # التأكد من أن النسبة في النطاق المطلوب (نطاق أوسع للمرونة)
-                    if 1 <= success_rate <= 100:
+                    success_rate = float(matches[-1])  # أخذ آخر نتيجة (الأحدث)
+                    # توسيع النطاق المقبول إلى 0-100% كما طلب المستخدم
+                    if 0 <= success_rate <= 100:
                         logger.info(f"[AI_SUCCESS_EXTRACT] تم استخراج نسبة نجاح من AI: {success_rate}%")
                         return success_rate
             
-            # البحث عن أرقام في نهاية النص (آخر 200 حرف)
-            text_end = text[-200:].lower()
-            numbers_at_end = re.findall(r'(\d+)%', text_end)
+            # البحث عن أرقام في نهاية النص (آخر 300 حرف) - نطاق أوسع
+            text_end = text[-300:].lower()
+            numbers_at_end = re.findall(r'(\d+(?:\.\d+)?)%', text_end)
             
             for num_str in reversed(numbers_at_end):  # البدء من النهاية
-                num = float(num_str)
-                if 10 <= num <= 95:
-                    logger.info(f"[AI_SUCCESS_EXTRACT] تم استخراج نسبة من نهاية النص: {num}%")
-                    return num
+                try:
+                    num = float(num_str)
+                    # قبول نطاق أوسع 5-95% لنهاية النص
+                    if 5 <= num <= 95:
+                        logger.info(f"[AI_SUCCESS_EXTRACT] تم استخراج نسبة من نهاية النص: {num}%")
+                        return num
+                except ValueError:
+                    continue
+            
+            # البحث في منتصف النص عن أي نسبة مئوية معقولة
+            all_percentages = re.findall(r'(\d+(?:\.\d+)?)%', text)
+            for percent_str in reversed(all_percentages):  # من النهاية للبداية
+                try:
+                    percent = float(percent_str)
+                    # قبول النطاق الكامل 0-100% في أي مكان
+                    if 0 <= percent <= 100:
+                        logger.info(f"[AI_SUCCESS_EXTRACT] تم استخراج نسبة عامة: {percent}%")
+                        return percent
+                except ValueError:
+                    continue
             
             # إذا لم نجد شيئاً محدداً، نعيد None لاستخدام الطريقة البديلة
+            logger.debug("[AI_SUCCESS_EXTRACT] لم يتم العثور على نسبة نجاح صريحة في النص")
             return None
             
         except Exception as e:
@@ -2954,63 +3084,152 @@ class GeminiAnalyzer:
                             target2 = target2 or current_price * (1 + percentage_move * 2)
                             stop_loss = stop_loss or current_price * (1 - percentage_move * 0.5)
             
-            # حساب النقاط بدقة حسب نوع الرمز مع مراعاة رأس المال والمخاطر
-            def calculate_points_accurately(price_diff, symbol, capital=None, current_price=None):
-                """حساب النقاط بدقة حسب نوع الرمز مع مراعاة رأس المال والمخاطر"""
-                if not price_diff or price_diff == 0:
-                    return 0
+            # دوال حساب النقاط الصحيحة حسب المعادلات المالية الدقيقة
+            def get_asset_type_and_pip_size(symbol):
+                """تحديد نوع الأصل وحجم النقطة بدقة"""
+                symbol = symbol.upper()
                 
-                # الحصول على رأس المال
-                if capital is None:
-                    capital = get_user_capital(user_id) if user_id else 1000
-                
-                # حساب النقاط الأساسية حسب نوع الرمز
-                base_points = 0
-                
-                # أزواج العملات الرئيسية
+                # 💱 الفوركس
                 if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
                     if any(symbol.endswith(yen) for yen in ['JPY']):
-                        base_points = abs(price_diff) * 100  # أزواج الين
+                        return 'forex_jpy', 0.01  # أزواج الين
                     else:
-                        base_points = abs(price_diff) * 10000  # العملات الرئيسية
-                # المعادن النفيسة
-                elif any(symbol.startswith(metal) for metal in ['XAU', 'XAG', 'GOLD', 'SILVER']):
-                    base_points = abs(price_diff) * 10
-                # العملات الرقمية
-                elif any(symbol.startswith(crypto) for crypto in ['BTC', 'ETH', 'LTC', 'XRP']):
-                    base_points = abs(price_diff)
-                # المؤشرات والأسهم
-                elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER']):
-                    base_points = abs(price_diff)
+                        return 'forex_major', 0.0001  # الأزواج الرئيسية
+                
+                # 🪙 المعادن النفيسة
+                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+                    return 'metals', 0.01  # النقطة = 0.01
+                
+                # 🪙 العملات الرقمية
+                elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
+                    if 'BTC' in symbol:
+                        return 'crypto_btc', 1.0  # البيتكوين - نقطة = 1 دولار
+                    else:
+                        return 'crypto_alt', 0.01  # العملات الأخرى
+                
+                # 📈 الأسهم
+                elif any(symbol.startswith(stock) for stock in ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN']):
+                    return 'stocks', 1.0  # النقطة = 1 دولار
+                
+                # 📉 المؤشرات
+                elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER', 'SPX']):
+                    return 'indices', 1.0  # النقطة = 1 وحدة
+                
                 else:
-                    # افتراضي للرموز الأخرى
-                    base_points = abs(price_diff) * 100
-                
-                # تعديل النقاط بناءً على رأس المال (حسابات أكثر دقة)
-                if capital and current_price:
-                    # حساب قيمة النقطة الواحدة بالدولار
-                    pip_value = 0
-                    if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD']) and symbol.endswith('USD'):
-                        pip_value = 10  # العملات الرئيسية مقابل الدولار
-                    elif symbol.startswith('USD') and any(symbol.endswith(curr) for curr in ['JPY', 'CHF', 'CAD']):
-                        pip_value = 10 / current_price if current_price > 0 else 10
-                    elif any(symbol.startswith(metal) for metal in ['XAU', 'XAG', 'GOLD']):
-                        pip_value = 100  # الذهب
+                    return 'unknown', 0.0001  # افتراضي
+            
+            def calculate_pip_value(symbol, current_price, contract_size=100000):
+                """حساب قيمة النقطة باستخدام المعادلة الصحيحة"""
+                try:
+                    asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+                    
+                    if asset_type == 'forex_major':
+                        # قيمة النقطة = (حجم العقد × حجم النقطة) ÷ سعر الصرف
+                        return (contract_size * pip_size) / current_price if current_price > 0 else 10
+                    
+                    elif asset_type == 'forex_jpy':
+                        # للين الياباني
+                        return (contract_size * pip_size) / current_price if current_price > 0 else 10
+                    
+                    elif asset_type == 'metals':
+                        # قيمة النقطة = حجم العقد × حجم النقطة
+                        return contract_size * pip_size  # 100 أونصة × 0.01 = 1 دولار
+                    
+                    elif asset_type == 'crypto_btc':
+                        # للبيتكوين - قيمة النقطة تعتمد على حجم الصفقة
+                        return contract_size / 100000  # تطبيع حجم العقد
+                    
+                    elif asset_type == 'crypto_alt':
+                        # للعملات الرقمية الأخرى
+                        return contract_size * pip_size
+                    
+                    elif asset_type == 'stocks':
+                        # قيمة النقطة = عدد الأسهم × 1 (كل نقطة = 1 دولار)
+                        # للأسهم، نحتاج لحساب عدد الأسهم الفعلي
+                        shares_count = max(1, contract_size / 5000)  # تحويل حجم العقد لعدد أسهم
+                        return shares_count  # كل نقطة × عدد الأسهم
+                    
+                    elif asset_type == 'indices':
+                        # حجم العقد (بالدولار لكل نقطة) - عادة 1-10 دولار
+                        return 5.0  # متوسط قيمة للمؤشرات
+                    
                     else:
-                        pip_value = 10  # افتراضي
+                        return 10.0  # قيمة افتراضية
+                        
+                except Exception as e:
+                    logger.error(f"خطأ في حساب قيمة النقطة: {e}")
+                    return 10.0
+            
+            def calculate_points_from_price_difference(price_diff, symbol):
+                """حساب عدد النقاط من فرق السعر"""
+                try:
+                    asset_type, pip_size = get_asset_type_and_pip_size(symbol)
                     
-                    # تعديل بناءً على رأس المال (للمحافظة على نسبة مخاطرة مناسبة)
-                    risk_percentage = 0.02  # 2% من رأس المال كحد أقصى للخسارة
-                    max_loss_amount = capital * risk_percentage
+                    if pip_size > 0:
+                        return abs(price_diff) / pip_size
+                    else:
+                        return 0
+                        
+                except Exception as e:
+                    logger.error(f"خطأ في حساب النقاط من فرق السعر: {e}")
+                    return 0
+            
+            def calculate_profit_loss(points, pip_value):
+                """حساب الربح أو الخسارة = عدد النقاط × قيمة النقطة"""
+                try:
+                    return points * pip_value
+                except Exception as e:
+                    logger.error(f"خطأ في حساب الربح/الخسارة: {e}")
+                    return 0
+            
+            def calculate_points_accurately(price_diff, symbol, capital=None, current_price=None):
+                """حساب النقاط بالمعادلات المالية الصحيحة"""
+                try:
+                    if not price_diff or price_diff == 0 or not current_price:
+                        return 0
                     
-                    # تحديد النقاط المناسبة بناءً على المخاطرة
-                    if pip_value > 0:
-                        max_safe_points = max_loss_amount / pip_value
-                        # التأكد من أن النقاط ضمن حدود آمنة
-                        if base_points > max_safe_points * 3:  # إذا كانت النقاط عالية جداً
-                            base_points = max_safe_points * 2  # تقليلها لمستوى أكثر أماناً
-                
-                return base_points
+                    # الحصول على رأس المال
+                    if capital is None:
+                        capital = get_user_capital(user_id) if user_id else 1000
+                    
+                    # حساب عدد النقاط من فرق السعر
+                    points = calculate_points_from_price_difference(price_diff, symbol)
+                    
+                    # حساب قيمة النقطة
+                    pip_value = calculate_pip_value(symbol, current_price)
+                    
+                    # حساب الربح/الخسارة المتوقع
+                    potential_profit_loss = calculate_profit_loss(points, pip_value)
+                    
+                    # تطبيق إدارة المخاطر بناءً على رأس المال
+                    if capital > 0:
+                        # نسبة المخاطرة المناسبة حسب حجم الحساب
+                        if capital >= 100000:
+                            max_risk_percentage = 0.01  # 1% للحسابات الكبيرة جداً
+                        elif capital >= 50000:
+                            max_risk_percentage = 0.015  # 1.5% للحسابات الكبيرة
+                        elif capital >= 10000:
+                            max_risk_percentage = 0.02   # 2% للحسابات المتوسطة
+                        elif capital >= 5000:
+                            max_risk_percentage = 0.025  # 2.5% للحسابات الصغيرة
+                        else:
+                            max_risk_percentage = 0.03   # 3% للحسابات الصغيرة جداً
+                        
+                        max_risk_amount = capital * max_risk_percentage
+                        
+                        # تقليل النقاط إذا كانت المخاطرة عالية جداً
+                        if potential_profit_loss > max_risk_amount:
+                            adjustment_factor = max_risk_amount / potential_profit_loss
+                            points = points * adjustment_factor
+                            logger.info(f"تم تعديل النقاط للرمز {symbol} من {points/adjustment_factor:.1f} إلى {points:.1f} لإدارة المخاطر")
+                    
+                    return max(0, points)
+                    
+                except Exception as e:
+                    logger.error(f"خطأ في حساب النقاط للرمز {symbol}: {e}")
+                    return 0
+            
+
             
             # جلب رأس المال للمستخدم
             user_capital = get_user_capital(user_id) if user_id else 1000
@@ -3186,18 +3405,40 @@ class GeminiAnalyzer:
                 else:
                     message += f"• ATR: --\n"
                 
-                # Volume Analysis
+                # Volume Analysis - محسن للعرض المفصل
                 current_volume = indicators.get('current_volume')
                 avg_volume = indicators.get('avg_volume')
                 volume_ratio = indicators.get('volume_ratio')
-                if current_volume and avg_volume:
+                volume_interpretation = indicators.get('volume_interpretation')
+                
+                if current_volume and avg_volume and volume_ratio:
                     message += f"• الحجم الحالي: {current_volume:,.0f}\n"
-                    message += f"• متوسط الحجم: {avg_volume:,.0f}\n"
-                    if volume_ratio:
-                        volume_status = indicators.get('volume_interpretation', 'طبيعي')
-                        message += f"• نسبة الحجم: {volume_ratio:.1f}x ({volume_status})\n"
+                    message += f"• متوسط الحجم (20): {avg_volume:,.0f}\n"
+                    message += f"• نسبة الحجم: {volume_ratio:.2f}x\n"
+                    
+                    # عرض تفسير الحجم المفصل
+                    if volume_interpretation:
+                        message += f"• تحليل الحجم: {volume_interpretation}\n"
+                    
+                    # إضافة تقييم بصري للحجم
+                    if volume_ratio > 2.0:
+                        message += f"• مستوى النشاط: 🔥 استثنائي - اهتمام كبير جداً\n"
+                    elif volume_ratio > 1.5:
+                        message += f"• مستوى النشاط: ⚡ عالي - نشاط متزايد\n"
+                    elif volume_ratio > 1.2:
+                        message += f"• مستوى النشاط: ✅ جيد - نشاط طبيعي مرتفع\n"
+                    elif volume_ratio < 0.3:
+                        message += f"• مستوى النشاط: 🔴 منخفض جداً - ضعف اهتمام\n"
+                    elif volume_ratio < 0.7:
+                        message += f"• مستوى النشاط: ⚠️ منخفض - نشاط محدود\n"
+                    else:
+                        message += f"• مستوى النشاط: 📊 طبيعي - نشاط عادي\n"
+                        
+                elif current_volume:
+                    message += f"• الحجم الحالي: {current_volume:,.0f}\n"
+                    message += f"• تحليل الحجم: بيانات محدودة - لا يتوفر متوسط\n"
                 else:
-                    message += f"• الحجم: --\n"
+                    message += f"• الحجم: غير متوفر - تحقق من اتصال البيانات\n"
                 
             else:
                 message += f"• RSI: --\n"
@@ -4386,10 +4627,10 @@ def calculate_dynamic_success_rate_v2(analysis: Dict, alert_type: str) -> float:
     return calculate_dynamic_success_rate(analysis, alert_type)
 
 def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
-    """حساب نسبة النجاح الذكية بناءً على تحليل شامل للعوامل المختلفة - ديناميكية 0-100%"""
+    """حساب نسبة النجاح الذكية بناءً على تحليل شامل للعوامل المختلفة - ديناميكية 0-100% محسنة"""
     try:
-        # البدء بنسبة أساسية أعلى لتحسين دقة النظام
-        base_score = 60.0  # نقطة بداية أفضل بدلاً من 45%
+        # البدء بنسبة أساسية متوازنة تعكس الواقع
+        base_score = 50.0  # نقطة بداية محايدة لحساب أكثر دقة
         
         # العوامل المؤثرة على نسبة النجاح
         confidence_factors = []
@@ -4587,15 +4828,20 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
             elif capital < 1000:  # حسابات صغيرة - حذر أكبر
                 final_score -= 2
         
-        # تطبيق قيود منطقية مع نطاق محسن
-        final_score = max(15, min(95, final_score))  # بين 15% و 95% لتجنب الدرجات المنخفضة جداً
+        # تطبيق نطاق ديناميكي محسن 0-100% كما طلب المستخدم
+        final_score = max(5, min(98, final_score))  # نطاق واسع: 5% - 98% لتغطية أفضل
         
-        # تطبيق عوامل تصحيحية بناءً على نوع الصفقة
+        # تطبيق عوامل تصحيحية ديناميكية بناءً على نوع الصفقة
         if action == 'HOLD':
-            final_score = max(final_score - 15, 20)  # تقليل الثقة للانتظار
+            final_score = max(final_score - 20, 10)  # تقليل أكبر للانتظار (10% كحد أدنى)
         elif action in ['BUY', 'SELL']:
-            # زيادة للإشارات الواضحة ولكن بحذر
-            final_score = min(final_score + 8, 92)
+            # تعديل ديناميكي للإشارات الواضحة
+            if final_score > 80:  # إشارات قوية جداً
+                final_score = min(final_score + 5, 95)  # رفع محدود للإشارات الممتازة
+            elif final_score > 60:  # إشارات جيدة
+                final_score = min(final_score + 10, 85)  # رفع متوسط
+            elif final_score < 30:  # إشارات ضعيفة
+                final_score = max(final_score - 5, 5)  # تقليل للإشارات الضعيفة
         
         # سجل تفاصيل الحساب للمراجعة
         logger.info(f"[AI_SUCCESS] {symbol} - {action}: {final_score:.1f}% | العوامل: {confidence_factors}")
