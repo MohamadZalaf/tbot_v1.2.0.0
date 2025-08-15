@@ -2728,16 +2728,29 @@ class GeminiAnalyzer:
                     patterns = json.load(f)
                 
                 if patterns:
-                    context = "\n🧠 الأنماط المتعلمة من المستخدمين:\n"
+                    context = "\n🧠 الأنماط المتعلمة من المستخدمين (مع تحليل AI):\n"
                     for pattern in patterns[-10:]:  # آخر 10 أنماط
-                        pattern_info = pattern.get('pattern_info', {})
+                        # استخدام البيانات المدمجة الجديدة
+                        merged_analysis = pattern.get('merged_analysis', {})
+                        ai_analysis = pattern.get('ai_analysis', {})
                         description = pattern.get('user_description', '')
                         
+                        # معلومات محسنة
+                        final_pattern = merged_analysis.get('final_pattern', pattern.get('pattern_info', {}).get('pattern_name', 'نمط مخصص'))
+                        final_direction = merged_analysis.get('final_direction', pattern.get('pattern_info', {}).get('direction', 'غير محدد'))
+                        final_confidence = merged_analysis.get('final_confidence', pattern.get('pattern_info', {}).get('confidence', 50))
+                        agreement_level = merged_analysis.get('agreement_level', 'غير محدد')
+                        strategies = merged_analysis.get('strategies', [])
+                        
                         context += f"""
-- النمط: {pattern_info.get('pattern_name', 'نمط مخصص')}
-  الاتجاه: {pattern_info.get('direction', 'غير محدد')}
-  الثقة: {pattern_info.get('confidence', 50)}%
-  الوصف: {description[:100]}...
+- النمط: {final_pattern}
+  الاتجاه: {final_direction}
+  الثقة: {final_confidence}%
+  مستوى التطابق: {agreement_level}
+  الاستراتيجيات: {', '.join(strategies[:3]) if strategies else 'لا توجد'}
+  AI Support: {ai_analysis.get('support_level', 'غير محدد')}
+  AI Resistance: {ai_analysis.get('resistance_level', 'غير محدد')}
+  الوصف: {description[:80]}...
                         """
                     
                     context += "\n⚠️ يرجى مراعاة هذه الأنماط المتعلمة عند التحليل.\n"
@@ -3833,29 +3846,42 @@ class GeminiAnalyzer:
             return False
     
     def _process_image_file(self, file_path: str, user_context: Dict) -> bool:
-        """معالجة ملفات الصور للتدريب على الأنماط"""
+        """معالجة ملفات الصور للتدريب على الأنماط مع تحليل AI فعلي"""
         try:
-            # يمكن هنا إضافة معالجة متقدمة للصور
-            # مثل تحليل الأنماط الفنية، الشارتات، إلخ
+            # تحليل الصورة بواسطة Gemini Vision AI
+            ai_analysis = self._analyze_image_with_gemini(file_path, user_context)
             
             analysis_prompt = f"""
-            تم رفع صورة للتدريب من المستخدم.
-            السياق: نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
-            رأس المال: {user_context.get('capital', 'غير محدد')}
+            تم رفع صورة للتدريب من المستخدم مع تحليل AI متقدم.
             
-            يرجى تحليل هذه الصورة واستخراج الأنماط المفيدة للتداول.
+            السياق: 
+            - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
+            - رأس المال: {user_context.get('capital', 'غير محدد')}
+            
+            تحليل AI للصورة:
+            {ai_analysis.get('analysis_text', 'لم يتم التحليل')}
+            
+            المعلومات المستخرجة:
+            - نوع الشارت: {ai_analysis.get('chart_type', 'غير محدد')}
+            - الأنماط المكتشفة: {ai_analysis.get('patterns', [])}
+            - الاتجاه: {ai_analysis.get('trend', 'غير محدد')}
+            - مستوى الدعم: {ai_analysis.get('support_level', 'غير محدد')}
+            - مستوى المقاومة: {ai_analysis.get('resistance_level', 'غير محدد')}
+            - نسبة ثقة AI: {ai_analysis.get('confidence', 0)}%
             """
             
-            # حفظ prompt التحليل مع بيانات الصورة
+            # حفظ prompt التحليل مع بيانات الصورة والتحليل
             training_data = {
                 'type': 'image_analysis',
                 'file_path': file_path,
                 'analysis_prompt': analysis_prompt,
+                'ai_analysis': ai_analysis,
                 'user_context': user_context,
                 'timestamp': datetime.now().isoformat()
             }
             
             self._save_training_data(training_data)
+            logger.info(f"[AI_IMAGE] تم تحليل الصورة بنجاح: {ai_analysis.get('patterns', [])} patterns detected")
             return True
             
         except Exception as e:
@@ -3863,16 +3889,42 @@ class GeminiAnalyzer:
             return False
     
     def _process_document_file(self, file_path: str, user_context: Dict) -> bool:
-        """معالجة ملفات المستندات للتدريب"""
+        """معالجة ملفات المستندات للتدريب مع تحليل AI فعلي"""
         try:
+            # تحليل المستند بواسطة AI
+            ai_analysis = self._analyze_document_with_gemini(file_path, user_context)
+            
+            analysis_prompt = f"""
+            تم رفع مستند للتدريب من المستخدم مع تحليل AI متقدم.
+            
+            السياق:
+            - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
+            - رأس المال: {user_context.get('capital', 'غير محدد')}
+            
+            تحليل AI للمستند:
+            {ai_analysis.get('analysis_text', 'لم يتم التحليل')}
+            
+            المعلومات المستخرجة:
+            - نوع المحتوى: {ai_analysis.get('content_type', 'غير محدد')}
+            - الاستراتيجيات المذكورة: {ai_analysis.get('strategies', [])}
+            - الأدوات المالية: {ai_analysis.get('instruments', [])}
+            - نسب المخاطرة: {ai_analysis.get('risk_ratios', 'غير محدد')}
+            - التوصيات الرئيسية: {ai_analysis.get('recommendations', [])}
+            - مستوى الخبرة المطلوب: {ai_analysis.get('experience_level', 'غير محدد')}
+            - نسبة ثقة AI: {ai_analysis.get('confidence', 0)}%
+            """
+            
             training_data = {
                 'type': 'document_analysis',
                 'file_path': file_path,
+                'analysis_prompt': analysis_prompt,
+                'ai_analysis': ai_analysis,
                 'user_context': user_context,
                 'timestamp': datetime.now().isoformat()
             }
             
             self._save_training_data(training_data)
+            logger.info(f"[AI_DOC] تم تحليل المستند بنجاح: {ai_analysis.get('strategies', [])} strategies found")
             return True
             
         except Exception as e:
@@ -3880,39 +3932,56 @@ class GeminiAnalyzer:
             return False
     
     def learn_from_pattern_image(self, file_path: str, file_type: str, user_context: Dict, pattern_description: str) -> bool:
-        """تعلم نمط محدد من صورة مع وصف المستخدم"""
+        """تعلم نمط محدد من ملف مع وصف المستخدم ودمج تحليل AI"""
         try:
             if not self.model:
                 return False
             
-            # استخراج معلومات النمط من الوصف
-            pattern_info = self._extract_pattern_info(pattern_description)
+            # تحليل الملف بواسطة AI أولاً
+            if file_type.startswith('image/'):
+                ai_analysis = self._analyze_image_with_gemini(file_path, user_context)
+            else:
+                ai_analysis = self._analyze_document_with_gemini(file_path, user_context)
             
-            # إنشاء prompt متقدم للتحليل
+            # استخراج معلومات النمط من وصف المستخدم
+            user_pattern_info = self._extract_pattern_info(pattern_description)
+            
+            # دمج تحليل AI مع وصف المستخدم
+            merged_analysis = self._merge_ai_user_analysis(ai_analysis, user_pattern_info, pattern_description)
+            
+            # إنشاء prompt متقدم للتحليل المدمج
             analysis_prompt = f"""
-            تم رفع صورة نمط تداول مع توجيهات من المستخدم المتخصص.
+            تم رفع {'صورة' if file_type.startswith('image/') else 'مستند'} مع تحليل AI متقدم ووصف من المستخدم المتخصص.
             
             معلومات المستخدم:
             - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
             - رأس المال: ${user_context.get('capital', 'غير محدد')}
             
-            وصف المستخدم للنمط:
+            تحليل AI للملف:
+            {ai_analysis.get('analysis_text', 'لم يتم التحليل')[:500]}...
+            
+            وصف المستخدم:
             "{pattern_description}"
             
-            معلومات النمط المستخرجة:
-            - النمط: {pattern_info.get('pattern_name', 'غير محدد')}
-            - الاتجاه المتوقع: {pattern_info.get('direction', 'غير محدد')}
-            - نسبة الثقة: {pattern_info.get('confidence', 'غير محدد')}%
+            التحليل المدمج:
+            - النمط النهائي: {merged_analysis.get('final_pattern', 'غير محدد')}
+            - الاتجاه المتوقع: {merged_analysis.get('final_direction', 'غير محدد')}
+            - نسبة الثقة النهائية: {merged_analysis.get('final_confidence', 0)}%
+            - مستوى التطابق AI-User: {merged_analysis.get('agreement_level', 'غير محدد')}
+            - الاستراتيجيات المستخرجة: {merged_analysis.get('strategies', [])}
             
-            يرجى تحليل هذه الصورة وحفظ النمط للاستخدام المستقبلي في التحليلات.
+            يرجى حفظ هذا التحليل المدمج للاستخدام المستقبلي في التحليلات.
             """
             
-            # حفظ بيانات النمط المتعلم
+            # حفظ بيانات النمط المتعلم مع التحليل المدمج
             pattern_data = {
                 'type': 'learned_pattern',
                 'file_path': file_path,
+                'file_type': file_type,
                 'user_description': pattern_description,
-                'pattern_info': pattern_info,
+                'ai_analysis': ai_analysis,
+                'user_pattern_info': user_pattern_info,
+                'merged_analysis': merged_analysis,
                 'analysis_prompt': analysis_prompt,
                 'user_context': user_context,
                 'timestamp': datetime.now().isoformat(),
@@ -3925,11 +3994,11 @@ class GeminiAnalyzer:
             # حفظ في ملف التدريب العام
             self._save_training_data(pattern_data)
             
-            logger.info(f"[AI_LEARNING] تم تعلم نمط جديد من المستخدم {user_context.get('user_id', 'unknown')}")
+            logger.info(f"[AI_LEARNING] تم تعلم نمط مدمج من المستخدم {user_context.get('user_id', 'unknown')}: {merged_analysis.get('final_pattern', 'unknown')}")
             return True
             
         except Exception as e:
-            logger.error(f"[ERROR] خطأ في تعلم النمط من الصورة: {e}")
+            logger.error(f"[ERROR] خطأ في تعلم النمط من الملف: {e}")
             return False
     
     def _extract_pattern_info(self, description: str) -> Dict:
@@ -3972,6 +4041,470 @@ class GeminiAnalyzer:
                 break
         
         return info
+    
+    def _analyze_image_with_gemini(self, file_path: str, user_context: Dict) -> Dict:
+        """تحليل الصورة بواسطة Gemini Vision AI لاستخراج المعلومات التداولية"""
+        try:
+            if not self.model:
+                logger.warning("[AI_IMAGE] Gemini model not available")
+                return {}
+            
+            # تحميل الصورة
+            from PIL import Image
+            image = Image.open(file_path)
+            
+            # إنشاء prompt متخصص للتحليل الفني
+            analysis_prompt = f"""
+            أنت محلل فني خبير متخصص في تحليل الشارتات والأنماط التداولية.
+            
+            حلل هذه الصورة التداولية بدقة واستخرج المعلومات التالية:
+
+            1. **نوع الشارت**: (شموع، خطي، أعمدة، أو غير محدد)
+            2. **الأنماط الفنية المكتشفة**: اذكر جميع الأنماط (مثلث، رأس وكتفين، قمة مزدوجة، إلخ)
+            3. **الاتجاه العام**: (صاعد، هابط، جانبي)
+            4. **مستويات الدعم**: أرقام تقريبية إن أمكن
+            5. **مستويات المقاومة**: أرقام تقريبية إن أمكن
+            6. **إشارات التداول**: (شراء، بيع، انتظار)
+            7. **نسبة الثقة**: من 1-100%
+            8. **الرمز المالي**: إن كان واضحاً في الصورة
+            9. **الإطار الزمني**: إن كان واضحاً
+            10. **ملاحظات إضافية**: أي معلومات مهمة أخرى
+
+            سياق المستخدم:
+            - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
+            - رأس المال: ${user_context.get('capital', 'غير محدد')}
+
+            قدم التحليل بتنسيق واضح ومنظم.
+            """
+            
+            # إرسال الصورة والنص لـ Gemini
+            response = self.model.generate_content([analysis_prompt, image])
+            analysis_text = response.text
+            
+            # استخراج المعلومات المهيكلة من النص
+            extracted_info = self._parse_image_analysis_response(analysis_text)
+            
+            return {
+                'analysis_text': analysis_text,
+                'chart_type': extracted_info.get('chart_type', 'غير محدد'),
+                'patterns': extracted_info.get('patterns', []),
+                'trend': extracted_info.get('trend', 'غير محدد'),
+                'support_level': extracted_info.get('support_level', 'غير محدد'),
+                'resistance_level': extracted_info.get('resistance_level', 'غير محدد'),
+                'trading_signal': extracted_info.get('trading_signal', 'غير محدد'),
+                'confidence': extracted_info.get('confidence', 0),
+                'symbol': extracted_info.get('symbol', 'غير محدد'),
+                'timeframe': extracted_info.get('timeframe', 'غير محدد'),
+                'notes': extracted_info.get('notes', '')
+            }
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في تحليل الصورة بـ Gemini: {e}")
+            return {
+                'analysis_text': f'فشل التحليل: {str(e)}',
+                'chart_type': 'غير محدد',
+                'patterns': [],
+                'trend': 'غير محدد',
+                'confidence': 0
+            }
+    
+    def _parse_image_analysis_response(self, analysis_text: str) -> Dict:
+        """استخراج المعلومات المهيكلة من نص تحليل الصورة"""
+        import re
+        
+        extracted = {}
+        
+        try:
+            # استخراج نوع الشارت
+            chart_match = re.search(r'نوع الشارت[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if chart_match:
+                extracted['chart_type'] = chart_match.group(1).strip()
+            
+            # استخراج الأنماط
+            patterns_match = re.search(r'الأنماط الفنية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if patterns_match:
+                patterns_text = patterns_match.group(1).strip()
+                extracted['patterns'] = [p.strip() for p in patterns_text.split(',') if p.strip()]
+            
+            # استخراج الاتجاه
+            trend_match = re.search(r'الاتجاه العام[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if trend_match:
+                extracted['trend'] = trend_match.group(1).strip()
+            
+            # استخراج مستوى الدعم
+            support_match = re.search(r'مستوى.*الدعم[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if support_match:
+                extracted['support_level'] = support_match.group(1).strip()
+            
+            # استخراج مستوى المقاومة
+            resistance_match = re.search(r'مستوى.*المقاومة[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if resistance_match:
+                extracted['resistance_level'] = resistance_match.group(1).strip()
+            
+            # استخراج إشارة التداول
+            signal_match = re.search(r'إشارات التداول[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if signal_match:
+                extracted['trading_signal'] = signal_match.group(1).strip()
+            
+            # استخراج نسبة الثقة
+            confidence_match = re.search(r'نسبة الثقة[:\s]*(\d+)', analysis_text, re.IGNORECASE)
+            if confidence_match:
+                extracted['confidence'] = int(confidence_match.group(1))
+            
+            # استخراج الرمز المالي
+            symbol_match = re.search(r'الرمز المالي[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if symbol_match:
+                extracted['symbol'] = symbol_match.group(1).strip()
+            
+            # استخراج الإطار الزمني
+            timeframe_match = re.search(r'الإطار الزمني[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if timeframe_match:
+                extracted['timeframe'] = timeframe_match.group(1).strip()
+            
+            # استخراج الملاحظات
+            notes_match = re.search(r'ملاحظات إضافية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if notes_match:
+                extracted['notes'] = notes_match.group(1).strip()
+                
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج المعلومات من تحليل الصورة: {e}")
+        
+        return extracted
+    
+    def _analyze_document_with_gemini(self, file_path: str, user_context: Dict) -> Dict:
+        """تحليل المستندات (PDF, Word, Text) بواسطة Gemini AI لاستخراج المحتوى التداولي"""
+        try:
+            if not self.model:
+                logger.warning("[AI_DOC] Gemini model not available")
+                return {}
+            
+            # استخراج النص من الملف
+            document_text = self._extract_text_from_document(file_path)
+            
+            if not document_text.strip():
+                logger.warning("[AI_DOC] No text extracted from document")
+                return {'analysis_text': 'لم يتم استخراج نص من المستند'}
+            
+            # إنشاء prompt متخصص لتحليل المحتوى التداولي
+            analysis_prompt = f"""
+            أنت خبير تداول ومحلل مالي متخصص في تحليل المحتوى التداولي والمالي.
+            
+            حلل هذا المحتوى التداولي بدقة واستخرج المعلومات التالية:
+
+            1. **نوع المحتوى**: (استراتيجية تداول، تقرير تحليلي، دليل تعليمي، أخبار مالية، أو غير محدد)
+            2. **الاستراتيجيات المذكورة**: جميع استراتيجيات التداول المذكورة في النص
+            3. **الأدوات المالية**: العملات، الأسهم، السلع، المؤشرات المذكورة
+            4. **نسب المخاطرة والعائد**: أي نسب أو أرقام متعلقة بالمخاطر والأرباح
+            5. **التوصيات الرئيسية**: أهم النصائح والتوصيات
+            6. **مستوى الخبرة المطلوب**: (مبتدئ، متوسط، متقدم)
+            7. **الإطار الزمني**: (سكالبينغ، يومي، أسبوعي، شهري)
+            8. **المؤشرات الفنية المذكورة**: أي مؤشرات تقنية مذكورة
+            9. **نسبة الثقة**: تقييمك لجودة المحتوى من 1-100%
+            10. **ملخص المحتوى**: ملخص مختصر للنقاط الرئيسية
+
+            سياق المستخدم:
+            - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
+            - رأس المال: ${user_context.get('capital', 'غير محدد')}
+
+            المحتوى للتحليل:
+            {document_text[:3000]}...
+
+            قدم التحليل بتنسيق واضح ومنظم.
+            """
+            
+            # إرسال النص لـ Gemini للتحليل
+            response = self.model.generate_content(analysis_prompt)
+            analysis_text = response.text
+            
+            # استخراج المعلومات المهيكلة من النص
+            extracted_info = self._parse_document_analysis_response(analysis_text)
+            
+            return {
+                'analysis_text': analysis_text,
+                'content_type': extracted_info.get('content_type', 'غير محدد'),
+                'strategies': extracted_info.get('strategies', []),
+                'instruments': extracted_info.get('instruments', []),
+                'risk_ratios': extracted_info.get('risk_ratios', 'غير محدد'),
+                'recommendations': extracted_info.get('recommendations', []),
+                'experience_level': extracted_info.get('experience_level', 'غير محدد'),
+                'timeframe': extracted_info.get('timeframe', 'غير محدد'),
+                'indicators': extracted_info.get('indicators', []),
+                'confidence': extracted_info.get('confidence', 0),
+                'summary': extracted_info.get('summary', ''),
+                'extracted_text_length': len(document_text)
+            }
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في تحليل المستند بـ Gemini: {e}")
+            return {
+                'analysis_text': f'فشل التحليل: {str(e)}',
+                'content_type': 'غير محدد',
+                'strategies': [],
+                'confidence': 0
+            }
+    
+    def _extract_text_from_document(self, file_path: str) -> str:
+        """استخراج النص من المستندات المختلفة"""
+        try:
+            file_extension = file_path.lower().split('.')[-1]
+            
+            if file_extension == 'pdf':
+                return self._extract_text_from_pdf(file_path)
+            elif file_extension in ['txt']:
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    return file.read()
+            elif file_extension in ['doc', 'docx']:
+                return self._extract_text_from_word(file_path)
+            else:
+                logger.warning(f"[AI_DOC] Unsupported file type: {file_extension}")
+                return ""
+                
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج النص من المستند: {e}")
+            return ""
+    
+    def _extract_text_from_pdf(self, file_path: str) -> str:
+        """استخراج النص من ملف PDF"""
+        try:
+            import PyPDF2
+            text = ""
+            with open(file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                for page in pdf_reader.pages:
+                    text += page.extract_text() + "\n"
+            return text
+        except ImportError:
+            logger.warning("[AI_DOC] PyPDF2 not installed - cannot extract PDF text")
+            return "مكتبة PyPDF2 غير مثبتة - لا يمكن استخراج النص من PDF"
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج النص من PDF: {e}")
+            return ""
+    
+    def _extract_text_from_word(self, file_path: str) -> str:
+        """استخراج النص من ملف Word"""
+        try:
+            import docx
+            doc = docx.Document(file_path)
+            text = ""
+            for paragraph in doc.paragraphs:
+                text += paragraph.text + "\n"
+            return text
+        except ImportError:
+            logger.warning("[AI_DOC] python-docx not installed - cannot extract Word text")
+            return "مكتبة python-docx غير مثبتة - لا يمكن استخراج النص من Word"
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج النص من Word: {e}")
+            return ""
+    
+    def _parse_document_analysis_response(self, analysis_text: str) -> Dict:
+        """استخراج المعلومات المهيكلة من نص تحليل المستند"""
+        import re
+        
+        extracted = {}
+        
+        try:
+            # استخراج نوع المحتوى
+            content_match = re.search(r'نوع المحتوى[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if content_match:
+                extracted['content_type'] = content_match.group(1).strip()
+            
+            # استخراج الاستراتيجيات
+            strategies_match = re.search(r'الاستراتيجيات المذكورة[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if strategies_match:
+                strategies_text = strategies_match.group(1).strip()
+                extracted['strategies'] = [s.strip() for s in strategies_text.split(',') if s.strip()]
+            
+            # استخراج الأدوات المالية
+            instruments_match = re.search(r'الأدوات المالية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if instruments_match:
+                instruments_text = instruments_match.group(1).strip()
+                extracted['instruments'] = [i.strip() for i in instruments_text.split(',') if i.strip()]
+            
+            # استخراج نسب المخاطرة
+            risk_match = re.search(r'نسب المخاطرة[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if risk_match:
+                extracted['risk_ratios'] = risk_match.group(1).strip()
+            
+            # استخراج التوصيات
+            recommendations_match = re.search(r'التوصيات الرئيسية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if recommendations_match:
+                recommendations_text = recommendations_match.group(1).strip()
+                extracted['recommendations'] = [r.strip() for r in recommendations_text.split(',') if r.strip()]
+            
+            # استخراج مستوى الخبرة
+            experience_match = re.search(r'مستوى الخبرة[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if experience_match:
+                extracted['experience_level'] = experience_match.group(1).strip()
+            
+            # استخراج الإطار الزمني
+            timeframe_match = re.search(r'الإطار الزمني[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if timeframe_match:
+                extracted['timeframe'] = timeframe_match.group(1).strip()
+            
+            # استخراج المؤشرات الفنية
+            indicators_match = re.search(r'المؤشرات الفنية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if indicators_match:
+                indicators_text = indicators_match.group(1).strip()
+                extracted['indicators'] = [i.strip() for i in indicators_text.split(',') if i.strip()]
+            
+            # استخراج نسبة الثقة
+            confidence_match = re.search(r'نسبة الثقة[:\s]*(\d+)', analysis_text, re.IGNORECASE)
+            if confidence_match:
+                extracted['confidence'] = int(confidence_match.group(1))
+            
+            # استخراج الملخص
+            summary_match = re.search(r'ملخص المحتوى[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if summary_match:
+                extracted['summary'] = summary_match.group(1).strip()
+                
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج المعلومات من تحليل المستند: {e}")
+        
+        return extracted
+    
+    def _merge_ai_user_analysis(self, ai_analysis: Dict, user_pattern_info: Dict, user_description: str) -> Dict:
+        """دمج تحليل AI مع وصف المستخدم بذكاء"""
+        try:
+            merged = {}
+            
+            # تحديد النمط النهائي
+            ai_patterns = ai_analysis.get('patterns', [])
+            user_pattern = user_pattern_info.get('pattern_name', 'نمط مخصص')
+            
+            if ai_patterns and user_pattern != 'نمط مخصص':
+                # إذا كان لدينا أنماط من AI ووصف محدد من المستخدم
+                merged['final_pattern'] = f"{user_pattern} (مؤكد بـ AI: {', '.join(ai_patterns[:2])})"
+                merged['agreement_level'] = 'عالي'
+            elif ai_patterns:
+                # AI وجد أنماط لكن المستخدم لم يحدد
+                merged['final_pattern'] = ', '.join(ai_patterns[:2])
+                merged['agreement_level'] = 'متوسط - AI فقط'
+            elif user_pattern != 'نمط مخصص':
+                # المستخدم حدد نمط لكن AI لم يجد
+                merged['final_pattern'] = user_pattern
+                merged['agreement_level'] = 'متوسط - مستخدم فقط'
+            else:
+                merged['final_pattern'] = 'نمط مخصص'
+                merged['agreement_level'] = 'منخفض'
+            
+            # تحديد الاتجاه النهائي
+            ai_trend = ai_analysis.get('trend', 'غير محدد')
+            user_direction = user_pattern_info.get('direction', 'غير محدد')
+            
+            if ai_trend != 'غير محدد' and user_direction != 'غير محدد':
+                # مقارنة الاتجاهات
+                if self._directions_match(ai_trend, user_direction):
+                    merged['final_direction'] = user_direction
+                    merged['direction_agreement'] = True
+                else:
+                    merged['final_direction'] = f"{user_direction} (AI: {ai_trend})"
+                    merged['direction_agreement'] = False
+            elif user_direction != 'غير محدد':
+                merged['final_direction'] = user_direction
+                merged['direction_agreement'] = None
+            elif ai_trend != 'غير محدد':
+                merged['final_direction'] = ai_trend
+                merged['direction_agreement'] = None
+            else:
+                merged['final_direction'] = 'غير محدد'
+                merged['direction_agreement'] = None
+            
+            # تحديد نسبة الثقة النهائية
+            ai_confidence = ai_analysis.get('confidence', 0)
+            user_confidence = user_pattern_info.get('confidence', 50)
+            
+            if ai_confidence > 0 and user_confidence > 0:
+                # متوسط مرجح (وزن أكبر لرأي المستخدم)
+                merged['final_confidence'] = int((user_confidence * 0.7) + (ai_confidence * 0.3))
+            elif user_confidence > 0:
+                merged['final_confidence'] = user_confidence
+            elif ai_confidence > 0:
+                merged['final_confidence'] = ai_confidence
+            else:
+                merged['final_confidence'] = 50
+            
+            # دمج الاستراتيجيات
+            strategies = []
+            if 'strategies' in ai_analysis:
+                strategies.extend(ai_analysis['strategies'])
+            
+            # استخراج استراتيجيات من وصف المستخدم
+            user_strategies = self._extract_strategies_from_description(user_description)
+            strategies.extend(user_strategies)
+            
+            merged['strategies'] = list(set(strategies))  # إزالة التكرارات
+            
+            # معلومات إضافية
+            merged['ai_support_level'] = ai_analysis.get('support_level', 'غير محدد')
+            merged['ai_resistance_level'] = ai_analysis.get('resistance_level', 'غير محدد')
+            merged['ai_trading_signal'] = ai_analysis.get('trading_signal', 'غير محدد')
+            merged['user_description_length'] = len(user_description)
+            
+            # تقييم جودة الدمج
+            quality_score = 0
+            if merged['direction_agreement'] is True:
+                quality_score += 30
+            if ai_confidence > 70:
+                quality_score += 25
+            if user_confidence > 70:
+                quality_score += 25
+            if len(strategies) > 0:
+                quality_score += 20
+            
+            merged['merge_quality_score'] = quality_score
+            
+            return merged
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في دمج تحليل AI مع المستخدم: {e}")
+            return {
+                'final_pattern': 'خطأ في الدمج',
+                'final_direction': 'غير محدد',
+                'final_confidence': 0,
+                'agreement_level': 'خطأ',
+                'strategies': []
+            }
+    
+    def _directions_match(self, ai_trend: str, user_direction: str) -> bool:
+        """مقارنة اتجاهات AI مع المستخدم"""
+        # تطبيع الاتجاهات
+        bullish_terms = ['صاعد', 'صعود', 'ارتفاع', 'شراء', 'bullish', 'up', 'buy']
+        bearish_terms = ['هابط', 'هبوط', 'انخفاض', 'بيع', 'bearish', 'down', 'sell']
+        
+        ai_trend_lower = ai_trend.lower()
+        user_direction_lower = user_direction.lower()
+        
+        ai_bullish = any(term in ai_trend_lower for term in bullish_terms)
+        ai_bearish = any(term in ai_trend_lower for term in bearish_terms)
+        
+        user_bullish = any(term in user_direction_lower for term in bullish_terms)
+        user_bearish = any(term in user_direction_lower for term in bearish_terms)
+        
+        return (ai_bullish and user_bullish) or (ai_bearish and user_bearish)
+    
+    def _extract_strategies_from_description(self, description: str) -> List[str]:
+        """استخراج الاستراتيجيات من وصف المستخدم"""
+        strategies = []
+        description_lower = description.lower()
+        
+        strategy_keywords = {
+            'سكالبينغ': 'Scalping',
+            'تداول يومي': 'Day Trading',
+            'سوينغ': 'Swing Trading',
+            'متوسطات متحركة': 'Moving Averages',
+            'مؤشر rsi': 'RSI Strategy',
+            'مؤشر macd': 'MACD Strategy',
+            'دعم ومقاومة': 'Support & Resistance',
+            'كسر المستويات': 'Breakout Strategy',
+            'انعكاس': 'Reversal Strategy',
+            'اتجاه': 'Trend Following'
+        }
+        
+        for keyword, strategy in strategy_keywords.items():
+            if keyword in description_lower:
+                strategies.append(strategy)
+        
+        return strategies
     
     def _save_learned_pattern(self, pattern_data: Dict):
         """حفظ النمط المتعلم في ملف منفصل"""
