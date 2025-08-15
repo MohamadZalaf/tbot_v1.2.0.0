@@ -339,6 +339,9 @@ def get_api_usage_statistics():
         logger.error(f"[API_STATS] خطأ في جلب إحصائيات API: {e}")
         return {}
 
+# تهيئة البوت
+bot = telebot.TeleBot(BOT_TOKEN)
+
 @bot.message_handler(commands=['api_status'])
 def handle_api_status_command(message):
     """معالج أمر التحقق من حالة API - للمطور فقط"""
@@ -1087,9 +1090,6 @@ def can_make_api_call(symbol: str) -> bool:
 def record_api_call(symbol: str):
     """تسجيل وقت آخر استدعاء للـ API"""
     last_api_calls[symbol] = time.time()
-
-# تهيئة البوت
-bot = telebot.TeleBot(BOT_TOKEN)
 
 # إعداد البيئة للتعامل مع UTF-8 على Windows
 import os
