@@ -30,7 +30,7 @@ import time
 class TradingBotUI:
     def __init__(self):
         self.bot_process = None
-        self.PASSWORD = "tra12345678"  # Same as bot password
+        self.PASSWORD = "041768454"  # Custom UI password
         self.is_logged_in = False
         self.monitoring_thread = None
         self.is_monitoring = False
