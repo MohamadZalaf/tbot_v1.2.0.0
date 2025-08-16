@@ -1215,29 +1215,32 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                         target2 = target2 or current_price * (1 + tp2_pct)
                         stop_loss = stop_loss or current_price * (1 - sl_pct)
 
-        # التحقق من منطقية القيم قبل المتابعة
-        if action == 'BUY':
-            # في صفقة الشراء: الأهداف يجب أن تكون أعلى من السعر والاستوب أقل
-            if target1 and target1 <= current_price:
-                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 1 للشراء - كان {target1:.5f}, تم تعديله")
-                target1 = current_price * 1.015
-            if target2 and target2 <= current_price:
-                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 2 للشراء - كان {target2:.5f}, تم تعديله")
-                target2 = current_price * 1.03
-            if stop_loss and stop_loss >= current_price:
-                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح وقف الخسارة للشراء - كان {stop_loss:.5f}, تم تعديله")
-                stop_loss = current_price * 0.985
-        elif action == 'SELL':
-            # في صفقة البيع: الأهداف يجب أن تكون أقل من السعر والاستوب أعلى
-            if target1 and target1 >= current_price:
-                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 1 للبيع - كان {target1:.5f}, تم تعديله")
-                target1 = current_price * 0.985
-            if target2 and target2 >= current_price:
-                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 2 للبيع - كان {target2:.5f}, تم تعديله")
-                target2 = current_price * 0.97
-            if stop_loss and stop_loss <= current_price:
-                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح وقف الخسارة للبيع - كان {stop_loss:.5f}, تم تعديله")
-                stop_loss = current_price * 1.015
+        # التحقق من منطقية القيم قبل المتابعة - مع تحسين الرسائل
+        if current_price > 0:  # تأكد من أن السعر الحالي صحيح
+            if action == 'BUY':
+                # في صفقة الشراء: الأهداف يجب أن تكون أعلى من السعر والاستوب أقل
+                if target1 and target1 <= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 1 للشراء - من {target1:.5f} إلى {current_price * 1.015:.5f}")
+                    target1 = current_price * 1.015
+                if target2 and target2 <= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 2 للشراء - من {target2:.5f} إلى {current_price * 1.03:.5f}")
+                    target2 = current_price * 1.03
+                if stop_loss and stop_loss >= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح وقف الخسارة للشراء - من {stop_loss:.5f} إلى {current_price * 0.985:.5f}")
+                    stop_loss = current_price * 0.985
+            elif action == 'SELL':
+                # في صفقة البيع: الأهداف يجب أن تكون أقل من السعر والاستوب أعلى
+                if target1 and target1 >= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 1 للبيع - من {target1:.5f} إلى {current_price * 0.985:.5f}")
+                    target1 = current_price * 0.985
+                if target2 and target2 >= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 2 للبيع - من {target2:.5f} إلى {current_price * 0.97:.5f}")
+                    target2 = current_price * 0.97
+                if stop_loss and stop_loss <= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح وقف الخسارة للبيع - من {stop_loss:.5f} إلى {current_price * 1.015:.5f}")
+                    stop_loss = current_price * 1.015
+        else:
+            logger.error(f"[PRICE_ERROR] {symbol}: السعر الحالي غير صحيح ({current_price}) - لا يمكن حساب الأهداف")
 
         # حساب النقاط بدقة مع ضمان قيم صحيحة - محسن ومطور
         def calc_points_for_symbol(price_diff, symbol_name):
@@ -1304,10 +1307,17 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             points2 = analysis.get('target2_points', 0) or 0  
             stop_points = analysis.get('stop_points', 0) or 0
             
-            # تطبيق حد أقصى 3 خانات (999)
-            points1 = min(points1, 999) if points1 else 0
-            points2 = min(points2, 999) if points2 else 0
-            stop_points = min(stop_points, 999) if stop_points else 0
+            # تطبيق حد أقصى معقول حسب نوع الرمز
+            if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
+                max_tp1, max_tp2, max_sl = 200, 300, 150
+            elif 'JPY' in symbol:  # الين الياباني
+                max_tp1, max_tp2, max_sl = 100, 150, 80
+            else:  # العملات العادية
+                max_tp1, max_tp2, max_sl = 100, 150, 80
+            
+            points1 = min(points1, max_tp1) if points1 else 0
+            points2 = min(points2, max_tp2) if points2 else 0
+            stop_points = min(stop_points, max_sl) if stop_points else 0
             
             logger.info(f"[AI_POINTS] استخدام النقاط المحسوبة من AI للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
         
@@ -1316,23 +1326,53 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             try:
                 logger.debug(f"[DEBUG] حساب النقاط يدوياً للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
                 
-                # حساب النقاط للهدف الأول
+                # حساب النقاط للهدف الأول مع منطق محسن
                 if target1 and entry_price and target1 != entry_price and pip_size > 0:
                     price_diff1 = abs(target1 - entry_price)
-                    points1 = min(price_diff1 / pip_size, 999)  # حد أقصى 999
-                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط={points1:.0f}")
+                    calculated_points1 = price_diff1 / pip_size
                     
-                # حساب النقاط للهدف الثاني
+                    # تطبيق حد أقصى معقول حسب نوع الرمز
+                    if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
+                        max_points = 200  # 200 نقطة للذهب معقول
+                    elif 'JPY' in symbol:  # الين الياباني
+                        max_points = 100  # 100 نقطة للين
+                    else:  # العملات العادية
+                        max_points = 100  # 100 نقطة للعملات
+                    
+                    points1 = min(calculated_points1, max_points)
+                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط محسوبة={calculated_points1:.1f}, النقاط نهائية={points1:.0f}")
+                    
+                # حساب النقاط للهدف الثاني مع منطق محسن
                 if target2 and entry_price and target2 != entry_price and pip_size > 0:
                     price_diff2 = abs(target2 - entry_price)
-                    points2 = min(price_diff2 / pip_size, 999)  # حد أقصى 999
-                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط={points2:.0f}")
+                    calculated_points2 = price_diff2 / pip_size
                     
-                # حساب النقاط لوقف الخسارة
+                    # تطبيق حد أقصى معقول حسب نوع الرمز
+                    if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
+                        max_points = 300  # 300 نقطة للذهب معقول للهدف الثاني
+                    elif 'JPY' in symbol:  # الين الياباني
+                        max_points = 150  # 150 نقطة للين
+                    else:  # العملات العادية
+                        max_points = 150  # 150 نقطة للعملات
+                    
+                    points2 = min(calculated_points2, max_points)
+                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط محسوبة={calculated_points2:.1f}, النقاط نهائية={points2:.0f}")
+                    
+                # حساب النقاط لوقف الخسارة مع منطق محسن
                 if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
                     price_diff_stop = abs(entry_price - stop_loss)
-                    stop_points = min(price_diff_stop / pip_size, 999)  # حد أقصى 999
-                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط={stop_points:.0f}")
+                    calculated_stop_points = price_diff_stop / pip_size
+                    
+                    # تطبيق حد أقصى معقول حسب نوع الرمز
+                    if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
+                        max_points = 150  # 150 نقطة للذهب معقول للستوب
+                    elif 'JPY' in symbol:  # الين الياباني
+                        max_points = 80   # 80 نقطة للين
+                    else:  # العملات العادية
+                        max_points = 80   # 80 نقطة للعملات
+                    
+                    stop_points = min(calculated_stop_points, max_points)
+                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط محسوبة={calculated_stop_points:.1f}, النقاط نهائية={stop_points:.0f}")
                     
                 logger.info(f"[MANUAL_POINTS] النقاط المحسوبة يدوياً للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
             
@@ -2114,11 +2154,12 @@ class MT5Manager:
                     else:
                         time_diff = datetime.now() - tick_time
                     
-                    # 5 دقائق للحصول على بيانات أكثر حداثة
-                    if time_diff.total_seconds() > 300:
-                        logger.warning(f"[WARNING] البيانات قديمة جداً (عمر: {time_diff}) - الاتصال غير فعال")
-                        self.connected = False
-                        return self._attempt_reconnection()
+                    # زيادة التحمل إلى 15 دقيقة لتجنب الانقطاع الزائف (كما في v1.2.1)
+                    if time_diff.total_seconds() > 900:
+                        logger.warning(f"[WARNING] البيانات قديمة جداً (عمر: {time_diff}) - الاتصال قد يكون غير فعال")
+                        # لا نقطع الاتصال فوراً - نحتاج تأكيد أكثر
+                        # self.connected = False
+                        # return self._attempt_reconnection()
                 except:
                     # إذا فشل في قراءة وقت التيك، لا نعتبر هذا خطأ كريتيكال
                     pass
@@ -2283,23 +2324,27 @@ class MT5Manager:
     
 
 
-    def get_live_price(self, symbol: str) -> Optional[Dict]:
+    def get_live_price(self, symbol: str, force_fresh: bool = False) -> Optional[Dict]:
         """جلب السعر اللحظي الحقيقي - MT5 هو المصدر الأساسي الأولي مع نظام كاش"""
         
         if not symbol or symbol in ['notification', 'null', '', None]:
             logger.warning(f"[WARNING] رمز غير صالح في get_live_price: {symbol}")
             return None
         
-        # التحقق من الكاش أولاً
-        cached_data = get_cached_price_data(symbol)
-        if cached_data:
-            logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
-            return cached_data
-        
-        # التحقق من معدل الاستدعاءات
-        if not can_make_api_call(symbol):
-            logger.debug(f"[RATE_LIMIT] تجاهل الاستدعاء لـ {symbol} - تحديد معدل الاستدعاءات")
-            return None
+        # إذا كان طلب بيانات لحظية مباشرة (للتحليل اليدوي)، تجاهل الكاش
+        if not force_fresh:
+            # التحقق من الكاش أولاً للاستدعاءات العادية فقط
+            cached_data = get_cached_price_data(symbol)
+            if cached_data:
+                logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
+                return cached_data
+            
+            # التحقق من معدل الاستدعاءات للاستدعاءات العادية فقط
+            if not can_make_api_call(symbol):
+                logger.debug(f"[RATE_LIMIT] تجاهل الاستدعاء لـ {symbol} - تحديد معدل الاستدعاءات")
+                return None
+        else:
+            logger.info(f"[FRESH_DATA] طلب بيانات لحظية مباشرة للرمز {symbol} - تجاهل الكاش")
         
         # تسجيل وقت الاستدعاء
         record_api_call(symbol)
@@ -2378,44 +2423,74 @@ class MT5Manager:
                         logger.debug(f"[RETRY] إعادة محاولة جلب البيانات للرمز {symbol}")
                         time.sleep(1)  # انتظار أطول كما في mt5_debug
                         tick = mt5.symbol_info_tick(symbol)
+                        
+                    # للبيانات اللحظية المباشرة، تأكد من الحصول على أحدث تيك
+                    if force_fresh and tick:
+                        logger.debug(f"[FRESH_TICK] التأكد من أحدث تيك للرمز {symbol}")
+                        # انتظار قصير ثم جلب تيك آخر للتأكد من الحداثة
+                        time.sleep(0.1)
+                        fresh_tick = mt5.symbol_info_tick(symbol)
+                        if fresh_tick and fresh_tick.time >= tick.time:
+                            tick = fresh_tick
+                            logger.debug(f"[FRESH_TICK] تم الحصول على تيك أحدث للرمز {symbol}")
                 
                 if tick is not None and hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0:
                     # التحقق من أن البيانات حديثة (ليست قديمة)
                     tick_time = datetime.fromtimestamp(tick.time)
                     time_diff = datetime.now() - tick_time
                     
-                    # تقليل timeout إلى 5 دقائق للحصول على بيانات أكثر حداثة
-                    if time_diff.total_seconds() > 300:
-                        logger.warning(f"[WARNING] بيانات MT5 قديمة للرمز {symbol} (عمر البيانات: {time_diff}) - محاولة تحديث...")
-                        # محاولة تحديث السعر بطلب جديد
-                        time.sleep(0.2)
-                        fresh_tick = mt5.symbol_info_tick(symbol)
-                        if fresh_tick and fresh_tick.bid > 0 and fresh_tick.ask > 0:
-                            fresh_time = datetime.fromtimestamp(fresh_tick.time)
-                            fresh_diff = datetime.now() - fresh_time
-                            if fresh_diff.total_seconds() <= 300:
-                                tick = fresh_tick
-                                tick_time = fresh_time
-                                time_diff = fresh_diff
-                                logger.info(f"[REFRESH] تم تحديث البيانات بنجاح للرمز {symbol}")
-                            else:
-                                logger.warning(f"[WARNING] البيانات لا تزال قديمة بعد التحديث للرمز {symbol}")
+                    # زيادة التحمل إلى 15 دقيقة لتجنب رفض البيانات الصحيحة (كما في v1.2.1)
+                    if time_diff.total_seconds() > 900:
+                        # تقليل التحذيرات - فقط لليوم الواحد (86400 ثانية)
+                        if time_diff.total_seconds() < 86400:
+                            logger.debug(f"[DATA_AGE] بيانات {symbol} عمرها {time_diff.total_seconds():.0f} ثانية - مقبولة")
+                        else:
+                            logger.warning(f"[WARNING] بيانات MT5 قديمة جداً للرمز {symbol} (عمر: {time_diff.total_seconds():.0f} ثانية)")
+                        
+                        # محاولة تحديث السعر بطلب جديد فقط للبيانات اللحظية المباشرة
+                        if force_fresh:
+                            time.sleep(0.2)
+                            fresh_tick = mt5.symbol_info_tick(symbol)
+                            if fresh_tick and fresh_tick.bid > 0 and fresh_tick.ask > 0:
+                                fresh_time = datetime.fromtimestamp(fresh_tick.time)
+                                fresh_diff = datetime.now() - fresh_time
+                                if fresh_diff.total_seconds() < time_diff.total_seconds():
+                                    tick = fresh_tick
+                                    tick_time = fresh_time
+                                    time_diff = fresh_diff
+                                    logger.info(f"[REFRESH] تم تحديث البيانات اللحظية للرمز {symbol}")
                     
                     # إنشاء البيانات بغض النظر عن العمر (لتجنب فشل كامل)
-                    logger.debug(f"[OK] معالجة البيانات للرمز {symbol} (عمر: {time_diff.total_seconds():.1f}s)")
+                    if time_diff.total_seconds() < 86400:  # أقل من يوم
+                        logger.debug(f"[OK] معالجة البيانات للرمز {symbol} (عمر: {time_diff.total_seconds():.0f}s)")
+                    else:
+                        logger.info(f"[OLD_DATA] معالجة بيانات قديمة للرمز {symbol} (عمر: {time_diff.total_seconds():.0f}s)")
+                    # تحسين السعر الحالي - استخدام أفضل قيمة متاحة
+                    best_price = tick.last
+                    if best_price <= 0:  # إذا كان last = 0، استخدم متوسط bid/ask
+                        if tick.bid > 0 and tick.ask > 0:
+                            best_price = (tick.bid + tick.ask) / 2
+                        elif tick.bid > 0:
+                            best_price = tick.bid
+                        elif tick.ask > 0:
+                            best_price = tick.ask
+                    
                     data = {
                         'symbol': symbol,
                         'bid': tick.bid,
                         'ask': tick.ask,
-                        'last': tick.last,
+                        'last': best_price,  # استخدام أفضل سعر متاح
                         'volume': tick.volume,
                         'time': tick_time,
                         'spread': tick.ask - tick.bid,
                     'source': 'MetaTrader5 (مصدر أساسي)',
                     'data_age': time_diff.total_seconds(),
-                    'is_fresh': time_diff.total_seconds() <= 300
+                    'is_fresh': time_diff.total_seconds() <= 900,
+                    'is_manual_analysis': force_fresh  # علامة للبيانات اللحظية المباشرة
                 }
-                    # حفظ في الكاش
+                    # حفظ في الكاش (حتى البيانات اللحظية المباشرة يمكن استخدامها لفترة قصيرة)
+                    if force_fresh:
+                        logger.info(f"[FRESH_DATA] تم الحصول على بيانات لحظية مباشرة للرمز {symbol} في الوقت {tick_time}")
                     cache_price_data(symbol, data)
                     return data
                 else:
@@ -4081,13 +4156,20 @@ class GeminiAnalyzer:
                     r'(?:RR|Risk\s*/\s*Reward|نسبة\s*المخاطرة\s*/\s*المكافأة)\s*[:：]?\s*([\d\.]+)'
                 ])
                 
-                # تطبيق حد أقصى 3 خانات للنقاط
-                if target1_points_ai and target1_points_ai > 999:
-                    target1_points_ai = 999
-                if target2_points_ai and target2_points_ai > 999:
-                    target2_points_ai = 999  
-                if stop_points_ai and stop_points_ai > 999:
-                    stop_points_ai = 999
+                # تطبيق حد أقصى معقول للنقاط حسب نوع الرمز
+                if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
+                    max_tp1_ai, max_tp2_ai, max_sl_ai = 200, 300, 150
+                elif 'JPY' in symbol:  # الين الياباني
+                    max_tp1_ai, max_tp2_ai, max_sl_ai = 100, 150, 80
+                else:  # العملات العادية
+                    max_tp1_ai, max_tp2_ai, max_sl_ai = 100, 150, 80
+                
+                if target1_points_ai and target1_points_ai > max_tp1_ai:
+                    target1_points_ai = max_tp1_ai
+                if target2_points_ai and target2_points_ai > max_tp2_ai:
+                    target2_points_ai = max_tp2_ai  
+                if stop_points_ai and stop_points_ai > max_sl_ai:
+                    stop_points_ai = max_sl_ai
                 
                 # تسجيل النتائج المستخرجة
                 logger.info(f"[AI_EXTRACT] {symbol}: Entry={entry_price_ai}, TP1={target1_ai}({target1_points_ai}), TP2={target2_ai}({target2_points_ai}), SL={stop_loss_ai}({stop_points_ai})")
@@ -6879,8 +6961,10 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
         
         confidence_factors.append(("الذكاء الاصطناعي", ai_score, 25))
         
-        # 4. تحليل اتجاه السوق العام (10% من النتيجة)
+        # 4. تحليل اتجاه السوق العام (15% من النتيجة - دمج التقلبات هنا)
         trend_score = 0
+        volatility_adjustment = 0
+        
         if technical_data and technical_data.get('indicators'):
             overall_trend = technical_data['indicators'].get('overall_trend', '')
             if action == 'BUY' and 'صاعد' in overall_trend:
@@ -6891,24 +6975,23 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
                 trend_score = 5
             elif action != 'HOLD':  # إشارة ضد الاتجاه
                 trend_score = -5
-        
-        confidence_factors.append(("الاتجاه العام", trend_score, 10))
-        
-        # 5. عامل التقلبات والاستقرار (10% من النتيجة)
-        volatility_score = 5  # قيمة افتراضية
-        if technical_data and technical_data.get('indicators'):
+            
+            # دمج عامل التقلبات مع الاتجاه
             bollinger = technical_data['indicators'].get('bollinger', {})
             if bollinger.get('upper') and bollinger.get('lower'):
                 band_width = bollinger['upper'] - bollinger['lower']
                 # تقدير التقلبات من عرض البولنجر باندز
                 if band_width > 0:
                     # تقلبات معتدلة تعطي ثقة أعلى
-                    volatility_score = 8
+                    volatility_adjustment = 5
                 else:
                     # تقلبات عالية أو منخفضة جداً تقلل الثقة
-                    volatility_score = 3
+                    volatility_adjustment = 0
+            else:
+                volatility_adjustment = 3  # قيمة افتراضية
         
-        confidence_factors.append(("التقلبات", volatility_score, 10))
+        total_trend_score = trend_score + volatility_adjustment
+        confidence_factors.append(("الاتجاه العام", total_trend_score, 15))
         
         # حساب النتيجة النهائية
         total_weighted_score = 0
@@ -8172,23 +8255,36 @@ def handle_single_symbol_analysis(call):
             parse_mode='Markdown'
         )
         
-        # جلب البيانات اللحظية من MT5 فقط (بدون بيانات تجريبية لحماية المستخدم)
-        price_data = mt5_manager.get_live_price(symbol)
+        # جلب البيانات اللحظية المباشرة من MT5 (بدون كاش - للتحليل اليدوي)
+        try:
+            logger.info(f"[MANUAL_ANALYSIS] جلب بيانات لحظية مباشرة للرمز {symbol}")
+            price_data = mt5_manager.get_live_price(symbol, force_fresh=True)
+        except Exception as data_error:
+            logger.error(f"[ERROR] خطأ في جلب البيانات اللحظية من MT5 للرمز {symbol}: {data_error}")
+            price_data = None
+            
         if not price_data:
             logger.error(f"[ERROR] فشل في جلب البيانات الحقيقية من MT5 للرمز {symbol}")
-            bot.edit_message_text(
-                f"❌ **لا يمكن الحصول على بيانات حقيقية**\n\n"
-                f"لا يمكن الحصول على بيانات {symbol_info['emoji']} {symbol_info['name']} من MetaTrader5.\n\n"
-                "🔧 **متطلبات التشغيل:**\n"
-                "• يجب تشغيل MetaTrader5 على نفس الجهاز\n"
-                "• يجب تسجيل الدخول لحساب حقيقي أو تجريبي في MT5\n"
-                "• تأكد من وجود اتصال إنترنت مستقر\n"
-                "• تأكد من إضافة الرمز للمراقبة في MT5\n\n"
-                "⚠️ **تحذير:** لا يمكن التحليل بدون بيانات حقيقية لحمايتك من قرارات خاطئة.",
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode='Markdown'
-            )
+            try:
+                bot.edit_message_text(
+                    f"❌ **لا يمكن الحصول على بيانات حقيقية**\n\n"
+                    f"لا يمكن الحصول على بيانات {symbol_info['emoji']} {symbol_info['name']} من MetaTrader5.\n\n"
+                    "🔧 **متطلبات التشغيل:**\n"
+                    "• يجب تشغيل MetaTrader5 على نفس الجهاز\n"
+                    "• يجب تسجيل الدخول لحساب حقيقي أو تجريبي في MT5\n"
+                    "• تأكد من وجود اتصال إنترنت مستقر\n"
+                    "• تأكد من إضافة الرمز للمراقبة في MT5\n\n"
+                    "⚠️ **تحذير:** لا يمكن التحليل بدون بيانات حقيقية لحمايتك من قرارات خاطئة.",
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode='Markdown'
+                )
+            except Exception as msg_error:
+                logger.error(f"[ERROR] فشل في إرسال رسالة الخطأ: {msg_error}")
+                try:
+                    bot.answer_callback_query(call.id, "❌ فشل في جلب البيانات من MT5", show_alert=True)
+                except:
+                    pass
             return
         
         # تحليل ذكي مع Gemini AI مع بديل

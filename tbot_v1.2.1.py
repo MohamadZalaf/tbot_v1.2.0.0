@@ -607,23 +607,27 @@ class MT5Manager:
                 'error': str(e)
             }
     
-    def get_live_price(self, symbol: str) -> Optional[Dict]:
+    def get_live_price(self, symbol: str, force_fresh: bool = False) -> Optional[Dict]:
         """جلب السعر اللحظي الحقيقي - MT5 هو المصدر الأساسي الأولي مع نظام كاش"""
         
         if not symbol or symbol in ['notification', 'null', '', None]:
             logger.warning(f"[WARNING] رمز غير صالح في get_live_price: {symbol}")
             return None
         
-        # التحقق من الكاش أولاً
-        cached_data = get_cached_price_data(symbol)
-        if cached_data:
-            logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
-            return cached_data
-        
-        # التحقق من معدل الاستدعاءات
-        if not can_make_api_call(symbol):
-            logger.debug(f"[RATE_LIMIT] تجاهل الاستدعاء لـ {symbol} - تحديد معدل الاستدعاءات")
-            return None
+        # إذا كان طلب بيانات لحظية مباشرة (للتحليل اليدوي)، تجاهل الكاش
+        if not force_fresh:
+            # التحقق من الكاش أولاً للاستدعاءات العادية فقط
+            cached_data = get_cached_price_data(symbol)
+            if cached_data:
+                logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
+                return cached_data
+            
+            # التحقق من معدل الاستدعاءات للاستدعاءات العادية فقط
+            if not can_make_api_call(symbol):
+                logger.debug(f"[RATE_LIMIT] تجاهل الاستدعاء لـ {symbol} - تحديد معدل الاستدعاءات")
+                return None
+        else:
+            logger.info(f"[FRESH_DATA] طلب بيانات لحظية مباشرة للرمز {symbol} - تجاهل الكاش")
         
         # تسجيل وقت الاستدعاء
         record_api_call(symbol)
@@ -653,11 +657,21 @@ class MT5Manager:
                         # لا نغير حالة الاتصال فوراً، قد تكون مشكلة مؤقتة في الرمز
                     else:
                         logger.debug(f"[OK] تم جلب البيانات الحديثة من MT5 للرمز {symbol}")
+                        # تحسين السعر الحالي - استخدام أفضل قيمة متاحة
+                        best_price = tick.last
+                        if best_price <= 0:  # إذا كان last = 0، استخدم متوسط bid/ask
+                            if tick.bid > 0 and tick.ask > 0:
+                                best_price = (tick.bid + tick.ask) / 2
+                            elif tick.bid > 0:
+                                best_price = tick.bid
+                            elif tick.ask > 0:
+                                best_price = tick.ask
+                        
                         data = {
                             'symbol': symbol,
                             'bid': tick.bid,
                             'ask': tick.ask,
-                            'last': tick.last,
+                            'last': best_price,  # استخدام أفضل سعر متاح
                             'volume': tick.volume,
                             'time': tick_time,
                             'spread': tick.ask - tick.bid,
@@ -3823,8 +3837,9 @@ def handle_single_symbol_analysis(call):
             parse_mode='Markdown'
         )
         
-        # جلب البيانات اللحظية من MT5 فقط (بدون بيانات تجريبية لحماية المستخدم)
-        price_data = mt5_manager.get_live_price(symbol)
+        # جلب البيانات اللحظية المباشرة من MT5 (بدون كاش - للتحليل اليدوي)
+        logger.info(f"[MANUAL_ANALYSIS] جلب بيانات لحظية مباشرة للرمز {symbol}")
+        price_data = mt5_manager.get_live_price(symbol, force_fresh=True)
         if not price_data:
             logger.error(f"[ERROR] فشل في جلب البيانات الحقيقية من MT5 للرمز {symbol}")
             bot.edit_message_text(
