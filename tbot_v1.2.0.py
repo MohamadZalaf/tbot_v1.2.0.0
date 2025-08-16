@@ -1422,46 +1422,32 @@ from dataclasses import dataclass
 
 # كاش البيانات لتقليل الاستدعاءات المتكررة
 price_data_cache = {}
-CACHE_DURATION = 10  # ثوان - مدة متوازنة للحصول على بيانات دقيقة مع تقليل الضغط على MT5
+CACHE_DURATION = 15  # ثوان - زيادة مدة الكاش كما في v1.2.1 للاستقرار
 
 @dataclass
 class CachedPriceData:
     data: dict
     timestamp: datetime
-    source: str  # إضافة مصدر البيانات لمنع التضارب
+    # إزالة source لتبسيط النظام كما في v1.2.1
     
-def is_cache_valid(symbol: str, required_source: str = None) -> bool:
-    """التحقق من صلاحية البيانات المخزنة مؤقتاً مع التحقق من المصدر"""
-    try:
-        if symbol not in price_data_cache:
-            return False
-        
-        cached_item = price_data_cache[symbol]
-        time_diff = datetime.now() - cached_item.timestamp
-        
-        # التحقق من انتهاء صلاحية الوقت (زيادة مدة الكاش للاستقرار)
-        cache_duration = CACHE_DURATION * 1.5  # زيادة مدة الكاش بـ 50%
-        if time_diff.total_seconds() >= cache_duration:
-            return False
-        
-        # التحقق من تطابق المصدر إذا تم تحديده
-        if required_source and cached_item.source != required_source:
-            return False
-    except Exception as e:
-        logger.debug(f"[DEBUG] خطأ في فحص صلاحية الكاش للرمز {symbol}: {e}")
+def is_cache_valid(symbol: str) -> bool:
+    """التحقق من صلاحية البيانات المخزنة مؤقتاً - مبسط كما في v1.2.1"""
+    if symbol not in price_data_cache:
         return False
-        
-    return True
+    
+    cached_item = price_data_cache[symbol]
+    time_diff = datetime.now() - cached_item.timestamp
+    return time_diff.total_seconds() < CACHE_DURATION
 
-def get_cached_price_data(symbol: str, required_source: str = None) -> Optional[dict]:
-    """جلب البيانات من الكاش إذا كانت صالحة ومن المصدر المطلوب"""
-    if is_cache_valid(symbol, required_source):
+def get_cached_price_data(symbol: str) -> Optional[dict]:
+    """جلب البيانات من الكاش إذا كانت صالحة - مبسط كما في v1.2.1"""
+    if is_cache_valid(symbol):
         return price_data_cache[symbol].data
     return None
 
-def cache_price_data(symbol: str, data: dict, source: str = "MT5"):
-    """حفظ البيانات في الكاش مع تحديد المصدر"""
-    price_data_cache[symbol] = CachedPriceData(data, datetime.now(), source)
+def cache_price_data(symbol: str, data: dict):
+    """حفظ البيانات في الكاش - مبسط كما في v1.2.1"""
+    price_data_cache[symbol] = CachedPriceData(data, datetime.now())
     # تنظيف البيانات القديمة من الكاش
     clean_old_cache()
 
@@ -2348,10 +2334,10 @@ class MT5Manager:
             logger.warning(f"[WARNING] رمز غير صالح في get_live_price: {symbol}")
             return None
         
-        # التحقق من الكاش أولاً - إعطاء أولوية لبيانات MT5
-        cached_data = get_cached_price_data(symbol, "MT5")
+        # التحقق من الكاش أولاً
+        cached_data = get_cached_price_data(symbol)
         if cached_data:
-            logger.debug(f"[CACHE] استخدام بيانات MT5 مخزنة مؤقتاً لـ {symbol}")
+            logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
             return cached_data
         
         # التحقق من معدل الاستدعاءات
@@ -2372,18 +2358,15 @@ class MT5Manager:
         # ✅ المصدر الأساسي الأولي: MetaTrader5
         if real_connection_status:
             try:
-                # التأكد من توفر الرمز مع البحث عن بدائل
-                available_symbol = self.ensure_symbol_available(symbol)
-                
                 # جلب آخر تيك للرمز من MT5 (البيانات الأكثر دقة)
-                # تجنب استخدام lock هنا لمنع deadlock في المراقبة
-                tick = mt5.symbol_info_tick(available_symbol)
+                with self.connection_lock:
+                    tick = mt5.symbol_info_tick(symbol)
                 
-                # إذا فشل، جرب مرة أخرى بعد انتظار قصير (كما في mt5_debug)
+                # إذا فشل، جرب مرة أخرى بعد انتظار قصير
                 if not tick or not (hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0):
-                    logger.debug(f"[RETRY] إعادة محاولة جلب البيانات للرمز {available_symbol}")
+                    logger.debug(f"[RETRY] إعادة محاولة جلب البيانات للرمز {symbol}")
                     time.sleep(0.5)
-                    tick = mt5.symbol_info_tick(available_symbol)
+                    tick = mt5.symbol_info_tick(symbol)
                 
                 if tick is not None and hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0:
                     # التحقق من أن البيانات حديثة (ليست قديمة)
@@ -2395,30 +2378,25 @@ class MT5Manager:
                     else:
                         time_diff = datetime.now() - tick_time
                     
-                    # زيادة مرونة وقت البيانات إلى 15 دقيقة (كما في v1.2.1 المستقر)
+                    # زيادة مرونة وقت البيانات إلى 15 دقيقة
                     if time_diff.total_seconds() > 900:
                         logger.warning(f"[WARNING] بيانات MT5 قديمة للرمز {symbol} (عمر البيانات: {time_diff})")
-                        # لا نعيد None فوراً، قد تكون مشكلة مؤقتة في الرمز
+                        # لا نغير حالة الاتصال فوراً، قد تكون مشكلة مؤقتة في الرمز
                     else:
                         logger.debug(f"[OK] تم جلب البيانات الحديثة من MT5 للرمز {symbol}")
-                        # حساب spread بدقة أكبر
-                        spread = round(tick.ask - tick.bid, 5) if tick.ask > tick.bid else 0
-                        
                         data = {
-                            'symbol': symbol,  # الرمز المطلوب أصلاً
-                            'actual_symbol': available_symbol,  # الرمز المستخدم فعلياً
+                            'symbol': symbol,
                             'bid': tick.bid,
                             'ask': tick.ask,
                             'last': tick.last,
                             'volume': tick.volume,
                             'time': tick_time,
-                            'spread': spread,
-                            'spread_points': self.calculate_spread_in_points(symbol, spread),
+                            'spread': tick.ask - tick.bid,
                             'source': 'MetaTrader5 (مصدر أساسي)',
                             'data_age': time_diff.total_seconds()
                         }
-                        # حفظ في الكاش مع تحديد المصدر
-                        cache_price_data(symbol, data, "MT5")
+                        # حفظ في الكاش
+                        cache_price_data(symbol, data)
                         return data
                 else:
                     logger.warning(f"[WARNING] لا توجد بيانات صحيحة من MT5 لـ {symbol}")
