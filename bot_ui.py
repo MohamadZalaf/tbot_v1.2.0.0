@@ -24,7 +24,6 @@ Compatible with: Embedded tbot_v1.2.0.py
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 import subprocess
-import datetime
 import os
 import sys
 import threading
@@ -691,7 +690,7 @@ class TradingBotUI:
     
     def add_log(self, message):
         """Add message to log"""
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[{timestamp}] {message}\n"
         
         self.log_text.insert(tk.END, log_entry)
