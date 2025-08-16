@@ -2537,17 +2537,39 @@ class MT5Manager:
                     'time': current_tick.get('time')
                 }
             
-            # المتوسطات المتحركة (محسوبة من أحدث البيانات)
-            if len(df) >= 9:
-                indicators['ma_9'] = ta.trend.sma_indicator(df['close'], window=9).iloc[-1]
-            if len(df) >= 10:
-                indicators['ma_10'] = ta.trend.sma_indicator(df['close'], window=10).iloc[-1]
-            if len(df) >= 20:
-                indicators['ma_20'] = ta.trend.sma_indicator(df['close'], window=20).iloc[-1]
-            if len(df) >= 21:
-                indicators['ma_21'] = ta.trend.sma_indicator(df['close'], window=21).iloc[-1]
-            if len(df) >= 50:
-                indicators['ma_50'] = ta.trend.sma_indicator(df['close'], window=50).iloc[-1]
+            # المتوسطات المتحركة (محسوبة من أحدث البيانات) - مع التحقق من صحة الدوال
+            try:
+                if len(df) >= 9:
+                    indicators['ma_9'] = ta.trend.sma_indicator(df['close'], window=9).iloc[-1]
+                if len(df) >= 10:
+                    indicators['ma_10'] = ta.trend.sma_indicator(df['close'], window=10).iloc[-1]
+                if len(df) >= 20:
+                    indicators['ma_20'] = ta.trend.sma_indicator(df['close'], window=20).iloc[-1]
+                if len(df) >= 21:
+                    indicators['ma_21'] = ta.trend.sma_indicator(df['close'], window=21).iloc[-1]
+                if len(df) >= 50:
+                    indicators['ma_50'] = ta.trend.sma_indicator(df['close'], window=50).iloc[-1]
+                    
+                # التحقق من صحة القيم المحسوبة
+                for ma_key in ['ma_9', 'ma_10', 'ma_20', 'ma_21', 'ma_50']:
+                    if ma_key in indicators:
+                        if pd.isna(indicators[ma_key]) or indicators[ma_key] <= 0:
+                            logger.warning(f"[WARNING] قيمة {ma_key} غير صحيحة: {indicators[ma_key]}")
+                            del indicators[ma_key]
+                        else:
+                            indicators[ma_key] = float(indicators[ma_key])
+                            
+            except Exception as ma_error:
+                logger.error(f"[ERROR] خطأ في حساب المتوسطات المتحركة: {ma_error}")
+                # استخدام حساب بديل يدوي
+                try:
+                    for window in [9, 10, 20, 21, 50]:
+                        if len(df) >= window:
+                            ma_value = df['close'].rolling(window=window).mean().iloc[-1]
+                            if not pd.isna(ma_value) and ma_value > 0:
+                                indicators[f'ma_{window}'] = float(ma_value)
+                except Exception as manual_ma_error:
+                    logger.error(f"[ERROR] فشل في الحساب اليدوي للمتوسطات: {manual_ma_error}")
             
             # RSI - محسن مع التحقق من صحة البيانات والتعامل مع القيم الشاذة
             if len(df) >= 14:
@@ -2583,25 +2605,62 @@ class MT5Manager:
                     indicators['rsi'] = 50  # قيمة افتراضية محايدة
                     indicators['rsi_interpretation'] = 'خطأ في الحساب'
             
-            # MACD
+            # MACD - مع معالجة أخطاء محسنة
             if len(df) >= 26:
-                macd_line = ta.trend.macd(df['close'])
-                macd_signal = ta.trend.macd_signal(df['close'])
-                macd_histogram = ta.trend.macd_diff(df['close'])
-                
-                indicators['macd'] = {
-                    'macd': macd_line.iloc[-1] if not pd.isna(macd_line.iloc[-1]) else 0,
-                    'signal': macd_signal.iloc[-1] if not pd.isna(macd_signal.iloc[-1]) else 0,
-                    'histogram': macd_histogram.iloc[-1] if not pd.isna(macd_histogram.iloc[-1]) else 0
-                }
-                
-                # تفسير MACD
-                if indicators['macd']['macd'] > indicators['macd']['signal']:
-                    indicators['macd_interpretation'] = 'إشارة صعود'
-                elif indicators['macd']['macd'] < indicators['macd']['signal']:
-                    indicators['macd_interpretation'] = 'إشارة هبوط'
-                else:
-                    indicators['macd_interpretation'] = 'محايد'
+                try:
+                    macd_line = ta.trend.macd(df['close'])
+                    macd_signal = ta.trend.macd_signal(df['close'])
+                    macd_histogram = ta.trend.macd_diff(df['close'])
+                    
+                    # التحقق من صحة البيانات
+                    if macd_line is not None and not macd_line.empty:
+                        macd_val = macd_line.iloc[-1] if not pd.isna(macd_line.iloc[-1]) else 0
+                        signal_val = macd_signal.iloc[-1] if macd_signal is not None and not macd_signal.empty and not pd.isna(macd_signal.iloc[-1]) else 0
+                        hist_val = macd_histogram.iloc[-1] if macd_histogram is not None and not macd_histogram.empty and not pd.isna(macd_histogram.iloc[-1]) else 0
+                        
+                        indicators['macd'] = {
+                            'macd': float(macd_val),
+                            'signal': float(signal_val),
+                            'histogram': float(hist_val)
+                        }
+                        
+                        # تفسير MACD
+                        if indicators['macd']['macd'] > indicators['macd']['signal']:
+                            indicators['macd_interpretation'] = 'إشارة صعود'
+                        elif indicators['macd']['macd'] < indicators['macd']['signal']:
+                            indicators['macd_interpretation'] = 'إشارة هبوط'
+                        else:
+                            indicators['macd_interpretation'] = 'محايد'
+                    else:
+                        logger.warning(f"[WARNING] فشل في حساب MACD للرمز {symbol} - بيانات فارغة")
+                        
+                except Exception as macd_error:
+                    logger.error(f"[ERROR] خطأ في حساب MACD للرمز {symbol}: {macd_error}")
+                    # حساب MACD يدوياً كبديل
+                    try:
+                        ema_12 = df['close'].ewm(span=12).mean()
+                        ema_26 = df['close'].ewm(span=26).mean()
+                        macd_manual = ema_12 - ema_26
+                        signal_manual = macd_manual.ewm(span=9).mean()
+                        histogram_manual = macd_manual - signal_manual
+                        
+                        if len(macd_manual) > 0 and not pd.isna(macd_manual.iloc[-1]):
+                            indicators['macd'] = {
+                                'macd': float(macd_manual.iloc[-1]),
+                                'signal': float(signal_manual.iloc[-1]),
+                                'histogram': float(histogram_manual.iloc[-1])
+                            }
+                            
+                            # تفسير MACD
+                            if indicators['macd']['macd'] > indicators['macd']['signal']:
+                                indicators['macd_interpretation'] = 'إشارة صعود'
+                            elif indicators['macd']['macd'] < indicators['macd']['signal']:
+                                indicators['macd_interpretation'] = 'إشارة هبوط'
+                            else:
+                                indicators['macd_interpretation'] = 'محايد'
+                        
+                    except Exception as manual_macd_error:
+                        logger.error(f"[ERROR] فشل في الحساب اليدوي لـ MACD: {manual_macd_error}")
             
             # حجم التداول - تحليل متقدم مع معالجة الأخطاء محسنة
             try:
@@ -2785,15 +2844,41 @@ class MT5Manager:
                 indicators['volume_interpretation'] = 'حجم طبيعي - بيانات محدودة'
                 indicators['volume_strength'] = 'متوسط'
             
-            # Stochastic Oscillator - تحليل متقدم
+            # Stochastic Oscillator - تحليل متقدم مع معالجة أخطاء
             if len(df) >= 14:
-                stoch_k = ta.momentum.stoch(df['high'], df['low'], df['close'])
-                stoch_d = ta.momentum.stoch_signal(df['high'], df['low'], df['close'])
+                try:
+                    stoch_k = ta.momentum.stoch(df['high'], df['low'], df['close'])
+                    stoch_d = ta.momentum.stoch_signal(df['high'], df['low'], df['close'])
+                except Exception as stoch_error:
+                    logger.error(f"[ERROR] خطأ في حساب Stochastic للرمز {symbol}: {stoch_error}")
+                    # حساب Stochastic يدوياً
+                    try:
+                        # %K calculation
+                        low_14 = df['low'].rolling(window=14).min()
+                        high_14 = df['high'].rolling(window=14).max()
+                        stoch_k = 100 * ((df['close'] - low_14) / (high_14 - low_14))
+                        stoch_d = stoch_k.rolling(window=3).mean()  # %D is 3-period SMA of %K
+                    except Exception as manual_stoch_error:
+                        logger.error(f"[ERROR] فشل في الحساب اليدوي لـ Stochastic: {manual_stoch_error}")
+                        stoch_k = None
+                        stoch_d = None
                 
-                current_k = stoch_k.iloc[-1] if not pd.isna(stoch_k.iloc[-1]) else 50
-                current_d = stoch_d.iloc[-1] if not pd.isna(stoch_d.iloc[-1]) else 50
-                previous_k = stoch_k.iloc[-2] if len(stoch_k) >= 2 and not pd.isna(stoch_k.iloc[-2]) else current_k
-                previous_d = stoch_d.iloc[-2] if len(stoch_d) >= 2 and not pd.isna(stoch_d.iloc[-2]) else current_d
+                # التحقق من وجود بيانات صحيحة
+                if stoch_k is not None and stoch_d is not None and not stoch_k.empty and not stoch_d.empty:
+                    current_k = stoch_k.iloc[-1] if not pd.isna(stoch_k.iloc[-1]) else 50
+                    current_d = stoch_d.iloc[-1] if not pd.isna(stoch_d.iloc[-1]) else 50
+                    previous_k = stoch_k.iloc[-2] if len(stoch_k) >= 2 and not pd.isna(stoch_k.iloc[-2]) else current_k
+                    previous_d = stoch_d.iloc[-2] if len(stoch_d) >= 2 and not pd.isna(stoch_d.iloc[-2]) else current_d
+                    
+                    # التأكد من أن القيم في النطاق الصحيح (0-100)
+                    current_k = max(0, min(100, current_k))
+                    current_d = max(0, min(100, current_d))
+                    previous_k = max(0, min(100, previous_k))
+                    previous_d = max(0, min(100, previous_d))
+                else:
+                    # قيم افتراضية في حالة فشل الحساب
+                    current_k = current_d = previous_k = previous_d = 50
+                    logger.warning(f"[WARNING] استخدام قيم افتراضية لـ Stochastic للرمز {symbol}")
                 
                 indicators['stochastic'] = {
                     'k': current_k,
@@ -2954,19 +3039,38 @@ class MT5Manager:
             # ===== كشف التقاطعات للمتوسطات المتحركة =====
             ma_crossovers = []
             
-            # تقاطعات MA 9 و MA 21
+            # تقاطعات MA 9 و MA 21 - مع معالجة أخطاء محسنة
             if 'ma_9' in indicators and 'ma_21' in indicators and len(df) >= 22:
-                ma_9_prev = ta.trend.sma_indicator(df['close'], window=9).iloc[-2]
-                ma_21_prev = ta.trend.sma_indicator(df['close'], window=21).iloc[-2]
+                try:
+                    ma_9_prev = ta.trend.sma_indicator(df['close'], window=9).iloc[-2]
+                    ma_21_prev = ta.trend.sma_indicator(df['close'], window=21).iloc[-2]
+                    
+                    # التحقق من صحة القيم
+                    if pd.isna(ma_9_prev) or pd.isna(ma_21_prev):
+                        # استخدام حساب يدوي كبديل
+                        ma_9_prev = df['close'].rolling(window=9).mean().iloc[-2]
+                        ma_21_prev = df['close'].rolling(window=21).mean().iloc[-2]
+                        
+                    # التأكد من صحة القيم المحسوبة
+                    if pd.isna(ma_9_prev) or pd.isna(ma_21_prev):
+                        logger.warning(f"[WARNING] فشل في حساب قيم MA السابقة للرمز {symbol}")
+                        ma_9_prev = ma_21_prev = None
+                        
+                except Exception as ma_crossover_error:
+                    logger.error(f"[ERROR] خطأ في حساب تقاطعات MA للرمز {symbol}: {ma_crossover_error}")
+                    ma_9_prev = ma_21_prev = None
                 
                 # التقاطع الذهبي (Golden Cross) - MA9 يقطع MA21 من الأسفل
-                if ma_9_prev <= ma_21_prev and indicators['ma_9'] > indicators['ma_21']:
-                    ma_crossovers.append('تقاطع ذهبي MA9/MA21 - إشارة شراء قوية')
-                    indicators['ma_9_21_crossover'] = 'golden'
-                # تقاطع الموت (Death Cross) - MA9 يقطع MA21 من الأعلى
-                elif ma_9_prev >= ma_21_prev and indicators['ma_9'] < indicators['ma_21']:
-                    ma_crossovers.append('تقاطع الموت MA9/MA21 - إشارة بيع قوية')
-                    indicators['ma_9_21_crossover'] = 'death'
+                if ma_9_prev is not None and ma_21_prev is not None:
+                    if ma_9_prev <= ma_21_prev and indicators['ma_9'] > indicators['ma_21']:
+                        ma_crossovers.append('تقاطع ذهبي MA9/MA21 - إشارة شراء قوية')
+                        indicators['ma_9_21_crossover'] = 'golden'
+                    # تقاطع الموت (Death Cross) - MA9 يقطع MA21 من الأعلى
+                    elif ma_9_prev >= ma_21_prev and indicators['ma_9'] < indicators['ma_21']:
+                        ma_crossovers.append('تقاطع الموت MA9/MA21 - إشارة بيع قوية')
+                        indicators['ma_9_21_crossover'] = 'death'
+                    else:
+                        indicators['ma_9_21_crossover'] = 'none'
                 else:
                     indicators['ma_9_21_crossover'] = 'none'
             
