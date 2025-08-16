@@ -2284,23 +2284,27 @@ class MT5Manager:
     
 
 
-    def get_live_price(self, symbol: str) -> Optional[Dict]:
+    def get_live_price(self, symbol: str, force_fresh: bool = False) -> Optional[Dict]:
         """جلب السعر اللحظي الحقيقي - MT5 هو المصدر الأساسي الأولي مع نظام كاش"""
         
         if not symbol or symbol in ['notification', 'null', '', None]:
             logger.warning(f"[WARNING] رمز غير صالح في get_live_price: {symbol}")
             return None
         
-        # التحقق من الكاش أولاً
-        cached_data = get_cached_price_data(symbol)
-        if cached_data:
-            logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
-            return cached_data
-        
-        # التحقق من معدل الاستدعاءات
-        if not can_make_api_call(symbol):
-            logger.debug(f"[RATE_LIMIT] تجاهل الاستدعاء لـ {symbol} - تحديد معدل الاستدعاءات")
-            return None
+        # إذا كان طلب بيانات لحظية مباشرة (للتحليل اليدوي)، تجاهل الكاش
+        if not force_fresh:
+            # التحقق من الكاش أولاً للاستدعاءات العادية فقط
+            cached_data = get_cached_price_data(symbol)
+            if cached_data:
+                logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
+                return cached_data
+            
+            # التحقق من معدل الاستدعاءات للاستدعاءات العادية فقط
+            if not can_make_api_call(symbol):
+                logger.debug(f"[RATE_LIMIT] تجاهل الاستدعاء لـ {symbol} - تحديد معدل الاستدعاءات")
+                return None
+        else:
+            logger.info(f"[FRESH_DATA] طلب بيانات لحظية مباشرة للرمز {symbol} - تجاهل الكاش")
         
         # تسجيل وقت الاستدعاء
         record_api_call(symbol)
@@ -2379,6 +2383,16 @@ class MT5Manager:
                         logger.debug(f"[RETRY] إعادة محاولة جلب البيانات للرمز {symbol}")
                         time.sleep(1)  # انتظار أطول كما في mt5_debug
                         tick = mt5.symbol_info_tick(symbol)
+                        
+                    # للبيانات اللحظية المباشرة، تأكد من الحصول على أحدث تيك
+                    if force_fresh and tick:
+                        logger.debug(f"[FRESH_TICK] التأكد من أحدث تيك للرمز {symbol}")
+                        # انتظار قصير ثم جلب تيك آخر للتأكد من الحداثة
+                        time.sleep(0.1)
+                        fresh_tick = mt5.symbol_info_tick(symbol)
+                        if fresh_tick and fresh_tick.time >= tick.time:
+                            tick = fresh_tick
+                            logger.debug(f"[FRESH_TICK] تم الحصول على تيك أحدث للرمز {symbol}")
                 
                 if tick is not None and hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0:
                     # التحقق من أن البيانات حديثة (ليست قديمة)
@@ -2414,9 +2428,12 @@ class MT5Manager:
                         'spread': tick.ask - tick.bid,
                     'source': 'MetaTrader5 (مصدر أساسي)',
                     'data_age': time_diff.total_seconds(),
-                    'is_fresh': time_diff.total_seconds() <= 900
+                    'is_fresh': time_diff.total_seconds() <= 900,
+                    'is_manual_analysis': force_fresh  # علامة للبيانات اللحظية المباشرة
                 }
-                    # حفظ في الكاش
+                    # حفظ في الكاش (حتى البيانات اللحظية المباشرة يمكن استخدامها لفترة قصيرة)
+                    if force_fresh:
+                        logger.info(f"[FRESH_DATA] تم الحصول على بيانات لحظية مباشرة للرمز {symbol} في الوقت {tick_time}")
                     cache_price_data(symbol, data)
                     return data
                 else:
@@ -8173,11 +8190,12 @@ def handle_single_symbol_analysis(call):
             parse_mode='Markdown'
         )
         
-        # جلب البيانات اللحظية من MT5 فقط (بدون بيانات تجريبية لحماية المستخدم)
+        # جلب البيانات اللحظية المباشرة من MT5 (بدون كاش - للتحليل اليدوي)
         try:
-            price_data = mt5_manager.get_live_price(symbol)
+            logger.info(f"[MANUAL_ANALYSIS] جلب بيانات لحظية مباشرة للرمز {symbol}")
+            price_data = mt5_manager.get_live_price(symbol, force_fresh=True)
         except Exception as data_error:
-            logger.error(f"[ERROR] خطأ في جلب البيانات من MT5 للرمز {symbol}: {data_error}")
+            logger.error(f"[ERROR] خطأ في جلب البيانات اللحظية من MT5 للرمز {symbol}: {data_error}")
             price_data = None
             
         if not price_data:
