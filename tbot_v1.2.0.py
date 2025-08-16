@@ -952,22 +952,19 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             
             except Exception as e:
                 logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
-            # حساب نقاط افتراضية بناءً على نوع الرمز
-            if 'JPY' in symbol:
-                points1 = 20.0 if target1 else 0
-                points2 = 35.0 if target2 else 0  
-                stop_points = 10.0 if stop_loss else 0
-            elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
-                points1 = 50.0 if target1 else 0
-                points2 = 80.0 if target2 else 0  
-                stop_points = 25.0 if stop_loss else 0
-            else:
-                points1 = 25.0 if target1 else 0
-                points2 = 45.0 if target2 else 0  
-                stop_points = 15.0 if stop_loss else 0
+                # حساب نقاط افتراضية بناءً على نوع الرمز
+                if 'JPY' in symbol:
+                    points1 = 20.0 if target1 else 0
+                    points2 = 35.0 if target2 else 0  
+                    stop_points = 10.0 if stop_loss else 0
+                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+                    points1 = 50.0 if target1 else 0
+                    points2 = 80.0 if target2 else 0  
+                    stop_points = 25.0 if stop_loss else 0
+                else:
+                    points1 = 25.0 if target1 else 0
+                    points2 = 45.0 if target2 else 0  
+                    stop_points = 15.0 if stop_loss else 0
         
         # حساب نسبة المخاطرة/المكافأة
         if not risk_reward_ratio:
