@@ -2273,14 +2273,67 @@ class MT5Manager:
         # ✅ المصدر الأساسي الأولي: MetaTrader5
         if real_connection_status:
             try:
-                # جلب آخر تيك للرمز من MT5 (البيانات الأكثر دقة)
-                with self.connection_lock:
-                    tick = mt5.symbol_info_tick(symbol)
+                # تحقق من تفعيل الرمز أولاً (كما في mt5_debug)
+                symbol_info = mt5.symbol_info(symbol)
+                if symbol_info is None:
+                    # البحث في الرموز البديلة للأصول الشائعة
+                    symbol_alternatives = {
+                        # المعادن النفيسة
+                        'XAUUSD': ['XAUUSD', 'GOLD', 'XAUUSD.m', 'GOLD.m', 'XAUUSD.c'],
+                        'GOLD': ['GOLD', 'XAUUSD', 'GOLD.m', 'XAUUSD.m', 'XAUUSD.c'],
+                        'XAGUSD': ['XAGUSD', 'SILVER', 'XAGUSD.m', 'SILVER.m'],
+                        
+                        # العملات الرقمية
+                        'BTCUSD': ['BTCUSD', 'BITCOIN', 'BTC', 'BTCUSD.m'],
+                        'ETHUSD': ['ETHUSD', 'ETHEREUM', 'ETH', 'ETHUSD.m'],
+                        
+                        # أزواج العملات الرئيسية
+                        'EURUSD': ['EURUSD', 'EURUSD.m', 'EURUSD.c'],
+                        'GBPUSD': ['GBPUSD', 'GBPUSD.m', 'GBPUSD.c'],
+                        'USDJPY': ['USDJPY', 'USDJPY.m', 'USDJPY.c'],
+                        'AUDUSD': ['AUDUSD', 'AUDUSD.m', 'AUDUSD.c'],
+                        'USDCAD': ['USDCAD', 'USDCAD.m', 'USDCAD.c'],
+                        'USDCHF': ['USDCHF', 'USDCHF.m', 'USDCHF.c'],
+                        'NZDUSD': ['NZDUSD', 'NZDUSD.m', 'NZDUSD.c'],
+                        
+                        # المؤشرات
+                        'US30': ['US30', 'US30.m', 'US30.c', 'DOW30'],
+                        'US500': ['US500', 'US500.m', 'SPX500', 'SP500'],
+                        'NAS100': ['NAS100', 'NAS100.m', 'NASDAQ'],
+                        'GER30': ['GER30', 'GER30.m', 'DAX30', 'DAX'],
+                        'UK100': ['UK100', 'UK100.m', 'FTSE100'],
+                        
+                        # النفط
+                        'USOIL': ['USOIL', 'CRUDE', 'WTI', 'USOIL.m'],
+                        'UKOIL': ['UKOIL', 'BRENT', 'BRENT.m']
+                    }
+                    
+                    alternatives = symbol_alternatives.get(symbol.upper(), [symbol])
+                    for alt_symbol in alternatives:
+                        alt_info = mt5.symbol_info(alt_symbol)
+                        if alt_info is not None:
+                            symbol = alt_symbol  # استخدم الرمز البديل
+                            symbol_info = alt_info
+                            logger.info(f"[SYMBOL_ALT] استخدام الرمز البديل {alt_symbol}")
+                            break
+                    
+                    if symbol_info is None:
+                        logger.warning(f"[WARNING] الرمز {symbol} غير متاح في هذا الوسيط")
+                        return None
                 
-                # إذا فشل، جرب مرة أخرى بعد انتظار قصير
+                # تجربة تفعيل الرمز إذا لم يكن مفعلاً (كما في mt5_debug)
+                if not symbol_info.visible:
+                    logger.info(f"[SYMBOL_ENABLE] تفعيل الرمز {symbol}")
+                    mt5.symbol_select(symbol, True)
+                    time.sleep(0.5)  # انتظار للتفعيل
+                
+                # جلب آخر تيك للرمز من MT5 (البيانات الأكثر دقة)
+                tick = mt5.symbol_info_tick(symbol)
+                
+                # إذا فشل، جرب مرة أخرى مع انتظار أطول (كما في mt5_debug)
                 if not tick or not (hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0):
                     logger.debug(f"[RETRY] إعادة محاولة جلب البيانات للرمز {symbol}")
-                    time.sleep(0.5)
+                    time.sleep(1)  # انتظار أطول كما في mt5_debug
                     tick = mt5.symbol_info_tick(symbol)
                 
                 if tick is not None and hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0:
@@ -2290,24 +2343,38 @@ class MT5Manager:
                     
                     # زيادة مرونة وقت البيانات إلى 15 دقيقة
                     if time_diff.total_seconds() > 900:
-                        logger.warning(f"[WARNING] بيانات MT5 قديمة للرمز {symbol} (عمر البيانات: {time_diff})")
-                        # لا نغير حالة الاتصال فوراً، قد تكون مشكلة مؤقتة في الرمز
-                    else:
-                        logger.debug(f"[OK] تم جلب البيانات الحديثة من MT5 للرمز {symbol}")
-                        data = {
-                            'symbol': symbol,
-                            'bid': tick.bid,
-                            'ask': tick.ask,
-                            'last': tick.last,
-                            'volume': tick.volume,
-                            'time': tick_time,
-                            'spread': tick.ask - tick.bid,
-                            'source': 'MetaTrader5 (مصدر أساسي)',
-                            'data_age': time_diff.total_seconds()
-                        }
-                        # حفظ في الكاش
-                        cache_price_data(symbol, data)
-                        return data
+                        logger.warning(f"[WARNING] بيانات MT5 قديمة للرمز {symbol} (عمر البيانات: {time_diff}) - محاولة تحديث...")
+                        # محاولة تحديث السعر بطلب جديد
+                        time.sleep(0.2)
+                        fresh_tick = mt5.symbol_info_tick(symbol)
+                        if fresh_tick and fresh_tick.bid > 0 and fresh_tick.ask > 0:
+                            fresh_time = datetime.fromtimestamp(fresh_tick.time)
+                            fresh_diff = datetime.now() - fresh_time
+                            if fresh_diff.total_seconds() <= 900:
+                                tick = fresh_tick
+                                tick_time = fresh_time
+                                time_diff = fresh_diff
+                                logger.info(f"[REFRESH] تم تحديث البيانات بنجاح للرمز {symbol}")
+                            else:
+                                logger.warning(f"[WARNING] البيانات لا تزال قديمة بعد التحديث للرمز {symbol}")
+                    
+                    # إنشاء البيانات بغض النظر عن العمر (لتجنب فشل كامل)
+                    logger.debug(f"[OK] معالجة البيانات للرمز {symbol} (عمر: {time_diff.total_seconds():.1f}s)")
+                    data = {
+                        'symbol': symbol,
+                        'bid': tick.bid,
+                        'ask': tick.ask,
+                        'last': tick.last,
+                        'volume': tick.volume,
+                        'time': tick_time,
+                        'spread': tick.ask - tick.bid,
+                        'source': 'MetaTrader5 (مصدر أساسي)',
+                        'data_age': time_diff.total_seconds(),
+                        'is_fresh': time_diff.total_seconds() <= 900
+                    }
+                    # حفظ في الكاش
+                    cache_price_data(symbol, data)
+                    return data
                 else:
                     logger.warning(f"[WARNING] لا توجد بيانات صحيحة من MT5 لـ {symbol}")
                     # لا نغير حالة الاتصال فوراً، قد يكون الرمز غير متاح فقط
