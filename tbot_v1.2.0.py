@@ -1051,31 +1051,41 @@ from dataclasses import dataclass
 
 # كاش البيانات لتقليل الاستدعاءات المتكررة
 price_data_cache = {}
-CACHE_DURATION = 15  # ثوان - مدة صلاحية الكاش
+CACHE_DURATION = 5  # ثوان - تقليل مدة الكاش من 15 إلى 5 ثوان لبيانات أكثر دقة
 
 @dataclass
 class CachedPriceData:
     data: dict
     timestamp: datetime
+    source: str  # إضافة مصدر البيانات لمنع التضارب
     
-def is_cache_valid(symbol: str) -> bool:
-    """التحقق من صلاحية البيانات المخزنة مؤقتاً"""
+def is_cache_valid(symbol: str, required_source: str = None) -> bool:
+    """التحقق من صلاحية البيانات المخزنة مؤقتاً مع التحقق من المصدر"""
     if symbol not in price_data_cache:
         return False
     
     cached_item = price_data_cache[symbol]
     time_diff = datetime.now() - cached_item.timestamp
-    return time_diff.total_seconds() < CACHE_DURATION
+    
+    # التحقق من انتهاء صلاحية الوقت
+    if time_diff.total_seconds() >= CACHE_DURATION:
+        return False
+    
+    # التحقق من تطابق المصدر إذا تم تحديده
+    if required_source and cached_item.source != required_source:
+        return False
+        
+    return True
 
-def get_cached_price_data(symbol: str) -> Optional[dict]:
-    """جلب البيانات من الكاش إذا كانت صالحة"""
-    if is_cache_valid(symbol):
+def get_cached_price_data(symbol: str, required_source: str = None) -> Optional[dict]:
+    """جلب البيانات من الكاش إذا كانت صالحة ومن المصدر المطلوب"""
+    if is_cache_valid(symbol, required_source):
         return price_data_cache[symbol].data
     return None
 
-def cache_price_data(symbol: str, data: dict):
-    """حفظ البيانات في الكاش"""
-    price_data_cache[symbol] = CachedPriceData(data, datetime.now())
+def cache_price_data(symbol: str, data: dict, source: str = "MT5"):
+    """حفظ البيانات في الكاش مع تحديد المصدر"""
+    price_data_cache[symbol] = CachedPriceData(data, datetime.now(), source)
 
 # معدل الاستدعاءات للحماية من الإفراط
 last_api_calls = {}
@@ -1668,10 +1678,10 @@ class MT5Manager:
             logger.warning(f"[WARNING] رمز غير صالح في get_live_price: {symbol}")
             return None
         
-        # التحقق من الكاش أولاً
-        cached_data = get_cached_price_data(symbol)
+        # التحقق من الكاش أولاً - إعطاء أولوية لبيانات MT5
+        cached_data = get_cached_price_data(symbol, "MT5")
         if cached_data:
-            logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
+            logger.debug(f"[CACHE] استخدام بيانات MT5 مخزنة مؤقتاً لـ {symbol}")
             return cached_data
         
         # التحقق من معدل الاستدعاءات
@@ -1723,8 +1733,8 @@ class MT5Manager:
                             'source': 'MetaTrader5 (مصدر أساسي)',
                             'data_age': time_diff.total_seconds()
                         }
-                        # حفظ في الكاش
-                        cache_price_data(symbol, data)
+                        # حفظ في الكاش مع تحديد المصدر
+                        cache_price_data(symbol, data, "MT5")
                         return data
                 else:
                     logger.warning(f"[WARNING] لا توجد بيانات صحيحة من MT5 لـ {symbol}")
@@ -1738,14 +1748,20 @@ class MT5Manager:
         else:
             logger.debug(f"[DEBUG] MT5 غير متصل حقيقياً - سيتم استخدام مصدر بديل لـ {symbol}")
         
-        # 🔄 مصدر بديل فقط: Yahoo Finance (للرموز غير المتوفرة في MT5)
+        # 🔄 مصدر بديل فقط: Yahoo Finance (للرموز غير المتوفرة في MT5 - مع تحذير)
+        # استخدام Yahoo Finance فقط عند عدم توفر MT5 أو فشل الرمز نهائياً
+        cached_yahoo_data = get_cached_price_data(symbol, "Yahoo Finance")
+        if cached_yahoo_data:
+            logger.debug(f"[CACHE] استخدام بيانات Yahoo Finance مخزنة مؤقتاً لـ {symbol}")
+            return cached_yahoo_data
+            
         try:
             import yfinance as yf
             
             # تحويل رموز MT5 إلى رموز Yahoo Finance
             yahoo_symbol = self._convert_to_yahoo_symbol(symbol)
             if yahoo_symbol:
-                logger.info(f"[RUNNING] محاولة جلب البيانات من Yahoo Finance لـ {symbol}")
+                logger.warning(f"[FALLBACK] استخدام Yahoo Finance كمصدر بديل لـ {symbol} - قد تختلف البيانات عن MT5")
                 ticker = yf.Ticker(yahoo_symbol)
                 data = ticker.history(period="1d", interval="1m")
                 
@@ -1764,8 +1780,8 @@ class MT5Manager:
                         'spread': latest['Close'] * 0.001,
                         'source': 'Yahoo Finance (مصدر بديل)'
                     }
-                    # حفظ في الكاش
-                    cache_price_data(symbol, data)
+                    # حفظ في الكاش مع تحديد المصدر
+                    cache_price_data(symbol, data, "Yahoo Finance")
                     return data
                     
         except Exception as e:
@@ -1881,10 +1897,15 @@ class MT5Manager:
             return None
     
     def calculate_technical_indicators(self, symbol: str) -> Optional[Dict]:
-        """حساب المؤشرات الفنية من البيانات التاريخية للرمز"""
+        """حساب المؤشرات الفنية من البيانات التاريخية للرمز - MT5 فقط للدقة"""
         try:
             if not self.connected:
                 logger.warning(f"[WARNING] MT5 غير متصل - لا يمكن حساب المؤشرات لـ {symbol}")
+                return None
+            
+            # التأكد من أن الاتصال حقيقي قبل جلب البيانات
+            if not self.check_real_connection():
+                logger.warning(f"[WARNING] اتصال MT5 غير مستقر - لا يمكن حساب المؤشرات لـ {symbol}")
                 return None
             
             # جلب أحدث البيانات اللحظية (M1 للحصول على أقصى دقة لحظية)
@@ -1892,29 +1913,18 @@ class MT5Manager:
             if df is None or len(df) < 20:
                 logger.warning(f"[WARNING] بيانات غير كافية لحساب المؤشرات لـ {symbol}")
                 return None
+                
+            # التحقق من جودة البيانات
+            if df['close'].isna().sum() > len(df) * 0.1:  # إذا كان أكثر من 10% من البيانات مفقود
+                logger.warning(f"[WARNING] جودة البيانات ضعيفة لـ {symbol} - {df['close'].isna().sum()} قيمة مفقودة")
+                return None
             
-            # دمج السعر اللحظي الحالي مع البيانات للحصول على أحدث قراءة
+            # حفظ السعر اللحظي الحالي للاستخدام دون إضافته للبيانات التاريخية (لتجنب تشويه المؤشرات)
             current_tick = self.get_live_price(symbol)
-            if current_tick and 'last' in current_tick:
-                # إضافة السعر اللحظي الحالي كآخر نقطة بيانات
-                current_time = pd.Timestamp.now()
-                current_price = current_tick['last']
-                current_volume = current_tick.get('volume', df['tick_volume'].iloc[-1])
-                
-                # إنشاء صف جديد بالبيانات اللحظية
-                new_row = pd.DataFrame({
-                    'open': [df['close'].iloc[-1]],  # افتراض أن الفتح هو آخر إغلاق
-                    'high': [max(df['close'].iloc[-1], current_price)],
-                    'low': [min(df['close'].iloc[-1], current_price)],
-                    'close': [current_price],
-                    'tick_volume': [current_volume],
-                    'spread': [current_tick.get('spread', df['spread'].iloc[-1])],
-                    'real_volume': [current_volume]
-                }, index=[current_time])
-                
-                # دمج البيانات اللحظية مع البيانات التاريخية
-                df = pd.concat([df, new_row])
-                logger.debug(f"[REALTIME] تم دمج السعر اللحظي {current_price} مع البيانات التاريخية لـ {symbol}")
+            current_live_price = None
+            if current_tick and 'last' in current_tick and current_tick.get('source', '').startswith('MetaTrader5'):
+                current_live_price = current_tick['last']
+                logger.debug(f"[REALTIME] حفظ السعر اللحظي {current_live_price} من MT5 لـ {symbol} (بدون دمج)")
             
             indicators = {}
             
@@ -1942,17 +1952,39 @@ class MT5Manager:
             if len(df) >= 50:
                 indicators['ma_50'] = ta.trend.sma_indicator(df['close'], window=50).iloc[-1]
             
-            # RSI
+            # RSI - محسن مع التحقق من صحة البيانات والتعامل مع القيم الشاذة
             if len(df) >= 14:
-                indicators['rsi'] = ta.momentum.rsi(df['close'], window=14).iloc[-1]
-                
-                # تفسير RSI
-                if indicators['rsi'] > 70:
-                    indicators['rsi_interpretation'] = 'ذروة شراء'
-                elif indicators['rsi'] < 30:
-                    indicators['rsi_interpretation'] = 'ذروة بيع'
-                else:
-                    indicators['rsi_interpretation'] = 'محايد'
+                try:
+                    # حساب RSI مع التحقق من صحة البيانات
+                    rsi_series = ta.momentum.rsi(df['close'], window=14)
+                    rsi_value = rsi_series.iloc[-1]
+                    
+                    # التحقق من صحة قيمة RSI
+                    if pd.isna(rsi_value) or rsi_value < 0 or rsi_value > 100:
+                        # في حالة قيمة غير صحيحة، محاولة حساب RSI ببيانات أكثر
+                        if len(df) >= 20:
+                            rsi_series = ta.momentum.rsi(df['close'], window=14)
+                            rsi_value = rsi_series.dropna().iloc[-1] if len(rsi_series.dropna()) > 0 else 50
+                        else:
+                            rsi_value = 50  # قيمة افتراضية محايدة
+                        logger.warning(f"[RSI] قيمة RSI غير صحيحة، استخدام قيمة محسوبة: {rsi_value}")
+                    
+                    indicators['rsi'] = float(rsi_value)
+                    
+                    # تفسير RSI مع مراجعة القيم
+                    if indicators['rsi'] > 70:
+                        indicators['rsi_interpretation'] = 'ذروة شراء'
+                    elif indicators['rsi'] < 30:
+                        indicators['rsi_interpretation'] = 'ذروة بيع'
+                    else:
+                        indicators['rsi_interpretation'] = 'محايد'
+                        
+                    logger.debug(f"[RSI] قيمة RSI محسوبة: {indicators['rsi']:.2f}")
+                    
+                except Exception as e:
+                    logger.error(f"[ERROR] خطأ في حساب RSI لـ {symbol}: {e}")
+                    indicators['rsi'] = 50  # قيمة افتراضية محايدة
+                    indicators['rsi_interpretation'] = 'خطأ في الحساب'
             
             # MACD
             if len(df) >= 26:
@@ -2280,8 +2312,15 @@ class MT5Manager:
                 indicators['atr'] = 0
                 indicators['atr_interpretation'] = 'بيانات غير كافية'
             
-            # معلومات السعر الحالي
-            indicators['current_price'] = df['close'].iloc[-1]
+            # معلومات السعر الحالي - استخدام السعر اللحظي من MT5 إذا توفر، وإلا استخدم آخر سعر من البيانات التاريخية
+            if current_live_price and current_live_price > 0:
+                indicators['current_price'] = current_live_price
+                indicators['price_source'] = 'live_mt5'
+                logger.debug(f"[PRICE] استخدام السعر اللحظي من MT5: {current_live_price}")
+            else:
+                indicators['current_price'] = df['close'].iloc[-1]
+                indicators['price_source'] = 'historical'
+                logger.debug(f"[PRICE] استخدام آخر سعر تاريخي: {df['close'].iloc[-1]}")
             
             # حساب التغير اليومي الصحيح - مقارنة مع بداية اليوم
             try:
