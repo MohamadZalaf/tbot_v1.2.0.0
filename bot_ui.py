@@ -163,6 +163,22 @@ class TradingBotUI:
         )
         header_label.pack()
         
+        # Users count window (small maroon window with red text)
+        users_frame = tk.Frame(self.control_frame, bg='#800020', relief=tk.RIDGE, bd=2, height=40)  # Maroon background
+        users_frame.pack(fill=tk.X, pady=5)
+        users_frame.pack_propagate(False)  # Maintain fixed height
+        
+        # Users count label
+        self.users_label = tk.Label(
+            users_frame,
+            text="👥 عدد المستخدمين: جاري التحميل...",
+            font=("Arial", 12, "bold"),
+            bg='#800020',  # Maroon background
+            fg='#DC143C',  # Crimson red text
+            pady=8
+        )
+        self.users_label.pack(expand=True)
+        
         # Control buttons frame
         buttons_frame = tk.Frame(self.control_frame, bg=self.colors['bg_main'])
         buttons_frame.pack(fill=tk.X, pady=10)
@@ -332,6 +348,7 @@ class TradingBotUI:
             self.is_logged_in = True
             self.show_control()
             self.log_event("✅ Login successful - Access granted", "success")
+            self.update_users_count()  # Update users count on login
             self.password_entry.delete(0, tk.END)
         else:
             messagebox.showerror("❌ Access Denied", "Incorrect password!\nAccess to bot controls denied.")
@@ -458,6 +475,67 @@ class TradingBotUI:
         
         self.process_label.config(text=process_info)
     
+    def get_users_count(self):
+        """Get the number of active users from bot data"""
+        try:
+            total_users = 0
+            
+            # Check multiple possible user data locations
+            user_data_paths = [
+                "trading_data/users",
+                "trading_data/user_settings", 
+                "trading_data/user_feedback",
+                "user_data",
+                "users"
+            ]
+            
+            unique_users = set()
+            
+            for path in user_data_paths:
+                if os.path.exists(path) and os.path.isdir(path):
+                    try:
+                        files = os.listdir(path)
+                        for file in files:
+                            if file.endswith(('.json', '.txt')):
+                                # Extract user ID from filename
+                                if file.startswith(('user_', 'settings_')):
+                                    user_id = file.split('_')[1].split('.')[0]
+                                    if user_id.isdigit():
+                                        unique_users.add(user_id)
+                                elif file.replace('.json', '').replace('.txt', '').isdigit():
+                                    unique_users.add(file.replace('.json', '').replace('.txt', ''))
+                    except Exception:
+                        continue
+            
+            # If we found unique users, return count
+            if unique_users:
+                return len(unique_users)
+            
+            # Fallback: count all user-related files
+            for path in user_data_paths:
+                if os.path.exists(path) and os.path.isdir(path):
+                    try:
+                        files = [f for f in os.listdir(path) if f.endswith(('.json', '.txt'))]
+                        total_users += len(files)
+                    except Exception:
+                        continue
+            
+            return total_users if total_users > 0 else 0
+            
+        except Exception as e:
+            # Don't add log here to avoid spam, just return 0
+            return 0
+    
+    def update_users_count(self):
+        """Update users count display"""
+        try:
+            count = self.get_users_count()
+            if hasattr(self, 'users_label'):
+                self.users_label.config(text=f"👥 عدد المستخدمين: {count}")
+        except Exception as e:
+            if hasattr(self, 'users_label'):
+                self.users_label.config(text="👥 عدد المستخدمين: خطأ")
+
     def start_monitoring(self):
         """Start monitoring thread"""
         self.is_monitoring = True
@@ -469,6 +547,7 @@ class TradingBotUI:
         while self.is_monitoring:
             if self.is_logged_in:
                 self.update_process_info()
+                self.update_users_count()  # Update users count every second
                 
                 # Check if bot process died unexpectedly
                 if self.bot_process and self.bot_process.poll() is not None:
