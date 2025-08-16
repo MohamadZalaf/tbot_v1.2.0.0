@@ -506,9 +506,15 @@ class TradingBotUI:
 if __name__ == "__main__":
     # Check if running in correct directory
     if not os.path.exists("tbot_v1.2.0.py"):
-        print("❌ Error: tbot_v1.2.0.py not found in current directory!")
-        print("Please run this UI from the same directory as your bot file.")
-        input("Press Enter to exit...")
+        # Create a temporary root window for messagebox
+        temp_root = tk.Tk()
+        temp_root.withdraw()  # Hide the temporary window
+        messagebox.showerror(
+            "File Not Found", 
+            "❌ Error: tbot_v1.2.0.py not found in current directory!\n\n"
+            "Please run this UI from the same directory as your bot file."
+        )
+        temp_root.destroy()
         sys.exit(1)
     
     # Create and run the UI
@@ -518,5 +524,11 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n🛑 Application terminated by user")
     except Exception as e:
-        print(f"❌ Application error: {e}")
-        input("Press Enter to exit...")
+        # Create a temporary root window for messagebox
+        temp_root = tk.Tk()
+        temp_root.withdraw()  # Hide the temporary window
+        messagebox.showerror(
+            "Application Error", 
+            f"❌ Application error occurred:\n\n{str(e)}\n\nPlease check the error details and try again."
+        )
+        temp_root.destroy()

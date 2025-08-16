@@ -907,49 +907,64 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         # جلب حجم النقطة (pip size) الخاص بالرمز
         asset_type, pip_size = get_asset_type_and_pip_size(symbol)
         
-        # حساب النقاط للأهداف ووقف الخسارة بشكل صحيح
+        # استخدام النقاط المحسوبة من AI إذا كانت متوفرة، وإلا حسابها يدوياً
         points1 = 0
         points2 = 0
         stop_points = 0
         
-        try:
-            logger.debug(f"[DEBUG] حساب النقاط للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
+        # إعطاء الأولوية للنقاط المحسوبة من AI
+        if analysis and analysis.get('ai_calculated'):
+            points1 = analysis.get('target1_points', 0) or 0
+            points2 = analysis.get('target2_points', 0) or 0  
+            stop_points = analysis.get('stop_points', 0) or 0
             
-            # حساب النقاط للهدف الأول
-            if target1 and entry_price and target1 != entry_price and pip_size > 0:
-                price_diff1 = abs(target1 - entry_price)
-                points1 = price_diff1 / pip_size
-                logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط={points1:.1f}")
-                
-            # حساب النقاط للهدف الثاني
-            if target2 and entry_price and target2 != entry_price and pip_size > 0:
-                price_diff2 = abs(target2 - entry_price)
-                points2 = price_diff2 / pip_size
-                logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط={points2:.1f}")
-                
-            # حساب النقاط لوقف الخسارة
-            if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
-                price_diff_stop = abs(entry_price - stop_loss)
-                stop_points = price_diff_stop / pip_size
-                logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط={stop_points:.1f}")
-                
-            logger.info(f"[POINTS] النقاط المحسوبة للرمز {symbol}: Target1={points1:.1f}, Target2={points2:.1f}, Stop={stop_points:.1f}")
+            # تطبيق حد أقصى 3 خانات (999)
+            points1 = min(points1, 999) if points1 else 0
+            points2 = min(points2, 999) if points2 else 0
+            stop_points = min(stop_points, 999) if stop_points else 0
             
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
-            # حساب نقاط افتراضية بناءً على نوع الرمز
-            if 'JPY' in symbol:
-                points1 = 20.0 if target1 else 0
-                points2 = 35.0 if target2 else 0  
-                stop_points = 10.0 if stop_loss else 0
-            elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
-                points1 = 50.0 if target1 else 0
-                points2 = 80.0 if target2 else 0  
-                stop_points = 25.0 if stop_loss else 0
-            else:
-                points1 = 25.0 if target1 else 0
-                points2 = 45.0 if target2 else 0  
-                stop_points = 15.0 if stop_loss else 0
+            logger.info(f"[AI_POINTS] استخدام النقاط المحسوبة من AI للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
+        
+        # إذا لم تكن النقاط متوفرة من AI، احسبها يدوياً
+        if not (points1 or points2 or stop_points):
+            try:
+                logger.debug(f"[DEBUG] حساب النقاط يدوياً للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
+                
+                # حساب النقاط للهدف الأول
+                if target1 and entry_price and target1 != entry_price and pip_size > 0:
+                    price_diff1 = abs(target1 - entry_price)
+                    points1 = min(price_diff1 / pip_size, 999)  # حد أقصى 999
+                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط={points1:.0f}")
+                    
+                # حساب النقاط للهدف الثاني
+                if target2 and entry_price and target2 != entry_price and pip_size > 0:
+                    price_diff2 = abs(target2 - entry_price)
+                    points2 = min(price_diff2 / pip_size, 999)  # حد أقصى 999
+                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط={points2:.0f}")
+                    
+                # حساب النقاط لوقف الخسارة
+                if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
+                    price_diff_stop = abs(entry_price - stop_loss)
+                    stop_points = min(price_diff_stop / pip_size, 999)  # حد أقصى 999
+                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط={stop_points:.0f}")
+                    
+                logger.info(f"[MANUAL_POINTS] النقاط المحسوبة يدوياً للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
+            
+            except Exception as e:
+                logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
+                # حساب نقاط افتراضية بناءً على نوع الرمز
+                if 'JPY' in symbol:
+                    points1 = 20.0 if target1 else 0
+                    points2 = 35.0 if target2 else 0  
+                    stop_points = 10.0 if stop_loss else 0
+                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+                    points1 = 50.0 if target1 else 0
+                    points2 = 80.0 if target2 else 0  
+                    stop_points = 25.0 if stop_loss else 0
+                else:
+                    points1 = 25.0 if target1 else 0
+                    points2 = 45.0 if target2 else 0  
+                    stop_points = 15.0 if stop_loss else 0
         
         # حساب نسبة المخاطرة/المكافأة
         if not risk_reward_ratio:
@@ -987,10 +1002,10 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         
         # معلومات الصفقة
         body += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-        body += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.1f} نقطة)\n"
+        body += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
         if target2:
-            body += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.1f} نقطة)\n"
-        body += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.1f} نقطة)\n"
+            body += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
+        body += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
         body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
         body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
         
@@ -1051,31 +1066,41 @@ from dataclasses import dataclass
 
 # كاش البيانات لتقليل الاستدعاءات المتكررة
 price_data_cache = {}
-CACHE_DURATION = 15  # ثوان - مدة صلاحية الكاش
+CACHE_DURATION = 5  # ثوان - تقليل مدة الكاش من 15 إلى 5 ثوان لبيانات أكثر دقة
 
 @dataclass
 class CachedPriceData:
     data: dict
     timestamp: datetime
+    source: str  # إضافة مصدر البيانات لمنع التضارب
     
-def is_cache_valid(symbol: str) -> bool:
-    """التحقق من صلاحية البيانات المخزنة مؤقتاً"""
+def is_cache_valid(symbol: str, required_source: str = None) -> bool:
+    """التحقق من صلاحية البيانات المخزنة مؤقتاً مع التحقق من المصدر"""
     if symbol not in price_data_cache:
         return False
     
     cached_item = price_data_cache[symbol]
     time_diff = datetime.now() - cached_item.timestamp
-    return time_diff.total_seconds() < CACHE_DURATION
+    
+    # التحقق من انتهاء صلاحية الوقت
+    if time_diff.total_seconds() >= CACHE_DURATION:
+        return False
+    
+    # التحقق من تطابق المصدر إذا تم تحديده
+    if required_source and cached_item.source != required_source:
+        return False
+        
+    return True
 
-def get_cached_price_data(symbol: str) -> Optional[dict]:
-    """جلب البيانات من الكاش إذا كانت صالحة"""
-    if is_cache_valid(symbol):
+def get_cached_price_data(symbol: str, required_source: str = None) -> Optional[dict]:
+    """جلب البيانات من الكاش إذا كانت صالحة ومن المصدر المطلوب"""
+    if is_cache_valid(symbol, required_source):
         return price_data_cache[symbol].data
     return None
 
-def cache_price_data(symbol: str, data: dict):
-    """حفظ البيانات في الكاش"""
-    price_data_cache[symbol] = CachedPriceData(data, datetime.now())
+def cache_price_data(symbol: str, data: dict, source: str = "MT5"):
+    """حفظ البيانات في الكاش مع تحديد المصدر"""
+    price_data_cache[symbol] = CachedPriceData(data, datetime.now(), source)
 
 # معدل الاستدعاءات للحماية من الإفراط
 last_api_calls = {}
@@ -1668,10 +1693,10 @@ class MT5Manager:
             logger.warning(f"[WARNING] رمز غير صالح في get_live_price: {symbol}")
             return None
         
-        # التحقق من الكاش أولاً
-        cached_data = get_cached_price_data(symbol)
+        # التحقق من الكاش أولاً - إعطاء أولوية لبيانات MT5
+        cached_data = get_cached_price_data(symbol, "MT5")
         if cached_data:
-            logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
+            logger.debug(f"[CACHE] استخدام بيانات MT5 مخزنة مؤقتاً لـ {symbol}")
             return cached_data
         
         # التحقق من معدل الاستدعاءات
@@ -1723,8 +1748,8 @@ class MT5Manager:
                             'source': 'MetaTrader5 (مصدر أساسي)',
                             'data_age': time_diff.total_seconds()
                         }
-                        # حفظ في الكاش
-                        cache_price_data(symbol, data)
+                        # حفظ في الكاش مع تحديد المصدر
+                        cache_price_data(symbol, data, "MT5")
                         return data
                 else:
                     logger.warning(f"[WARNING] لا توجد بيانات صحيحة من MT5 لـ {symbol}")
@@ -1738,14 +1763,20 @@ class MT5Manager:
         else:
             logger.debug(f"[DEBUG] MT5 غير متصل حقيقياً - سيتم استخدام مصدر بديل لـ {symbol}")
         
-        # 🔄 مصدر بديل فقط: Yahoo Finance (للرموز غير المتوفرة في MT5)
+        # 🔄 مصدر بديل فقط: Yahoo Finance (للرموز غير المتوفرة في MT5 - مع تحذير)
+        # استخدام Yahoo Finance فقط عند عدم توفر MT5 أو فشل الرمز نهائياً
+        cached_yahoo_data = get_cached_price_data(symbol, "Yahoo Finance")
+        if cached_yahoo_data:
+            logger.debug(f"[CACHE] استخدام بيانات Yahoo Finance مخزنة مؤقتاً لـ {symbol}")
+            return cached_yahoo_data
+            
         try:
             import yfinance as yf
             
             # تحويل رموز MT5 إلى رموز Yahoo Finance
             yahoo_symbol = self._convert_to_yahoo_symbol(symbol)
             if yahoo_symbol:
-                logger.info(f"[RUNNING] محاولة جلب البيانات من Yahoo Finance لـ {symbol}")
+                logger.warning(f"[FALLBACK] استخدام Yahoo Finance كمصدر بديل لـ {symbol} - قد تختلف البيانات عن MT5")
                 ticker = yf.Ticker(yahoo_symbol)
                 data = ticker.history(period="1d", interval="1m")
                 
@@ -1764,8 +1795,8 @@ class MT5Manager:
                         'spread': latest['Close'] * 0.001,
                         'source': 'Yahoo Finance (مصدر بديل)'
                     }
-                    # حفظ في الكاش
-                    cache_price_data(symbol, data)
+                    # حفظ في الكاش مع تحديد المصدر
+                    cache_price_data(symbol, data, "Yahoo Finance")
                     return data
                     
         except Exception as e:
@@ -1881,10 +1912,15 @@ class MT5Manager:
             return None
     
     def calculate_technical_indicators(self, symbol: str) -> Optional[Dict]:
-        """حساب المؤشرات الفنية من البيانات التاريخية للرمز"""
+        """حساب المؤشرات الفنية من البيانات التاريخية للرمز - MT5 فقط للدقة"""
         try:
             if not self.connected:
                 logger.warning(f"[WARNING] MT5 غير متصل - لا يمكن حساب المؤشرات لـ {symbol}")
+                return None
+            
+            # التأكد من أن الاتصال حقيقي قبل جلب البيانات
+            if not self.check_real_connection():
+                logger.warning(f"[WARNING] اتصال MT5 غير مستقر - لا يمكن حساب المؤشرات لـ {symbol}")
                 return None
             
             # جلب أحدث البيانات اللحظية (M1 للحصول على أقصى دقة لحظية)
@@ -1892,29 +1928,18 @@ class MT5Manager:
             if df is None or len(df) < 20:
                 logger.warning(f"[WARNING] بيانات غير كافية لحساب المؤشرات لـ {symbol}")
                 return None
+                
+            # التحقق من جودة البيانات
+            if df['close'].isna().sum() > len(df) * 0.1:  # إذا كان أكثر من 10% من البيانات مفقود
+                logger.warning(f"[WARNING] جودة البيانات ضعيفة لـ {symbol} - {df['close'].isna().sum()} قيمة مفقودة")
+                return None
             
-            # دمج السعر اللحظي الحالي مع البيانات للحصول على أحدث قراءة
+            # حفظ السعر اللحظي الحالي للاستخدام دون إضافته للبيانات التاريخية (لتجنب تشويه المؤشرات)
             current_tick = self.get_live_price(symbol)
-            if current_tick and 'last' in current_tick:
-                # إضافة السعر اللحظي الحالي كآخر نقطة بيانات
-                current_time = pd.Timestamp.now()
-                current_price = current_tick['last']
-                current_volume = current_tick.get('volume', df['tick_volume'].iloc[-1])
-                
-                # إنشاء صف جديد بالبيانات اللحظية
-                new_row = pd.DataFrame({
-                    'open': [df['close'].iloc[-1]],  # افتراض أن الفتح هو آخر إغلاق
-                    'high': [max(df['close'].iloc[-1], current_price)],
-                    'low': [min(df['close'].iloc[-1], current_price)],
-                    'close': [current_price],
-                    'tick_volume': [current_volume],
-                    'spread': [current_tick.get('spread', df['spread'].iloc[-1])],
-                    'real_volume': [current_volume]
-                }, index=[current_time])
-                
-                # دمج البيانات اللحظية مع البيانات التاريخية
-                df = pd.concat([df, new_row])
-                logger.debug(f"[REALTIME] تم دمج السعر اللحظي {current_price} مع البيانات التاريخية لـ {symbol}")
+            current_live_price = None
+            if current_tick and 'last' in current_tick and current_tick.get('source', '').startswith('MetaTrader5'):
+                current_live_price = current_tick['last']
+                logger.debug(f"[REALTIME] حفظ السعر اللحظي {current_live_price} من MT5 لـ {symbol} (بدون دمج)")
             
             indicators = {}
             
@@ -1942,17 +1967,39 @@ class MT5Manager:
             if len(df) >= 50:
                 indicators['ma_50'] = ta.trend.sma_indicator(df['close'], window=50).iloc[-1]
             
-            # RSI
+            # RSI - محسن مع التحقق من صحة البيانات والتعامل مع القيم الشاذة
             if len(df) >= 14:
-                indicators['rsi'] = ta.momentum.rsi(df['close'], window=14).iloc[-1]
-                
-                # تفسير RSI
-                if indicators['rsi'] > 70:
-                    indicators['rsi_interpretation'] = 'ذروة شراء'
-                elif indicators['rsi'] < 30:
-                    indicators['rsi_interpretation'] = 'ذروة بيع'
-                else:
-                    indicators['rsi_interpretation'] = 'محايد'
+                try:
+                    # حساب RSI مع التحقق من صحة البيانات
+                    rsi_series = ta.momentum.rsi(df['close'], window=14)
+                    rsi_value = rsi_series.iloc[-1]
+                    
+                    # التحقق من صحة قيمة RSI
+                    if pd.isna(rsi_value) or rsi_value < 0 or rsi_value > 100:
+                        # في حالة قيمة غير صحيحة، محاولة حساب RSI ببيانات أكثر
+                        if len(df) >= 20:
+                            rsi_series = ta.momentum.rsi(df['close'], window=14)
+                            rsi_value = rsi_series.dropna().iloc[-1] if len(rsi_series.dropna()) > 0 else 50
+                        else:
+                            rsi_value = 50  # قيمة افتراضية محايدة
+                        logger.warning(f"[RSI] قيمة RSI غير صحيحة، استخدام قيمة محسوبة: {rsi_value}")
+                    
+                    indicators['rsi'] = float(rsi_value)
+                    
+                    # تفسير RSI مع مراجعة القيم
+                    if indicators['rsi'] > 70:
+                        indicators['rsi_interpretation'] = 'ذروة شراء'
+                    elif indicators['rsi'] < 30:
+                        indicators['rsi_interpretation'] = 'ذروة بيع'
+                    else:
+                        indicators['rsi_interpretation'] = 'محايد'
+                        
+                    logger.debug(f"[RSI] قيمة RSI محسوبة: {indicators['rsi']:.2f}")
+                    
+                except Exception as e:
+                    logger.error(f"[ERROR] خطأ في حساب RSI لـ {symbol}: {e}")
+                    indicators['rsi'] = 50  # قيمة افتراضية محايدة
+                    indicators['rsi_interpretation'] = 'خطأ في الحساب'
             
             # MACD
             if len(df) >= 26:
@@ -2280,8 +2327,15 @@ class MT5Manager:
                 indicators['atr'] = 0
                 indicators['atr_interpretation'] = 'بيانات غير كافية'
             
-            # معلومات السعر الحالي
-            indicators['current_price'] = df['close'].iloc[-1]
+            # معلومات السعر الحالي - استخدام السعر اللحظي من MT5 إذا توفر، وإلا استخدم آخر سعر من البيانات التاريخية
+            if current_live_price and current_live_price > 0:
+                indicators['current_price'] = current_live_price
+                indicators['price_source'] = 'live_mt5'
+                logger.debug(f"[PRICE] استخدام السعر اللحظي من MT5: {current_live_price}")
+            else:
+                indicators['current_price'] = df['close'].iloc[-1]
+                indicators['price_source'] = 'historical'
+                logger.debug(f"[PRICE] استخدام آخر سعر تاريخي: {df['close'].iloc[-1]}")
             
             # حساب التغير اليومي الصحيح - مقارنة مع بداية اليوم
             try:
@@ -2894,6 +2948,9 @@ class GeminiAnalyzer:
             # تحميل الأنماط المتعلمة من الصور
             learned_patterns = self._load_learned_patterns()
             
+            # حساب معلومات النقاط للرمز
+            asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+            
             # إنشاء prompt للتحليل المتقدم مع المؤشرات الفنية
             prompt = f"""
             أنت محلل مالي خبير متخصص في التداول اللحظي. قم بتحليل البيانات اللحظية التالية للرمز {symbol}:
@@ -2907,6 +2964,11 @@ class GeminiAnalyzer:
             - الفرق (Spread): {spread}
             - مصدر البيانات: {data_source}
             - الوقت: {price_data.get('time', 'الآن')}
+            
+            ⚠️ معلومات مهمة عن النقاط للرمز {symbol}:
+            - نوع الرمز: {asset_type}
+            - حجم النقطة: {pip_size}
+            - قاعدة الحساب: 1 نقطة = {pip_size} من التغير في السعر
             {technical_analysis}
             {crossover_history_context}
             {symbol_type_context}
@@ -3101,8 +3163,32 @@ class GeminiAnalyzer:
             1. **التحليل التفصيلي:** اعرض نقاط كل مؤشر وتبريرك بناءً على إشارات واضحة
             2. **حساب النسبة خطوة بخطوة:** أظهر العملية الحسابية الكاملة والشفافة
             3. **التوصية المحددة:** حدد نوع الصفقة (شراء/بيع)، نقطة الدخول المثلى، الأهداف (TP1/TP2)، وقف الخسارة (SL)
-            4. **تقييم نسبة العائد/المخاطرة:** احسب Risk/Reward Ratio بدقة
-            5. **إدارة المخاطر المتقدمة:** اقترح حجم الصفقة (Lot Size) وحساب الخسارة المحتملة بالنقاط
+            4. **⚠️ CRITICAL - حساب النقاط والأهداف (إجباري):**
+            
+            **معلومات مهمة عن النقاط للرمز {symbol}:**
+            - نوع الرمز: {asset_type}
+            - حجم النقطة: {pip_size}
+            - السعر الحالي: {current_price}
+            
+            **قواعد حساب النقاط (يجب الالتزام بها):**
+            - 1 نقطة = حجم النقطة المحدد أعلاه من التغير في السعر
+            - الحد الأقصى للنقاط: 999 نقطة (3 خانات فقط)
+            - الحد الأدنى للنقاط: 1 نقطة
+            
+            **يجب حساب وذكر الآتي بوضوح:**
+            - سعر الدخول المقترح: [رقم بـ 5 خانات عشرية]
+            - الهدف الأول (TP1): [رقم بـ 5 خانات عشرية] ([النقاط المحسوبة] نقطة)
+            - الهدف الثاني (TP2): [رقم بـ 5 خانات عشرية] ([النقاط المحسوبة] نقطة) 
+            - وقف الخسارة (SL): [رقم بـ 5 خانات عشرية] ([النقاط المحسوبة] نقطة)
+            
+            **مثال على التنسيق المطلوب:**
+            - سعر الدخول: 1.08450
+            - TP1: 1.08580 (13 نقطة)
+            - TP2: 1.08750 (30 نقطة)
+            - SL: 1.08320 (13 نقطة)
+            
+            5. **تقييم نسبة العائد/المخاطرة:** احسب Risk/Reward Ratio بدقة
+            6. **إدارة المخاطر المتقدمة:** اقترح حجم الصفقة (Lot Size) وحساب الخسارة المحتملة بالدولار
             6. **تحليل التباين:** لا تتجاهل التباين بين المؤشرات (مثلاً: تقاطع سلبي في MACD مع RSI صاعد)
             
             7. **⚠️ CRITICAL - نسبة النجاح المحسوبة بناءً على تحليلك (0-100%):**
@@ -3246,32 +3332,67 @@ class GeminiAnalyzer:
                                     except Exception:
                                         pass
                     return None
+                def _find_price_with_points(patterns):
+                    """استخراج السعر والنقاط معاً"""
+                    for p in patterns:
+                        m = re.search(p, analysis_text, re.IGNORECASE | re.UNICODE)
+                        if m:
+                            try:
+                                price = float(m.group(1))
+                                points = float(m.group(2)) if len(m.groups()) > 1 else None
+                                return price, points
+                            except Exception:
+                                pass
+                    return None, None
+                
+                # استخراج سعر الدخول
                 entry_price_ai = _find_number([
-                    r'(?:نقطة|سعر)\s*الدخول\s*[:：]?\s*([\d\.]+)',
+                    r'سعر\s*الدخول\s*المقترح\s*[:：]\s*([\d\.]+)',
+                    r'سعر\s*الدخول\s*[:：]\s*([\d\.]+)',
                     r'entry\s*(?:price)?\s*[:：]?\s*([\d\.]+)'
                 ])
-                target1_ai = _find_number([
-                    r'(?:TP1|الهدف\s*الأول|Target\s*1|T1)\s*[:：]?\s*([\d\.]+)',
-                    r'هدف\s*أول\s*[:：]?\s*([\d\.]+)',
-                    r'الهدف\s*1\s*[:：]?\s*([\d\.]+)'
+                
+                # استخراج الأهداف مع النقاط
+                target1_ai, target1_points_ai = _find_price_with_points([
+                    r'(?:TP1|الهدف\s*الأول)\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*نقطة\)',
+                    r'(?:TP1|الهدف\s*الأول)\s*[:：]\s*([\d\.]+)',
+                    r'هدف\s*أول\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*نقطة\)',
+                    r'Target\s*1\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*(?:points?|نقطة)\)'
                 ])
-                target2_ai = _find_number([
-                    r'(?:TP2|الهدف\s*الثاني|Target\s*2|T2)\s*[:：]?\s*([\d\.]+)',
-                    r'هدف\s*ثاني\s*[:：]?\s*([\d\.]+)',
-                    r'الهدف\s*2\s*[:：]?\s*([\d\.]+)'
+                
+                target2_ai, target2_points_ai = _find_price_with_points([
+                    r'(?:TP2|الهدف\s*الثاني)\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*نقطة\)',
+                    r'(?:TP2|الهدف\s*الثاني)\s*[:：]\s*([\d\.]+)',
+                    r'هدف\s*ثاني\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*نقطة\)',
+                    r'Target\s*2\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*(?:points?|نقطة)\)'
                 ])
-                stop_loss_ai = _find_number([
-                    r'(?:SL|وقف\s*الخسارة|Stop\s*Loss)\s*[:：]?\s*([\d\.]+)',
-                    r'إيقاف\s*الخسارة\s*[:：]?\s*([\d\.]+)',
-                    r'وقف\s*خسارة\s*[:：]?\s*([\d\.]+)'
+                
+                # استخراج وقف الخسارة مع النقاط
+                stop_loss_ai, stop_points_ai = _find_price_with_points([
+                    r'(?:SL|وقف\s*الخسارة)\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*نقطة\)',
+                    r'(?:SL|وقف\s*الخسارة)\s*[:：]\s*([\d\.]+)',
+                    r'Stop\s*Loss\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*(?:points?|نقطة)\)'
                 ])
+                
                 risk_reward_ai = _find_number([
                     r'(?:RR|R\s*/\s*R|Risk\s*/\s*Reward|نسبة\s*المخاطرة\s*/\s*المكافأة)\s*[:：]?\s*1\s*[:：]\s*([\d\.]+)',
                     r'(?:RR|Risk\s*/\s*Reward|نسبة\s*المخاطرة\s*/\s*المكافأة)\s*[:：]?\s*([\d\.]+)'
                 ])
+                
+                # تطبيق حد أقصى 3 خانات للنقاط
+                if target1_points_ai and target1_points_ai > 999:
+                    target1_points_ai = 999
+                if target2_points_ai and target2_points_ai > 999:
+                    target2_points_ai = 999  
+                if stop_points_ai and stop_points_ai > 999:
+                    stop_points_ai = 999
+                
+                # تسجيل النتائج المستخرجة
+                logger.info(f"[AI_EXTRACT] {symbol}: Entry={entry_price_ai}, TP1={target1_ai}({target1_points_ai}), TP2={target2_ai}({target2_points_ai}), SL={stop_loss_ai}({stop_points_ai})")
             except Exception as _ai_parse_e:
                 logger.debug(f"[AI_PARSE] فشل استخراج القيم العددية من AI: {_ai_parse_e}")
                 entry_price_ai = target1_ai = target2_ai = stop_loss_ai = risk_reward_ai = None
+                target1_points_ai = target2_points_ai = stop_points_ai = None
             
             # تسجيل تفاصيل لتتبع نسبة النجاح المستخرجة
             logger.info(f"[AI_ANALYSIS] {symbol}: التوصية={recommendation}, نسبة النجاح={confidence}")
@@ -3292,7 +3413,11 @@ class GeminiAnalyzer:
                 'target1': target1_ai,
                 'target2': target2_ai,
                 'stop_loss': stop_loss_ai,
-                'risk_reward_ratio': risk_reward_ai
+                'risk_reward_ratio': risk_reward_ai,
+                'target1_points': target1_points_ai,
+                'target2_points': target2_points_ai,
+                'stop_points': stop_points_ai,
+                'ai_calculated': True  # إشارة أن النقاط محسوبة من AI
             }
             
         except Exception as e:
@@ -4063,9 +4188,9 @@ class GeminiAnalyzer:
                 message += f"🟡 نوع الصفقة: انتظار (HOLD)\n"
             
             message += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-            message += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.1f} نقطة)\n"
-            message += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.1f} نقطة)\n"
-            message += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.1f} نقطة)\n"
+            message += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
+            message += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
+            message += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
             message += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
             message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
             
