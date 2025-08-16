@@ -1307,10 +1307,17 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             points2 = analysis.get('target2_points', 0) or 0  
             stop_points = analysis.get('stop_points', 0) or 0
             
-            # تطبيق حد أقصى 3 خانات (999)
-            points1 = min(points1, 999) if points1 else 0
-            points2 = min(points2, 999) if points2 else 0
-            stop_points = min(stop_points, 999) if stop_points else 0
+            # تطبيق حد أقصى معقول حسب نوع الرمز
+            if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
+                max_tp1, max_tp2, max_sl = 200, 300, 150
+            elif 'JPY' in symbol:  # الين الياباني
+                max_tp1, max_tp2, max_sl = 100, 150, 80
+            else:  # العملات العادية
+                max_tp1, max_tp2, max_sl = 100, 150, 80
+            
+            points1 = min(points1, max_tp1) if points1 else 0
+            points2 = min(points2, max_tp2) if points2 else 0
+            stop_points = min(stop_points, max_sl) if stop_points else 0
             
             logger.info(f"[AI_POINTS] استخدام النقاط المحسوبة من AI للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
         
@@ -1319,23 +1326,53 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             try:
                 logger.debug(f"[DEBUG] حساب النقاط يدوياً للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
                 
-                # حساب النقاط للهدف الأول
+                # حساب النقاط للهدف الأول مع منطق محسن
                 if target1 and entry_price and target1 != entry_price and pip_size > 0:
                     price_diff1 = abs(target1 - entry_price)
-                    points1 = min(price_diff1 / pip_size, 999)  # حد أقصى 999
-                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط={points1:.0f}")
+                    calculated_points1 = price_diff1 / pip_size
                     
-                # حساب النقاط للهدف الثاني
+                    # تطبيق حد أقصى معقول حسب نوع الرمز
+                    if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
+                        max_points = 200  # 200 نقطة للذهب معقول
+                    elif 'JPY' in symbol:  # الين الياباني
+                        max_points = 100  # 100 نقطة للين
+                    else:  # العملات العادية
+                        max_points = 100  # 100 نقطة للعملات
+                    
+                    points1 = min(calculated_points1, max_points)
+                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط محسوبة={calculated_points1:.1f}, النقاط نهائية={points1:.0f}")
+                    
+                # حساب النقاط للهدف الثاني مع منطق محسن
                 if target2 and entry_price and target2 != entry_price and pip_size > 0:
                     price_diff2 = abs(target2 - entry_price)
-                    points2 = min(price_diff2 / pip_size, 999)  # حد أقصى 999
-                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط={points2:.0f}")
+                    calculated_points2 = price_diff2 / pip_size
                     
-                # حساب النقاط لوقف الخسارة
+                    # تطبيق حد أقصى معقول حسب نوع الرمز
+                    if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
+                        max_points = 300  # 300 نقطة للذهب معقول للهدف الثاني
+                    elif 'JPY' in symbol:  # الين الياباني
+                        max_points = 150  # 150 نقطة للين
+                    else:  # العملات العادية
+                        max_points = 150  # 150 نقطة للعملات
+                    
+                    points2 = min(calculated_points2, max_points)
+                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط محسوبة={calculated_points2:.1f}, النقاط نهائية={points2:.0f}")
+                    
+                # حساب النقاط لوقف الخسارة مع منطق محسن
                 if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
                     price_diff_stop = abs(entry_price - stop_loss)
-                    stop_points = min(price_diff_stop / pip_size, 999)  # حد أقصى 999
-                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط={stop_points:.0f}")
+                    calculated_stop_points = price_diff_stop / pip_size
+                    
+                    # تطبيق حد أقصى معقول حسب نوع الرمز
+                    if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
+                        max_points = 150  # 150 نقطة للذهب معقول للستوب
+                    elif 'JPY' in symbol:  # الين الياباني
+                        max_points = 80   # 80 نقطة للين
+                    else:  # العملات العادية
+                        max_points = 80   # 80 نقطة للعملات
+                    
+                    stop_points = min(calculated_stop_points, max_points)
+                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط محسوبة={calculated_stop_points:.1f}, النقاط نهائية={stop_points:.0f}")
                     
                 logger.info(f"[MANUAL_POINTS] النقاط المحسوبة يدوياً للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
             
@@ -4119,13 +4156,20 @@ class GeminiAnalyzer:
                     r'(?:RR|Risk\s*/\s*Reward|نسبة\s*المخاطرة\s*/\s*المكافأة)\s*[:：]?\s*([\d\.]+)'
                 ])
                 
-                # تطبيق حد أقصى 3 خانات للنقاط
-                if target1_points_ai and target1_points_ai > 999:
-                    target1_points_ai = 999
-                if target2_points_ai and target2_points_ai > 999:
-                    target2_points_ai = 999  
-                if stop_points_ai and stop_points_ai > 999:
-                    stop_points_ai = 999
+                # تطبيق حد أقصى معقول للنقاط حسب نوع الرمز
+                if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
+                    max_tp1_ai, max_tp2_ai, max_sl_ai = 200, 300, 150
+                elif 'JPY' in symbol:  # الين الياباني
+                    max_tp1_ai, max_tp2_ai, max_sl_ai = 100, 150, 80
+                else:  # العملات العادية
+                    max_tp1_ai, max_tp2_ai, max_sl_ai = 100, 150, 80
+                
+                if target1_points_ai and target1_points_ai > max_tp1_ai:
+                    target1_points_ai = max_tp1_ai
+                if target2_points_ai and target2_points_ai > max_tp2_ai:
+                    target2_points_ai = max_tp2_ai  
+                if stop_points_ai and stop_points_ai > max_sl_ai:
+                    stop_points_ai = max_sl_ai
                 
                 # تسجيل النتائج المستخرجة
                 logger.info(f"[AI_EXTRACT] {symbol}: Entry={entry_price_ai}, TP1={target1_ai}({target1_points_ai}), TP2={target2_ai}({target2_points_ai}), SL={stop_loss_ai}({stop_points_ai})")
