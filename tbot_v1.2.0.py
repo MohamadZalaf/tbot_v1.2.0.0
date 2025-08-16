@@ -1146,13 +1146,25 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             
             if resistance and support and resistance > support:
                 if action == 'BUY':
-                    target1 = target1 or resistance * 0.99
-                    target2 = target2 or resistance * 1.01
-                    stop_loss = stop_loss or support * 1.01
+                    # للشراء: الأهداف يجب أن تكون أعلى من السعر الحالي
+                    if resistance > current_price:
+                        target1 = target1 or min(resistance * 0.99, current_price * 1.02)
+                        target2 = target2 or min(resistance * 1.01, current_price * 1.04)
+                    else:
+                        # إذا كانت المقاومة أقل من السعر، استخدم نسبة من السعر الحالي
+                        target1 = target1 or current_price * 1.015
+                        target2 = target2 or current_price * 1.03
+                    stop_loss = stop_loss or max(support * 1.01, current_price * 0.985)
                 elif action == 'SELL':
-                    target1 = target1 or support * 1.01
-                    target2 = target2 or support * 0.99
-                    stop_loss = stop_loss or resistance * 0.99
+                    # للبيع: الأهداف يجب أن تكون أقل من السعر الحالي
+                    if support < current_price:
+                        target1 = target1 or max(support * 1.01, current_price * 0.98)
+                        target2 = target2 or max(support * 0.99, current_price * 0.96)
+                    else:
+                        # إذا كان الدعم أعلى من السعر، استخدم نسبة من السعر الحالي
+                        target1 = target1 or current_price * 0.985
+                        target2 = target2 or current_price * 0.97
+                    stop_loss = stop_loss or min(resistance * 0.99, current_price * 1.015)
                 else:  # HOLD
                     target1 = target1 or current_price * 1.015
                     target2 = target2 or current_price * 1.03
@@ -1197,6 +1209,30 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                         target1 = target1 or current_price * (1 + tp1_pct)
                         target2 = target2 or current_price * (1 + tp2_pct)
                         stop_loss = stop_loss or current_price * (1 - sl_pct)
+
+        # التحقق من منطقية القيم قبل المتابعة
+        if action == 'BUY':
+            # في صفقة الشراء: الأهداف يجب أن تكون أعلى من السعر والاستوب أقل
+            if target1 and target1 <= current_price:
+                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 1 للشراء - كان {target1:.5f}, تم تعديله")
+                target1 = current_price * 1.015
+            if target2 and target2 <= current_price:
+                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 2 للشراء - كان {target2:.5f}, تم تعديله")
+                target2 = current_price * 1.03
+            if stop_loss and stop_loss >= current_price:
+                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح وقف الخسارة للشراء - كان {stop_loss:.5f}, تم تعديله")
+                stop_loss = current_price * 0.985
+        elif action == 'SELL':
+            # في صفقة البيع: الأهداف يجب أن تكون أقل من السعر والاستوب أعلى
+            if target1 and target1 >= current_price:
+                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 1 للبيع - كان {target1:.5f}, تم تعديله")
+                target1 = current_price * 0.985
+            if target2 and target2 >= current_price:
+                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 2 للبيع - كان {target2:.5f}, تم تعديله")
+                target2 = current_price * 0.97
+            if stop_loss and stop_loss <= current_price:
+                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح وقف الخسارة للبيع - كان {stop_loss:.5f}, تم تعديله")
+                stop_loss = current_price * 1.015
 
         # حساب النقاط بدقة مع ضمان قيم صحيحة - محسن ومطور
         def calc_points_for_symbol(price_diff, symbol_name):
@@ -1422,7 +1458,7 @@ from dataclasses import dataclass
 
 # كاش البيانات لتقليل الاستدعاءات المتكررة
 price_data_cache = {}
-CACHE_DURATION = 15  # ثوان - زيادة مدة الكاش كما في v1.2.1 للاستقرار
+CACHE_DURATION = 5  # ثوان - تقليل مدة الكاش للحصول على بيانات أكثر حداثة
 
 @dataclass
 class CachedPriceData:
@@ -3390,6 +3426,12 @@ class GeminiAnalyzer:
             technical_data = mt5_manager.calculate_technical_indicators(symbol)
             technical_analysis = ""
             
+            # إضافة logs للتتبع
+            logger.debug(f"[ANALYZE] {symbol}: السعر الحالي={current_price}, البيانات الفنية متوفرة={bool(technical_data)}")
+            if technical_data and technical_data.get('indicators'):
+                indicators = technical_data['indicators']
+                logger.debug(f"[ANALYZE] {symbol}: الدعم={indicators.get('support'):.5f}, المقاومة={indicators.get('resistance'):.5f}, ATR={indicators.get('atr'):.5f}")
+            
             # جلب البيانات التاريخية للتقاطعات
             crossover_patterns = crossover_tracker.analyze_crossover_patterns(symbol)
             recent_crossovers = crossover_tracker.get_recent_crossovers(symbol, hours=48)
@@ -4525,13 +4567,25 @@ class GeminiAnalyzer:
                 
                 if resistance and support and resistance > support:
                     if action == 'BUY':
-                        target1 = target1 or resistance * 0.99
-                        target2 = target2 or resistance * 1.01
-                        stop_loss = stop_loss or support * 1.01
+                        # للشراء: الأهداف يجب أن تكون أعلى من السعر الحالي
+                        if resistance > current_price:
+                            target1 = target1 or min(resistance * 0.99, current_price * 1.02)
+                            target2 = target2 or min(resistance * 1.01, current_price * 1.04)
+                        else:
+                            # إذا كانت المقاومة أقل من السعر، استخدم نسبة من السعر الحالي
+                            target1 = target1 or current_price * 1.015
+                            target2 = target2 or current_price * 1.03
+                        stop_loss = stop_loss or max(support * 1.01, current_price * 0.985)
                     elif action == 'SELL':
-                        target1 = target1 or support * 1.01
-                        target2 = target2 or support * 0.99
-                        stop_loss = stop_loss or resistance * 0.99
+                        # للبيع: الأهداف يجب أن تكون أقل من السعر الحالي
+                        if support < current_price:
+                            target1 = target1 or max(support * 1.01, current_price * 0.98)
+                            target2 = target2 or max(support * 0.99, current_price * 0.96)
+                        else:
+                            # إذا كان الدعم أعلى من السعر، استخدم نسبة من السعر الحالي
+                            target1 = target1 or current_price * 0.985
+                            target2 = target2 or current_price * 0.97
+                        stop_loss = stop_loss or min(resistance * 0.99, current_price * 1.015)
                     else:  # HOLD
                         target1 = target1 or current_price * 1.015
                         target2 = target2 or current_price * 1.03
