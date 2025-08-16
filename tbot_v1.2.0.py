@@ -30,9 +30,10 @@ import logging
 import os
 import sys
 
-# إعداد timeout أطول لـ Telegram API
-apihelper.CONNECT_TIMEOUT = 60
-apihelper.READ_TIMEOUT = 60
+# إعداد timeout محسن لـ Telegram API
+apihelper.CONNECT_TIMEOUT = 30  # تقليل من 60 إلى 30 ثانية
+apihelper.READ_TIMEOUT = 30     # تقليل من 60 إلى 30 ثانية
+apihelper.RETRY_TIMEOUT = 2     # إضافة timeout للمحاولات المتكررة
 import pandas as pd
 import numpy as np
 import MetaTrader5 as mt5
@@ -1101,6 +1102,24 @@ def get_cached_price_data(symbol: str, required_source: str = None) -> Optional[
 def cache_price_data(symbol: str, data: dict, source: str = "MT5"):
     """حفظ البيانات في الكاش مع تحديد المصدر"""
     price_data_cache[symbol] = CachedPriceData(data, datetime.now(), source)
+    # تنظيف البيانات القديمة من الكاش
+    clean_old_cache()
+
+def clean_old_cache():
+    """إزالة البيانات القديمة من الكاش لتوفير الذاكرة وضمان الدقة"""
+    current_time = datetime.now()
+    expired_symbols = []
+    
+    for symbol, cached_item in price_data_cache.items():
+        time_diff = current_time - cached_item.timestamp
+        if time_diff.total_seconds() >= CACHE_DURATION:
+            expired_symbols.append(symbol)
+    
+    for symbol in expired_symbols:
+        del price_data_cache[symbol]
+    
+    if expired_symbols:
+        logger.debug(f"[CACHE] تم تنظيف {len(expired_symbols)} عنصر من الكاش")
 
 # معدل الاستدعاءات للحماية من الإفراط
 last_api_calls = {}
@@ -1115,6 +1134,23 @@ def can_make_api_call(symbol: str) -> bool:
 def record_api_call(symbol: str):
     """تسجيل وقت آخر استدعاء للـ API"""
     last_api_calls[symbol] = time.time()
+    # تنظيف البيانات القديمة من معدل الاستدعاءات أيضاً
+    clean_old_api_calls()
+
+def clean_old_api_calls():
+    """إزالة سجلات الاستدعاءات القديمة لتوفير الذاكرة"""
+    current_time = time.time()
+    expired_symbols = []
+    
+    for symbol, last_call_time in last_api_calls.items():
+        if (current_time - last_call_time) > (MIN_CALL_INTERVAL * 10):  # 10 أضعاف الفترة الدنيا
+            expired_symbols.append(symbol)
+    
+    for symbol in expired_symbols:
+        del last_api_calls[symbol]
+    
+    if expired_symbols:
+        logger.debug(f"[MEMORY] تم تنظيف {len(expired_symbols)} سجل API قديم")
 
 # إعداد البيئة للتعامل مع UTF-8 على Windows
 import os
@@ -1533,8 +1569,8 @@ class MT5Manager:
                     else:
                         time_diff = datetime.now() - tick_time
                     
-                    # 15 دقيقة بدلاً من 5 للمرونة أكثر
-                    if time_diff.total_seconds() > 900:
+                    # 5 دقائق بدلاً من 15 للحصول على بيانات لحظية دقيقة
+                    if time_diff.total_seconds() > 300:
                         logger.warning(f"[WARNING] البيانات قديمة جداً (عمر: {time_diff}) - الاتصال غير فعال")
                         self.connected = False
                         return self._attempt_reconnection()
@@ -1557,6 +1593,11 @@ class MT5Manager:
     def _attempt_reconnection(self) -> bool:
         """محاولة إعادة الاتصال التلقائية"""
         logger.info("[RECONNECT] محاولة إعادة الاتصال التلقائية...")
+        
+        # تنظيف الكاش عند انقطاع الاتصال لضمان عدم استخدام بيانات قديمة
+        if price_data_cache:
+            price_data_cache.clear()
+            logger.info("[CACHE] تم تنظيف جميع البيانات المخزنة مؤقتاً بسبب انقطاع الاتصال")
         
         for attempt in range(self.max_reconnection_attempts):
             logger.info(f"[RECONNECT] محاولة رقم {attempt + 1} من {self.max_reconnection_attempts}")
@@ -1625,7 +1666,7 @@ class MT5Manager:
             return False
     
     def graceful_shutdown(self):
-        """إغلاق آمن لاتصال MT5"""
+        """إغلاق آمن لاتصال MT5 مع تنظيف البيانات"""
         try:
             with self.connection_lock:
                 if self.connected:
@@ -1633,6 +1674,15 @@ class MT5Manager:
                     mt5.shutdown()
                     self.connected = False
                     logger.info("[OK] تم إغلاق اتصال MT5 بأمان")
+                
+                # تنظيف شامل للبيانات المؤقتة
+                if price_data_cache:
+                    price_data_cache.clear()
+                    logger.info("[CACHE] تم تنظيف cache البيانات")
+                if last_api_calls:
+                    last_api_calls.clear()
+                    logger.info("[CACHE] تم تنظيف سجلات API")
+                    
         except Exception as e:
             logger.error(f"[ERROR] خطأ في إغلاق MT5: {e}")
     
@@ -1731,10 +1781,11 @@ class MT5Manager:
                     else:
                         time_diff = datetime.now() - tick_time
                     
-                    # زيادة مرونة وقت البيانات إلى 15 دقيقة
-                    if time_diff.total_seconds() > 900:
+                    # زيادة مرونة وقت البيانات إلى 10 دقائق لدقة أكبر
+                    if time_diff.total_seconds() > 600:
                         logger.warning(f"[WARNING] بيانات MT5 قديمة للرمز {symbol} (عمر البيانات: {time_diff})")
-                        # لا نغير حالة الاتصال فوراً، قد تكون مشكلة مؤقتة في الرمز
+                        # إذا كانت البيانات قديمة جداً، تجاهل هذا الرمز
+                        return None
                     else:
                         logger.debug(f"[OK] تم جلب البيانات الحديثة من MT5 للرمز {symbol}")
                         data = {
@@ -1763,98 +1814,11 @@ class MT5Manager:
         else:
             logger.debug(f"[DEBUG] MT5 غير متصل حقيقياً - سيتم استخدام مصدر بديل لـ {symbol}")
         
-        # 🔄 مصدر بديل فقط: Yahoo Finance (للرموز غير المتوفرة في MT5 - مع تحذير)
-        # استخدام Yahoo Finance فقط عند عدم توفر MT5 أو فشل الرمز نهائياً
-        cached_yahoo_data = get_cached_price_data(symbol, "Yahoo Finance")
-        if cached_yahoo_data:
-            logger.debug(f"[CACHE] استخدام بيانات Yahoo Finance مخزنة مؤقتاً لـ {symbol}")
-            return cached_yahoo_data
-            
-        try:
-            import yfinance as yf
-            
-            # تحويل رموز MT5 إلى رموز Yahoo Finance
-            yahoo_symbol = self._convert_to_yahoo_symbol(symbol)
-            if yahoo_symbol:
-                logger.warning(f"[FALLBACK] استخدام Yahoo Finance كمصدر بديل لـ {symbol} - قد تختلف البيانات عن MT5")
-                ticker = yf.Ticker(yahoo_symbol)
-                data = ticker.history(period="1d", interval="1m")
-                
-                if not data.empty:
-                    latest = data.iloc[-1]
-                    current_time = datetime.now()
-                    
-                    logger.debug(f"[OK] تم جلب البيانات من Yahoo Finance للرمز {symbol}")
-                    data = {
-                        'symbol': symbol,
-                        'bid': latest['Close'] * 0.9995,  # تقدير سعر الشراء
-                        'ask': latest['Close'] * 1.0005,  # تقدير سعر البيع
-                        'last': latest['Close'],
-                        'volume': latest['Volume'],
-                        'time': current_time,
-                        'spread': latest['Close'] * 0.001,
-                        'source': 'Yahoo Finance (مصدر بديل)'
-                    }
-                    # حفظ في الكاش مع تحديد المصدر
-                    cache_price_data(symbol, data, "Yahoo Finance")
-                    return data
-                    
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في جلب البيانات من Yahoo Finance لـ {symbol}: {e}")
-        
-        logger.error(f"[ERROR] فشل في جلب البيانات من جميع المصادر للرمز {symbol}")
+        # إذا فشل MT5 في جلب البيانات، إرجاع None بدلاً من استخدام مصدر بديل
+        logger.error(f"[ERROR] فشل في جلب البيانات من MT5 للرمز {symbol}")
         return None
     
-    def _convert_to_yahoo_symbol(self, mt5_symbol: str) -> Optional[str]:
-        """تحويل رموز MT5 إلى رموز Yahoo Finance"""
-        conversion_map = {
-            # العملات الرقمية
-            'BTCUSD': 'BTC-USD',
-            'ETHUSD': 'ETH-USD',
-            'LTCUSD': 'LTC-USD',
-            'BCHUSD': 'BCH-USD',
-            
-            # أزواج العملات (Forex)
-            'EURUSD': 'EURUSD=X',
-            'GBPUSD': 'GBPUSD=X',
-            'USDJPY': 'USDJPY=X',
-            'AUDUSD': 'AUDUSD=X',
-            'USDCAD': 'USDCAD=X',
-            'USDCHF': 'USDCHF=X',
-            'NZDUSD': 'NZDUSD=X',
-            'EURJPY': 'EURJPY=X',
-            'EURGBP': 'EURGBP=X',
-            'EURAUD': 'EURAUD=X',
-            
-            # المؤشرات
-            'US30': '^DJI',
-            'SPX500': '^GSPC',
-            'NAS100': '^IXIC',
-            'GER40': '^GDAXI',
-            'UK100': '^FTSE',
-            
-            # المعادن
-            'XAUUSD': 'GC=F',  # الذهب
-            'XAGUSD': 'SI=F',  # الفضة
-            'XPTUSD': 'PL=F',  # البلاتين
-            'XPDUSD': 'PA=F',  # البلاديوم
-            
-            # العملات الإضافية
-            'GBPJPY': 'GBPJPY=X',
-            'EURAUD': 'EURAUD=X',
-            
-            # الأسهم
-            'AAPL': 'AAPL',
-            'TSLA': 'TSLA', 
-            'GOOGL': 'GOOGL',
-            'MSFT': 'MSFT',
-            'AMZN': 'AMZN',
-            'META': 'META',
-            'NVDA': 'NVDA',
-            'NFLX': 'NFLX'
-        }
-        
-        return conversion_map.get(mt5_symbol)
+
     
     def get_market_data(self, symbol: str, timeframe: int = mt5.TIMEFRAME_M1, count: int = 100) -> Optional[pd.DataFrame]:
         """جلب بيانات السوق من MT5"""
@@ -8514,7 +8478,7 @@ def handle_help(call):
 ❓ **مساعدة بوت التداول v1.2.0**
 
 🚀 **الميزات الجديدة:**
-• بيانات لحظية حقيقية من MetaTrader5 + Yahoo Finance
+• بيانات لحظية حقيقية من MetaTrader5
 • تحليل ذكي مخصص بـ Google Gemini AI
 • نظام تقييم الإشعارات 👍👎 للتعلم الآلي
 • تدريب الذكاء الاصطناعي برفع الملفات
@@ -8547,8 +8511,7 @@ def handle_help(call):
    • اختر المنطقة الزمنية لعرض الأوقات بدقة
 
 📊 **مصادر البيانات:**
-• **أولوية أولى:** MetaTrader5 (بيانات لحظية مباشرة)
-• **بديل ذكي:** Yahoo Finance (للرموز غير المتوفرة في MT5)
+• **المصدر الوحيد:** MetaTrader5 (بيانات لحظية مباشرة)
 • **ضمان التغطية:** 25+ رمز مالي مدعوم
 
 🧠 **الذكاء الاصطناعي المخصص:**
@@ -8602,7 +8565,7 @@ def handle_about(call):
 
 🚀 **الميزات الجديدة في v1.2.0:**
 ✅ إلغاء الاعتماد على البيانات التاريخية
-✅ بيانات لحظية مباشرة من MT5 + Yahoo Finance
+✅ بيانات لحظية مباشرة من MetaTrader5
 ✅ تحليل ذكي مخصص مدعوم بـ Gemini AI
 ✅ نظام تقييم تفاعلي 👍👎 للتعلم الآلي
 ✅ رفع ملفات لتدريب الذكاء الاصطناعي
@@ -10039,7 +10002,7 @@ def display_instant_prices(user_id, chat_id, message_id, symbols, category_name,
                         if not mt5_manager.connected:
                             status_msg = "❌ غير متصل بـ MT5"
                         else:
-                            status_msg = "❌ غير متاح من MT5 (قد يكون متاح من Yahoo Finance)"
+                            status_msg = "❌ غير متاح من MT5"
                         
                         prices_data.append(f"""
 {info['emoji']} **{info['name']}**
@@ -10407,24 +10370,49 @@ if __name__ == "__main__":
         
         # بدء البوت
         logger.info("[SYSTEM] البوت جاهز للعمل!")
+        # تنظيف شامل عند بدء التشغيل
+        price_data_cache.clear()
+        last_api_calls.clear()
+        logger.info("[SYSTEM] تم تنظيف جميع البيانات المؤقتة عند بدء التشغيل")
+        
         print("\n" + "="*60)
         print("🚀 بوت التداول v1.2.0 جاهز للعمل!")
         print("📊 مصدر البيانات: MetaTrader5 (لحظي)")
         print("🧠 محرك التحليل: Google Gemini AI")
         print("💾 نظام التقييم: تفعيل ذكي للتعلم")
+        print("🧹 نظام التنظيف: تفعيل ذكي للذاكرة")
         print("="*60 + "\n")
         
-        # تشغيل البوت مع معالجة أخطاء الشبكة
-        while True:
+        # تشغيل البوت مع معالجة أخطاء الشبكة المحسنة
+        retry_count = 0
+        max_retries = 10
+        
+        while retry_count < max_retries:
             try:
                 logger.info("[SYSTEM] بدء استقبال الرسائل...")
-                bot.infinity_polling(none_stop=True, interval=1, timeout=60)
+                bot.infinity_polling(none_stop=True, interval=2, timeout=30, long_polling_timeout=20)
                 break  # إذا انتهى بشكل طبيعي
                 
+            except telebot.apihelper.ApiException as api_error:
+                retry_count += 1
+                logger.error(f"[ERROR] خطأ Telegram API (محاولة {retry_count}/{max_retries}): {api_error}")
+                if retry_count >= max_retries:
+                    logger.error("[ERROR] تم الوصول للحد الأقصى من المحاولات - إيقاف البوت")
+                    break
+                wait_time = min(retry_count * 5, 60)  # انتظار تدريجي حتى 60 ثانية
+                logger.info(f"[SYSTEM] انتظار {wait_time} ثانية قبل إعادة المحاولة...")
+                time.sleep(wait_time)
+                continue
+                
             except Exception as polling_error:
-                logger.error(f"[ERROR] خطأ في الاستقبال: {polling_error}")
-                logger.info("[SYSTEM] محاولة إعادة الاتصال خلال 5 ثواني...")
-                time.sleep(5)
+                retry_count += 1
+                logger.error(f"[ERROR] خطأ عام في الاستقبال (محاولة {retry_count}/{max_retries}): {polling_error}")
+                if retry_count >= max_retries:
+                    logger.error("[ERROR] تم الوصول للحد الأقصى من المحاولات - إيقاف البوت")
+                    break
+                wait_time = min(retry_count * 3, 30)  # انتظار تدريجي حتى 30 ثانية
+                logger.info(f"[SYSTEM] انتظار {wait_time} ثانية قبل إعادة المحاولة...")
+                time.sleep(wait_time)
                 continue
         
     except KeyboardInterrupt:
