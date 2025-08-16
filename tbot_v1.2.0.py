@@ -81,6 +81,11 @@ except ImportError:
 # متغير للتحكم في حلقة المراقبة
 monitoring_active = False
 
+# إضافة locks لتجنب التضارب في عمليات MT5
+import threading
+mt5_operation_lock = threading.RLock()  # RLock للسماح بإعادة الاستخدام من نفس الـ thread
+analysis_in_progress = False
+
 # مكتبة المناطق الزمنية (اختيارية)
 try:
     import pytz
@@ -1146,13 +1151,25 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             
             if resistance and support and resistance > support:
                 if action == 'BUY':
-                    target1 = target1 or resistance * 0.99
-                    target2 = target2 or resistance * 1.01
-                    stop_loss = stop_loss or support * 1.01
+                    # للشراء: الأهداف يجب أن تكون أعلى من السعر الحالي
+                    if resistance > current_price:
+                        target1 = target1 or min(resistance * 0.99, current_price * 1.02)
+                        target2 = target2 or min(resistance * 1.01, current_price * 1.04)
+                    else:
+                        # إذا كانت المقاومة أقل من السعر، استخدم نسبة من السعر الحالي
+                        target1 = target1 or current_price * 1.015
+                        target2 = target2 or current_price * 1.03
+                    stop_loss = stop_loss or max(support * 1.01, current_price * 0.985)
                 elif action == 'SELL':
-                    target1 = target1 or support * 1.01
-                    target2 = target2 or support * 0.99
-                    stop_loss = stop_loss or resistance * 0.99
+                    # للبيع: الأهداف يجب أن تكون أقل من السعر الحالي
+                    if support < current_price:
+                        target1 = target1 or max(support * 1.01, current_price * 0.98)
+                        target2 = target2 or max(support * 0.99, current_price * 0.96)
+                    else:
+                        # إذا كان الدعم أعلى من السعر، استخدم نسبة من السعر الحالي
+                        target1 = target1 or current_price * 0.985
+                        target2 = target2 or current_price * 0.97
+                    stop_loss = stop_loss or min(resistance * 0.99, current_price * 1.015)
                 else:  # HOLD
                     target1 = target1 or current_price * 1.015
                     target2 = target2 or current_price * 1.03
@@ -1197,6 +1214,30 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                         target1 = target1 or current_price * (1 + tp1_pct)
                         target2 = target2 or current_price * (1 + tp2_pct)
                         stop_loss = stop_loss or current_price * (1 - sl_pct)
+
+        # التحقق من منطقية القيم قبل المتابعة
+        if action == 'BUY':
+            # في صفقة الشراء: الأهداف يجب أن تكون أعلى من السعر والاستوب أقل
+            if target1 and target1 <= current_price:
+                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 1 للشراء - كان {target1:.5f}, تم تعديله")
+                target1 = current_price * 1.015
+            if target2 and target2 <= current_price:
+                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 2 للشراء - كان {target2:.5f}, تم تعديله")
+                target2 = current_price * 1.03
+            if stop_loss and stop_loss >= current_price:
+                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح وقف الخسارة للشراء - كان {stop_loss:.5f}, تم تعديله")
+                stop_loss = current_price * 0.985
+        elif action == 'SELL':
+            # في صفقة البيع: الأهداف يجب أن تكون أقل من السعر والاستوب أعلى
+            if target1 and target1 >= current_price:
+                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 1 للبيع - كان {target1:.5f}, تم تعديله")
+                target1 = current_price * 0.985
+            if target2 and target2 >= current_price:
+                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 2 للبيع - كان {target2:.5f}, تم تعديله")
+                target2 = current_price * 0.97
+            if stop_loss and stop_loss <= current_price:
+                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح وقف الخسارة للبيع - كان {stop_loss:.5f}, تم تعديله")
+                stop_loss = current_price * 1.015
 
         # حساب النقاط بدقة مع ضمان قيم صحيحة - محسن ومطور
         def calc_points_for_symbol(price_diff, symbol_name):
@@ -1422,46 +1463,32 @@ from dataclasses import dataclass
 
 # كاش البيانات لتقليل الاستدعاءات المتكررة
 price_data_cache = {}
-CACHE_DURATION = 10  # ثوان - مدة متوازنة للحصول على بيانات دقيقة مع تقليل الضغط على MT5
+CACHE_DURATION = 5  # ثوان - تقليل مدة الكاش للحصول على بيانات أكثر حداثة
 
 @dataclass
 class CachedPriceData:
     data: dict
     timestamp: datetime
-    source: str  # إضافة مصدر البيانات لمنع التضارب
+    # إزالة source لتبسيط النظام كما في v1.2.1
     
-def is_cache_valid(symbol: str, required_source: str = None) -> bool:
-    """التحقق من صلاحية البيانات المخزنة مؤقتاً مع التحقق من المصدر"""
-    try:
-        if symbol not in price_data_cache:
-            return False
-        
-        cached_item = price_data_cache[symbol]
-        time_diff = datetime.now() - cached_item.timestamp
-        
-        # التحقق من انتهاء صلاحية الوقت (زيادة مدة الكاش للاستقرار)
-        cache_duration = CACHE_DURATION * 1.5  # زيادة مدة الكاش بـ 50%
-        if time_diff.total_seconds() >= cache_duration:
-            return False
-        
-        # التحقق من تطابق المصدر إذا تم تحديده
-        if required_source and cached_item.source != required_source:
-            return False
-    except Exception as e:
-        logger.debug(f"[DEBUG] خطأ في فحص صلاحية الكاش للرمز {symbol}: {e}")
+def is_cache_valid(symbol: str) -> bool:
+    """التحقق من صلاحية البيانات المخزنة مؤقتاً - مبسط كما في v1.2.1"""
+    if symbol not in price_data_cache:
         return False
-        
-    return True
+    
+    cached_item = price_data_cache[symbol]
+    time_diff = datetime.now() - cached_item.timestamp
+    return time_diff.total_seconds() < CACHE_DURATION
 
-def get_cached_price_data(symbol: str, required_source: str = None) -> Optional[dict]:
-    """جلب البيانات من الكاش إذا كانت صالحة ومن المصدر المطلوب"""
-    if is_cache_valid(symbol, required_source):
+def get_cached_price_data(symbol: str) -> Optional[dict]:
+    """جلب البيانات من الكاش إذا كانت صالحة - مبسط كما في v1.2.1"""
+    if is_cache_valid(symbol):
         return price_data_cache[symbol].data
     return None
 
-def cache_price_data(symbol: str, data: dict, source: str = "MT5"):
-    """حفظ البيانات في الكاش مع تحديد المصدر"""
-    price_data_cache[symbol] = CachedPriceData(data, datetime.now(), source)
+def cache_price_data(symbol: str, data: dict):
+    """حفظ البيانات في الكاش - مبسط كما في v1.2.1"""
+    price_data_cache[symbol] = CachedPriceData(data, datetime.now())
     # تنظيف البيانات القديمة من الكاش
     clean_old_cache()
 
@@ -2087,8 +2114,8 @@ class MT5Manager:
                     else:
                         time_diff = datetime.now() - tick_time
                     
-                    # 15 دقيقة للمرونة أكثر (كما في v1.2.1 المستقر)
-                    if time_diff.total_seconds() > 900:
+                    # 5 دقائق للحصول على بيانات أكثر حداثة
+                    if time_diff.total_seconds() > 300:
                         logger.warning(f"[WARNING] البيانات قديمة جداً (عمر: {time_diff}) - الاتصال غير فعال")
                         self.connected = False
                         return self._attempt_reconnection()
@@ -2254,92 +2281,7 @@ class MT5Manager:
                 'error': str(e)
             }
     
-    def calculate_spread_in_points(self, symbol: str, spread_price: float) -> float:
-        """حساب spread بالنقاط حسب نوع الرمز"""
-        try:
-            asset_type, pip_size = get_asset_type_and_pip_size(symbol)
-            if pip_size > 0:
-                spread_points = round(spread_price / pip_size, 1)
-                return spread_points
-            return 0
-        except Exception as e:
-            logger.debug(f"[DEBUG] خطأ في حساب spread بالنقاط للرمز {symbol}: {e}")
-            return 0
 
-    def ensure_symbol_available(self, symbol: str) -> str:
-        """التأكد من توفر الرمز مع البحث عن بدائل"""
-        try:
-            # قائمة الرموز البديلة للأصول الشائعة
-            symbol_alternatives = {
-                # المعادن النفيسة
-                'XAUUSD': ['XAUUSD', 'GOLD', 'XAUUSD.m', 'GOLD.m', 'GOLD.raw', 'XAUUSD.c'],
-                'GOLD': ['GOLD', 'XAUUSD', 'GOLD.m', 'XAUUSD.m', 'GOLD.raw', 'XAUUSD.c'],
-                'XAGUSD': ['XAGUSD', 'SILVER', 'XAGUSD.m', 'SILVER.m', 'XAGUSD.c'],
-                'SILVER': ['SILVER', 'XAGUSD', 'SILVER.m', 'XAGUSD.m', 'XAGUSD.c'],
-                'XPTUSD': ['XPTUSD', 'PLATINUM', 'XPTUSD.m', 'PLATINUM.m'],
-                'XPDUSD': ['XPDUSD', 'PALLADIUM', 'XPDUSD.m', 'PALLADIUM.m'],
-                
-                # العملات الرقمية
-                'BTCUSD': ['BTCUSD', 'BITCOIN', 'BTC', 'BTCUSD.m', 'BTC.USD', 'BTCUSD.c'],
-                'BITCOIN': ['BITCOIN', 'BTCUSD', 'BTC', 'BTCUSD.m', 'BTC.USD'],
-                'ETHUSD': ['ETHUSD', 'ETHEREUM', 'ETH', 'ETHUSD.m', 'ETH.USD'],
-                'ETHEREUM': ['ETHEREUM', 'ETHUSD', 'ETH', 'ETHUSD.m', 'ETH.USD'],
-                'LTCUSD': ['LTCUSD', 'LITECOIN', 'LTC', 'LTCUSD.m', 'LTC.USD'],
-                
-                # أزواج العملات الرئيسية
-                'EURUSD': ['EURUSD', 'EURUSD.m', 'EURUSD.c', 'EUR/USD'],
-                'GBPUSD': ['GBPUSD', 'GBPUSD.m', 'GBPUSD.c', 'GBP/USD'],
-                'USDJPY': ['USDJPY', 'USDJPY.m', 'USDJPY.c', 'USD/JPY'],
-                'AUDUSD': ['AUDUSD', 'AUDUSD.m', 'AUDUSD.c', 'AUD/USD'],
-                'USDCAD': ['USDCAD', 'USDCAD.m', 'USDCAD.c', 'USD/CAD'],
-                'USDCHF': ['USDCHF', 'USDCHF.m', 'USDCHF.c', 'USD/CHF'],
-                'NZDUSD': ['NZDUSD', 'NZDUSD.m', 'NZDUSD.c', 'NZD/USD'],
-                
-                # المؤشرات
-                'US30': ['US30', 'US30.m', 'US30.c', 'DOW30', 'DJ30'],
-                'US500': ['US500', 'US500.m', 'US500.c', 'SPX500', 'SP500'],
-                'NAS100': ['NAS100', 'NAS100.m', 'NAS100.c', 'NASDAQ', 'NDX'],
-                'GER30': ['GER30', 'GER30.m', 'GER30.c', 'DAX30', 'DAX'],
-                'UK100': ['UK100', 'UK100.m', 'UK100.c', 'FTSE100', 'FTSE'],
-                
-                # النفط
-                'USOIL': ['USOIL', 'CRUDE', 'WTI', 'USOIL.m', 'CRUDE.m'],
-                'UKOIL': ['UKOIL', 'BRENT', 'BRENT.m', 'UKOIL.m']
-            }
-            
-            # البحث عن الرمز الأصلي أولاً
-            symbol_info = mt5.symbol_info(symbol)
-            if symbol_info is not None:
-                # تفعيل الرمز إذا لم يكن مفعلاً
-                if not symbol_info.visible:
-                    logger.info(f"[SYMBOL_ENABLE] تفعيل الرمز {symbol}")
-                    mt5.symbol_select(symbol, True)
-                    time.sleep(0.2)  # انتظار أطول للتأكد من التفعيل
-                return symbol
-            
-            # البحث في البدائل
-            alternatives = symbol_alternatives.get(symbol.upper(), [symbol])
-            for alt_symbol in alternatives:
-                try:
-                    alt_info = mt5.symbol_info(alt_symbol)
-                    if alt_info is not None:
-                        if not alt_info.visible:
-                            logger.info(f"[SYMBOL_ENABLE] تفعيل الرمز البديل {alt_symbol}")
-                            mt5.symbol_select(alt_symbol, True)
-                            time.sleep(0.2)
-                        logger.info(f"[SYMBOL_ALT] استخدام الرمز البديل {alt_symbol} بدلاً من {symbol}")
-                        return alt_symbol
-                except Exception as alt_error:
-                    logger.debug(f"[DEBUG] فشل فحص الرمز البديل {alt_symbol}: {alt_error}")
-                    continue
-            
-            # إذا لم يتم العثور على أي بديل
-            logger.warning(f"[SYMBOL_NOT_FOUND] لم يتم العثور على الرمز {symbol} أو أي بديل")
-            return symbol  # إرجاع الرمز الأصلي للمحاولة مرة أخيرة
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في فحص توفر الرمز {symbol}: {e}")
-            return symbol
 
     def get_live_price(self, symbol: str) -> Optional[Dict]:
         """جلب السعر اللحظي الحقيقي - MT5 هو المصدر الأساسي الأولي مع نظام كاش"""
@@ -2348,10 +2290,10 @@ class MT5Manager:
             logger.warning(f"[WARNING] رمز غير صالح في get_live_price: {symbol}")
             return None
         
-        # التحقق من الكاش أولاً - إعطاء أولوية لبيانات MT5
-        cached_data = get_cached_price_data(symbol, "MT5")
+        # التحقق من الكاش أولاً
+        cached_data = get_cached_price_data(symbol)
         if cached_data:
-            logger.debug(f"[CACHE] استخدام بيانات MT5 مخزنة مؤقتاً لـ {symbol}")
+            logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
             return cached_data
         
         # التحقق من معدل الاستدعاءات
@@ -2372,54 +2314,110 @@ class MT5Manager:
         # ✅ المصدر الأساسي الأولي: MetaTrader5
         if real_connection_status:
             try:
-                # التأكد من توفر الرمز مع البحث عن بدائل
-                available_symbol = self.ensure_symbol_available(symbol)
-                
-                # جلب آخر تيك للرمز من MT5 (البيانات الأكثر دقة)
-                # تجنب استخدام lock هنا لمنع deadlock في المراقبة
-                tick = mt5.symbol_info_tick(available_symbol)
-                
-                # إذا فشل، جرب مرة أخرى بعد انتظار قصير (كما في mt5_debug)
-                if not tick or not (hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0):
-                    logger.debug(f"[RETRY] إعادة محاولة جلب البيانات للرمز {available_symbol}")
-                    time.sleep(0.5)
-                    tick = mt5.symbol_info_tick(available_symbol)
+                # استخدام lock لتجنب التضارب في عمليات MT5
+                with mt5_operation_lock:
+                    # تحقق من تفعيل الرمز أولاً (كما في mt5_debug)
+                    symbol_info = mt5.symbol_info(symbol)
+                    if symbol_info is None:
+                        # البحث في الرموز البديلة للأصول الشائعة
+                        symbol_alternatives = {
+                            # المعادن النفيسة
+                            'XAUUSD': ['XAUUSD', 'GOLD', 'XAUUSD.m', 'GOLD.m', 'XAUUSD.c'],
+                            'GOLD': ['GOLD', 'XAUUSD', 'GOLD.m', 'XAUUSD.m', 'XAUUSD.c'],
+                            'XAGUSD': ['XAGUSD', 'SILVER', 'XAGUSD.m', 'SILVER.m'],
+                            
+                            # العملات الرقمية
+                            'BTCUSD': ['BTCUSD', 'BITCOIN', 'BTC', 'BTCUSD.m'],
+                            'ETHUSD': ['ETHUSD', 'ETHEREUM', 'ETH', 'ETHUSD.m'],
+                            
+                            # أزواج العملات الرئيسية
+                            'EURUSD': ['EURUSD', 'EURUSD.m', 'EURUSD.c'],
+                            'GBPUSD': ['GBPUSD', 'GBPUSD.m', 'GBPUSD.c'],
+                            'USDJPY': ['USDJPY', 'USDJPY.m', 'USDJPY.c'],
+                            'AUDUSD': ['AUDUSD', 'AUDUSD.m', 'AUDUSD.c'],
+                            'USDCAD': ['USDCAD', 'USDCAD.m', 'USDCAD.c'],
+                            'USDCHF': ['USDCHF', 'USDCHF.m', 'USDCHF.c'],
+                            'NZDUSD': ['NZDUSD', 'NZDUSD.m', 'NZDUSD.c'],
+                            
+                            # المؤشرات
+                            'US30': ['US30', 'US30.m', 'US30.c', 'DOW30'],
+                            'US500': ['US500', 'US500.m', 'SPX500', 'SP500'],
+                            'NAS100': ['NAS100', 'NAS100.m', 'NASDAQ'],
+                            'GER30': ['GER30', 'GER30.m', 'DAX30', 'DAX'],
+                            'UK100': ['UK100', 'UK100.m', 'FTSE100'],
+                            
+                            # النفط
+                            'USOIL': ['USOIL', 'CRUDE', 'WTI', 'USOIL.m'],
+                            'UKOIL': ['UKOIL', 'BRENT', 'BRENT.m']
+                        }
+                        
+                        alternatives = symbol_alternatives.get(symbol.upper(), [symbol])
+                        for alt_symbol in alternatives:
+                            alt_info = mt5.symbol_info(alt_symbol)
+                            if alt_info is not None:
+                                symbol = alt_symbol  # استخدم الرمز البديل
+                                symbol_info = alt_info
+                                logger.info(f"[SYMBOL_ALT] استخدام الرمز البديل {alt_symbol}")
+                                break
+                        
+                        if symbol_info is None:
+                            logger.warning(f"[WARNING] الرمز {symbol} غير متاح في هذا الوسيط")
+                            return None
+                    
+                    # تجربة تفعيل الرمز إذا لم يكن مفعلاً (كما في mt5_debug)
+                    if not symbol_info.visible:
+                        logger.info(f"[SYMBOL_ENABLE] تفعيل الرمز {symbol}")
+                        mt5.symbol_select(symbol, True)
+                        time.sleep(0.5)  # انتظار للتفعيل
+                    
+                    # جلب آخر تيك للرمز من MT5 (البيانات الأكثر دقة)
+                    tick = mt5.symbol_info_tick(symbol)
+                    
+                    # إذا فشل، جرب مرة أخرى مع انتظار أطول (كما في mt5_debug)
+                    if not tick or not (hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0):
+                        logger.debug(f"[RETRY] إعادة محاولة جلب البيانات للرمز {symbol}")
+                        time.sleep(1)  # انتظار أطول كما في mt5_debug
+                        tick = mt5.symbol_info_tick(symbol)
                 
                 if tick is not None and hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0:
                     # التحقق من أن البيانات حديثة (ليست قديمة)
                     tick_time = datetime.fromtimestamp(tick.time)
-                    if TIMEZONE_AVAILABLE:
-                        tick_time = pytz.UTC.localize(tick_time)
-                        current_utc = pytz.UTC.localize(datetime.utcnow())
-                        time_diff = current_utc - tick_time
-                    else:
-                        time_diff = datetime.now() - tick_time
+                    time_diff = datetime.now() - tick_time
                     
-                    # زيادة مرونة وقت البيانات إلى 15 دقيقة (كما في v1.2.1 المستقر)
-                    if time_diff.total_seconds() > 900:
-                        logger.warning(f"[WARNING] بيانات MT5 قديمة للرمز {symbol} (عمر البيانات: {time_diff})")
-                        # لا نعيد None فوراً، قد تكون مشكلة مؤقتة في الرمز
-                    else:
-                        logger.debug(f"[OK] تم جلب البيانات الحديثة من MT5 للرمز {symbol}")
-                        # حساب spread بدقة أكبر
-                        spread = round(tick.ask - tick.bid, 5) if tick.ask > tick.bid else 0
-                        
-                        data = {
-                            'symbol': symbol,  # الرمز المطلوب أصلاً
-                            'actual_symbol': available_symbol,  # الرمز المستخدم فعلياً
-                            'bid': tick.bid,
-                            'ask': tick.ask,
-                            'last': tick.last,
-                            'volume': tick.volume,
-                            'time': tick_time,
-                            'spread': spread,
-                            'spread_points': self.calculate_spread_in_points(symbol, spread),
-                            'source': 'MetaTrader5 (مصدر أساسي)',
-                            'data_age': time_diff.total_seconds()
-                        }
-                        # حفظ في الكاش مع تحديد المصدر
-                        cache_price_data(symbol, data, "MT5")
-                        return data
+                    # تقليل timeout إلى 5 دقائق للحصول على بيانات أكثر حداثة
+                    if time_diff.total_seconds() > 300:
+                        logger.warning(f"[WARNING] بيانات MT5 قديمة للرمز {symbol} (عمر البيانات: {time_diff}) - محاولة تحديث...")
+                        # محاولة تحديث السعر بطلب جديد
+                        time.sleep(0.2)
+                        fresh_tick = mt5.symbol_info_tick(symbol)
+                        if fresh_tick and fresh_tick.bid > 0 and fresh_tick.ask > 0:
+                            fresh_time = datetime.fromtimestamp(fresh_tick.time)
+                            fresh_diff = datetime.now() - fresh_time
+                            if fresh_diff.total_seconds() <= 300:
+                                tick = fresh_tick
+                                tick_time = fresh_time
+                                time_diff = fresh_diff
+                                logger.info(f"[REFRESH] تم تحديث البيانات بنجاح للرمز {symbol}")
+                            else:
+                                logger.warning(f"[WARNING] البيانات لا تزال قديمة بعد التحديث للرمز {symbol}")
+                    
+                    # إنشاء البيانات بغض النظر عن العمر (لتجنب فشل كامل)
+                    logger.debug(f"[OK] معالجة البيانات للرمز {symbol} (عمر: {time_diff.total_seconds():.1f}s)")
+                    data = {
+                        'symbol': symbol,
+                        'bid': tick.bid,
+                        'ask': tick.ask,
+                        'last': tick.last,
+                        'volume': tick.volume,
+                        'time': tick_time,
+                        'spread': tick.ask - tick.bid,
+                    'source': 'MetaTrader5 (مصدر أساسي)',
+                    'data_age': time_diff.total_seconds(),
+                    'is_fresh': time_diff.total_seconds() <= 300
+                }
+                    # حفظ في الكاش
+                    cache_price_data(symbol, data)
+                    return data
                 else:
                     logger.warning(f"[WARNING] لا توجد بيانات صحيحة من MT5 لـ {symbol}")
                     # لا نغير حالة الاتصال فوراً، قد يكون الرمز غير متاح فقط
@@ -2430,9 +2428,9 @@ class MT5Manager:
                 if "connection" in str(e).lower() or "terminal" in str(e).lower():
                     self.connected = False
         else:
-            logger.debug(f"[DEBUG] MT5 غير متصل حقيقياً - سيتم استخدام مصدر بديل لـ {symbol}")
+            logger.debug(f"[DEBUG] MT5 غير متصل حقيقياً لـ {symbol}")
         
-        # إذا فشل MT5 في جلب البيانات، إرجاع None بدلاً من استخدام مصدر بديل
+        # إذا فشل MT5 في جلب البيانات، إرجاع None
         logger.error(f"[ERROR] فشل في جلب البيانات من MT5 للرمز {symbol}")
         return None
     
@@ -2506,7 +2504,8 @@ class MT5Manager:
                 return None
             
             # جلب أحدث البيانات اللحظية (M1 للحصول على أقصى دقة لحظية)
-            df = self.get_market_data(symbol, mt5.TIMEFRAME_M1, 100)  # M1 لأحدث البيانات اللحظية
+            with mt5_operation_lock:
+                df = self.get_market_data(symbol, mt5.TIMEFRAME_M1, 100)  # M1 لأحدث البيانات اللحظية
             if df is None or len(df) < 20:
                 logger.warning(f"[WARNING] بيانات غير كافية لحساب المؤشرات لـ {symbol}")
                 return None
@@ -3434,6 +3433,12 @@ class GeminiAnalyzer:
             # جلب المؤشرات الفنية الحقيقية من MT5
             technical_data = mt5_manager.calculate_technical_indicators(symbol)
             technical_analysis = ""
+            
+            # إضافة logs للتتبع
+            logger.debug(f"[ANALYZE] {symbol}: السعر الحالي={current_price}, البيانات الفنية متوفرة={bool(technical_data)}")
+            if technical_data and technical_data.get('indicators'):
+                indicators = technical_data['indicators']
+                logger.debug(f"[ANALYZE] {symbol}: الدعم={indicators.get('support'):.5f}, المقاومة={indicators.get('resistance'):.5f}, ATR={indicators.get('atr'):.5f}")
             
             # جلب البيانات التاريخية للتقاطعات
             crossover_patterns = crossover_tracker.analyze_crossover_patterns(symbol)
@@ -4570,13 +4575,25 @@ class GeminiAnalyzer:
                 
                 if resistance and support and resistance > support:
                     if action == 'BUY':
-                        target1 = target1 or resistance * 0.99
-                        target2 = target2 or resistance * 1.01
-                        stop_loss = stop_loss or support * 1.01
+                        # للشراء: الأهداف يجب أن تكون أعلى من السعر الحالي
+                        if resistance > current_price:
+                            target1 = target1 or min(resistance * 0.99, current_price * 1.02)
+                            target2 = target2 or min(resistance * 1.01, current_price * 1.04)
+                        else:
+                            # إذا كانت المقاومة أقل من السعر، استخدم نسبة من السعر الحالي
+                            target1 = target1 or current_price * 1.015
+                            target2 = target2 or current_price * 1.03
+                        stop_loss = stop_loss or max(support * 1.01, current_price * 0.985)
                     elif action == 'SELL':
-                        target1 = target1 or support * 1.01
-                        target2 = target2 or support * 0.99
-                        stop_loss = stop_loss or resistance * 0.99
+                        # للبيع: الأهداف يجب أن تكون أقل من السعر الحالي
+                        if support < current_price:
+                            target1 = target1 or max(support * 1.01, current_price * 0.98)
+                            target2 = target2 or max(support * 0.99, current_price * 0.96)
+                        else:
+                            # إذا كان الدعم أعلى من السعر، استخدم نسبة من السعر الحالي
+                            target1 = target1 or current_price * 0.985
+                            target2 = target2 or current_price * 0.97
+                        stop_loss = stop_loss or min(resistance * 0.99, current_price * 1.015)
                     else:  # HOLD
                         target1 = target1 or current_price * 1.015
                         target2 = target2 or current_price * 1.03
@@ -8134,6 +8151,11 @@ def handle_single_symbol_analysis(call):
         
         logger.info(f"[START] بدء تحليل الرمز {symbol} للمستخدم {user_id}")
         
+        # تعطيل المراقبة مؤقتاً لتجنب التضارب مع MT5
+        global analysis_in_progress
+        analysis_in_progress = True
+        logger.debug(f"[ANALYSIS_LOCK] تم تفعيل قفل التحليل للرمز {symbol}")
+        
         # العثور على معلومات الرمز
         symbol_info = ALL_SYMBOLS.get(symbol)
         if not symbol_info:
@@ -8279,6 +8301,10 @@ def handle_single_symbol_analysis(call):
             bot.answer_callback_query(call.id, "حدث خطأ في التحليل", show_alert=True)
         except:
             pass
+    finally:
+        # إعادة تفعيل المراقبة
+        analysis_in_progress = False
+        logger.debug(f"[ANALYSIS_UNLOCK] تم إلغاء قفل التحليل")
 
 @bot.callback_query_handler(func=lambda call: call.data == "analyze_symbols")
 def handle_analyze_symbols(call):
@@ -10919,6 +10945,12 @@ def monitoring_loop():
     while monitoring_active:
         try:
             current_time = time.time()
+            
+            # إيقاف مؤقت إذا كان التحليل اليدوي قيد التنفيذ
+            if analysis_in_progress:
+                logger.debug("[MONITORING_PAUSE] إيقاف مؤقت للمراقبة - تحليل يدوي قيد التنفيذ")
+                time.sleep(5)  # انتظار 5 ثوان
+                continue
             
             # فحص دوري لحالة اتصال MT5
             if current_time - last_connection_check > connection_check_interval:
