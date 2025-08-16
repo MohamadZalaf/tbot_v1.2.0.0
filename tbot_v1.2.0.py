@@ -31,9 +31,9 @@ import os
 import sys
 
 # إعداد timeout محسن لـ Telegram API
-apihelper.CONNECT_TIMEOUT = 30  # تقليل من 60 إلى 30 ثانية
-apihelper.READ_TIMEOUT = 30     # تقليل من 60 إلى 30 ثانية
-apihelper.RETRY_TIMEOUT = 2     # إضافة timeout للمحاولات المتكررة
+apihelper.CONNECT_TIMEOUT = 60  # زيادة إلى 60 ثانية للاستقرار
+apihelper.READ_TIMEOUT = 60     # زيادة إلى 60 ثانية للاستقرار
+apihelper.RETRY_TIMEOUT = 5     # زيادة timeout للمحاولات المتكررة
 import pandas as pd
 import numpy as np
 import MetaTrader5 as mt5
@@ -449,21 +449,57 @@ def handle_mt5_debug_command(message):
         except Exception as e:
             account_status = f"❌ خطأ في جلب معلومات الحساب: {str(e)}"
         
-        # 4. اختبار جلب البيانات
+        # 4. اختبار جلب البيانات مع تحسينات لمعالجة الذهب
         test_results = []
         test_symbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "GOLD", "BTCUSD"]
+        gold_symbols = ["XAUUSD", "GOLD", "XAUUSD.m", "GOLD.m", "XAUUSD.c"]  # رموز بديلة للذهب
         
         for symbol in test_symbols:
             try:
+                # تحقق من تفعيل الرمز أولاً
+                symbol_info = mt5.symbol_info(symbol)
+                if symbol_info is None:
+                    # إذا كان رمز الذهب، جرب الرموز البديلة
+                    if symbol in ["XAUUSD", "GOLD"]:
+                        found_alternative = False
+                        for alt_symbol in gold_symbols:
+                            alt_info = mt5.symbol_info(alt_symbol)
+                            if alt_info is not None:
+                                symbol = alt_symbol  # استخدم الرمز البديل
+                                symbol_info = alt_info
+                                found_alternative = True
+                                break
+                        if not found_alternative:
+                            test_results.append(f"❌ {symbol}: الرمز غير متاح في هذا الوسيط")
+                            continue
+                    else:
+                        test_results.append(f"❌ {symbol}: الرمز غير متاح")
+                        continue
+                
+                # تجربة تفعيل الرمز إذا لم يكن مفعلاً
+                if not symbol_info.visible:
+                    mt5.symbol_select(symbol, True)
+                    time.sleep(0.5)  # انتظار قصير للتفعيل
+                
+                # جلب البيانات
                 tick = mt5.symbol_info_tick(symbol)
-                if tick:
-                    test_results.append(f"✅ {symbol}: {tick.bid}/{tick.ask}")
+                if tick and tick.bid > 0 and tick.ask > 0:
+                    spread = tick.ask - tick.bid
+                    test_results.append(f"✅ {symbol}: {tick.bid:.5f}/{tick.ask:.5f} (spread: {spread:.5f})")
                 else:
-                    test_results.append(f"❌ {symbol}: لا توجد بيانات")
+                    # محاولة أخرى مع انتظار
+                    time.sleep(1)
+                    tick = mt5.symbol_info_tick(symbol)
+                    if tick and tick.bid > 0 and tick.ask > 0:
+                        spread = tick.ask - tick.bid
+                        test_results.append(f"✅ {symbol}: {tick.bid:.5f}/{tick.ask:.5f} (spread: {spread:.5f})")
+                    else:
+                        test_results.append(f"⚠️ {symbol}: بيانات غير صحيحة أو السوق مغلق")
+                        
             except Exception as e:
                 test_results.append(f"❌ {symbol}: خطأ - {str(e)}")
         
-        data_test_status = "\n".join(test_results[:6])  # أول 6 نتائج
+        data_test_status = "\n".join(test_results)  # جميع النتائج
         
         # 5. فحص حالة الاتصال في البوت
         bot_connection_status = "✅ متصل" if mt5_manager.connected else "❌ غير متصل"
@@ -1291,6 +1327,17 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         
         if current_price and current_price > 0:
             body += f"💰 السعر الحالي: {current_price:,.5f}\n"
+            # إضافة معلومات spread للإشعارات
+            bid = price_data.get('bid', 0)
+            ask = price_data.get('ask', 0)
+            spread = price_data.get('spread', 0)
+            if spread > 0 and bid > 0 and ask > 0:
+                spread_points = price_data.get('spread_points', 0)
+                body += f"📊 شراء: {bid:,.5f} | بيع: {ask:,.5f}"
+                if spread_points > 0:
+                    body += f" | فرق: {spread:.5f} ({spread_points:.1f} نقطة)\n"
+                else:
+                    body += f" | فرق: {spread:.5f}\n"
         else:
             body += f"⚠️ السعر اللحظي: يرجى التأكد من اتصال MT5\n"
         
@@ -1385,18 +1432,23 @@ class CachedPriceData:
     
 def is_cache_valid(symbol: str, required_source: str = None) -> bool:
     """التحقق من صلاحية البيانات المخزنة مؤقتاً مع التحقق من المصدر"""
-    if symbol not in price_data_cache:
-        return False
-    
-    cached_item = price_data_cache[symbol]
-    time_diff = datetime.now() - cached_item.timestamp
-    
-    # التحقق من انتهاء صلاحية الوقت
-    if time_diff.total_seconds() >= CACHE_DURATION:
-        return False
-    
-    # التحقق من تطابق المصدر إذا تم تحديده
-    if required_source and cached_item.source != required_source:
+    try:
+        if symbol not in price_data_cache:
+            return False
+        
+        cached_item = price_data_cache[symbol]
+        time_diff = datetime.now() - cached_item.timestamp
+        
+        # التحقق من انتهاء صلاحية الوقت (زيادة مدة الكاش للاستقرار)
+        cache_duration = CACHE_DURATION * 1.5  # زيادة مدة الكاش بـ 50%
+        if time_diff.total_seconds() >= cache_duration:
+            return False
+        
+        # التحقق من تطابق المصدر إذا تم تحديده
+        if required_source and cached_item.source != required_source:
+            return False
+    except Exception as e:
+        logger.debug(f"[DEBUG] خطأ في فحص صلاحية الكاش للرمز {symbol}: {e}")
         return False
         
     return True
@@ -2202,6 +2254,93 @@ class MT5Manager:
                 'error': str(e)
             }
     
+    def calculate_spread_in_points(self, symbol: str, spread_price: float) -> float:
+        """حساب spread بالنقاط حسب نوع الرمز"""
+        try:
+            asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+            if pip_size > 0:
+                spread_points = round(spread_price / pip_size, 1)
+                return spread_points
+            return 0
+        except Exception as e:
+            logger.debug(f"[DEBUG] خطأ في حساب spread بالنقاط للرمز {symbol}: {e}")
+            return 0
+
+    def ensure_symbol_available(self, symbol: str) -> str:
+        """التأكد من توفر الرمز مع البحث عن بدائل"""
+        try:
+            # قائمة الرموز البديلة للأصول الشائعة
+            symbol_alternatives = {
+                # المعادن النفيسة
+                'XAUUSD': ['XAUUSD', 'GOLD', 'XAUUSD.m', 'GOLD.m', 'GOLD.raw', 'XAUUSD.c'],
+                'GOLD': ['GOLD', 'XAUUSD', 'GOLD.m', 'XAUUSD.m', 'GOLD.raw', 'XAUUSD.c'],
+                'XAGUSD': ['XAGUSD', 'SILVER', 'XAGUSD.m', 'SILVER.m', 'XAGUSD.c'],
+                'SILVER': ['SILVER', 'XAGUSD', 'SILVER.m', 'XAGUSD.m', 'XAGUSD.c'],
+                'XPTUSD': ['XPTUSD', 'PLATINUM', 'XPTUSD.m', 'PLATINUM.m'],
+                'XPDUSD': ['XPDUSD', 'PALLADIUM', 'XPDUSD.m', 'PALLADIUM.m'],
+                
+                # العملات الرقمية
+                'BTCUSD': ['BTCUSD', 'BITCOIN', 'BTC', 'BTCUSD.m', 'BTC.USD', 'BTCUSD.c'],
+                'BITCOIN': ['BITCOIN', 'BTCUSD', 'BTC', 'BTCUSD.m', 'BTC.USD'],
+                'ETHUSD': ['ETHUSD', 'ETHEREUM', 'ETH', 'ETHUSD.m', 'ETH.USD'],
+                'ETHEREUM': ['ETHEREUM', 'ETHUSD', 'ETH', 'ETHUSD.m', 'ETH.USD'],
+                'LTCUSD': ['LTCUSD', 'LITECOIN', 'LTC', 'LTCUSD.m', 'LTC.USD'],
+                
+                # أزواج العملات الرئيسية
+                'EURUSD': ['EURUSD', 'EURUSD.m', 'EURUSD.c', 'EUR/USD'],
+                'GBPUSD': ['GBPUSD', 'GBPUSD.m', 'GBPUSD.c', 'GBP/USD'],
+                'USDJPY': ['USDJPY', 'USDJPY.m', 'USDJPY.c', 'USD/JPY'],
+                'AUDUSD': ['AUDUSD', 'AUDUSD.m', 'AUDUSD.c', 'AUD/USD'],
+                'USDCAD': ['USDCAD', 'USDCAD.m', 'USDCAD.c', 'USD/CAD'],
+                'USDCHF': ['USDCHF', 'USDCHF.m', 'USDCHF.c', 'USD/CHF'],
+                'NZDUSD': ['NZDUSD', 'NZDUSD.m', 'NZDUSD.c', 'NZD/USD'],
+                
+                # المؤشرات
+                'US30': ['US30', 'US30.m', 'US30.c', 'DOW30', 'DJ30'],
+                'US500': ['US500', 'US500.m', 'US500.c', 'SPX500', 'SP500'],
+                'NAS100': ['NAS100', 'NAS100.m', 'NAS100.c', 'NASDAQ', 'NDX'],
+                'GER30': ['GER30', 'GER30.m', 'GER30.c', 'DAX30', 'DAX'],
+                'UK100': ['UK100', 'UK100.m', 'UK100.c', 'FTSE100', 'FTSE'],
+                
+                # النفط
+                'USOIL': ['USOIL', 'CRUDE', 'WTI', 'USOIL.m', 'CRUDE.m'],
+                'UKOIL': ['UKOIL', 'BRENT', 'BRENT.m', 'UKOIL.m']
+            }
+            
+            # البحث عن الرمز الأصلي أولاً
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info is not None:
+                # تفعيل الرمز إذا لم يكن مفعلاً
+                if not symbol_info.visible:
+                    logger.info(f"[SYMBOL_ENABLE] تفعيل الرمز {symbol}")
+                    mt5.symbol_select(symbol, True)
+                    time.sleep(0.2)  # انتظار أطول للتأكد من التفعيل
+                return symbol
+            
+            # البحث في البدائل
+            alternatives = symbol_alternatives.get(symbol.upper(), [symbol])
+            for alt_symbol in alternatives:
+                try:
+                    alt_info = mt5.symbol_info(alt_symbol)
+                    if alt_info is not None:
+                        if not alt_info.visible:
+                            logger.info(f"[SYMBOL_ENABLE] تفعيل الرمز البديل {alt_symbol}")
+                            mt5.symbol_select(alt_symbol, True)
+                            time.sleep(0.2)
+                        logger.info(f"[SYMBOL_ALT] استخدام الرمز البديل {alt_symbol} بدلاً من {symbol}")
+                        return alt_symbol
+                except Exception as alt_error:
+                    logger.debug(f"[DEBUG] فشل فحص الرمز البديل {alt_symbol}: {alt_error}")
+                    continue
+            
+            # إذا لم يتم العثور على أي بديل
+            logger.warning(f"[SYMBOL_NOT_FOUND] لم يتم العثور على الرمز {symbol} أو أي بديل")
+            return symbol  # إرجاع الرمز الأصلي للمحاولة مرة أخيرة
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في فحص توفر الرمز {symbol}: {e}")
+            return symbol
+
     def get_live_price(self, symbol: str) -> Optional[Dict]:
         """جلب السعر اللحظي الحقيقي - MT5 هو المصدر الأساسي الأولي مع نظام كاش"""
         
@@ -2233,9 +2372,18 @@ class MT5Manager:
         # ✅ المصدر الأساسي الأولي: MetaTrader5
         if real_connection_status:
             try:
+                # التأكد من توفر الرمز مع البحث عن بدائل
+                available_symbol = self.ensure_symbol_available(symbol)
+                
                 # جلب آخر تيك للرمز من MT5 (البيانات الأكثر دقة)
-                with self.connection_lock:
-                    tick = mt5.symbol_info_tick(symbol)
+                # تجنب استخدام lock هنا لمنع deadlock في المراقبة
+                tick = mt5.symbol_info_tick(available_symbol)
+                
+                # إذا فشل، جرب مرة أخرى بعد انتظار قصير (كما في mt5_debug)
+                if not tick or not (hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0):
+                    logger.debug(f"[RETRY] إعادة محاولة جلب البيانات للرمز {available_symbol}")
+                    time.sleep(0.5)
+                    tick = mt5.symbol_info_tick(available_symbol)
                 
                 if tick is not None and hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0:
                     # التحقق من أن البيانات حديثة (ليست قديمة)
@@ -2253,14 +2401,19 @@ class MT5Manager:
                         # لا نعيد None فوراً، قد تكون مشكلة مؤقتة في الرمز
                     else:
                         logger.debug(f"[OK] تم جلب البيانات الحديثة من MT5 للرمز {symbol}")
+                        # حساب spread بدقة أكبر
+                        spread = round(tick.ask - tick.bid, 5) if tick.ask > tick.bid else 0
+                        
                         data = {
-                            'symbol': symbol,
+                            'symbol': symbol,  # الرمز المطلوب أصلاً
+                            'actual_symbol': available_symbol,  # الرمز المستخدم فعلياً
                             'bid': tick.bid,
                             'ask': tick.ask,
                             'last': tick.last,
                             'volume': tick.volume,
                             'time': tick_time,
-                            'spread': tick.ask - tick.bid,
+                            'spread': spread,
+                            'spread_points': self.calculate_spread_in_points(symbol, spread),
                             'source': 'MetaTrader5 (مصدر أساسي)',
                             'data_age': time_diff.total_seconds()
                         }
@@ -2384,17 +2537,39 @@ class MT5Manager:
                     'time': current_tick.get('time')
                 }
             
-            # المتوسطات المتحركة (محسوبة من أحدث البيانات)
-            if len(df) >= 9:
-                indicators['ma_9'] = ta.trend.sma_indicator(df['close'], window=9).iloc[-1]
-            if len(df) >= 10:
-                indicators['ma_10'] = ta.trend.sma_indicator(df['close'], window=10).iloc[-1]
-            if len(df) >= 20:
-                indicators['ma_20'] = ta.trend.sma_indicator(df['close'], window=20).iloc[-1]
-            if len(df) >= 21:
-                indicators['ma_21'] = ta.trend.sma_indicator(df['close'], window=21).iloc[-1]
-            if len(df) >= 50:
-                indicators['ma_50'] = ta.trend.sma_indicator(df['close'], window=50).iloc[-1]
+            # المتوسطات المتحركة (محسوبة من أحدث البيانات) - مع التحقق من صحة الدوال
+            try:
+                if len(df) >= 9:
+                    indicators['ma_9'] = ta.trend.sma_indicator(df['close'], window=9).iloc[-1]
+                if len(df) >= 10:
+                    indicators['ma_10'] = ta.trend.sma_indicator(df['close'], window=10).iloc[-1]
+                if len(df) >= 20:
+                    indicators['ma_20'] = ta.trend.sma_indicator(df['close'], window=20).iloc[-1]
+                if len(df) >= 21:
+                    indicators['ma_21'] = ta.trend.sma_indicator(df['close'], window=21).iloc[-1]
+                if len(df) >= 50:
+                    indicators['ma_50'] = ta.trend.sma_indicator(df['close'], window=50).iloc[-1]
+                    
+                # التحقق من صحة القيم المحسوبة
+                for ma_key in ['ma_9', 'ma_10', 'ma_20', 'ma_21', 'ma_50']:
+                    if ma_key in indicators:
+                        if pd.isna(indicators[ma_key]) or indicators[ma_key] <= 0:
+                            logger.warning(f"[WARNING] قيمة {ma_key} غير صحيحة: {indicators[ma_key]}")
+                            del indicators[ma_key]
+                        else:
+                            indicators[ma_key] = float(indicators[ma_key])
+                            
+            except Exception as ma_error:
+                logger.error(f"[ERROR] خطأ في حساب المتوسطات المتحركة: {ma_error}")
+                # استخدام حساب بديل يدوي
+                try:
+                    for window in [9, 10, 20, 21, 50]:
+                        if len(df) >= window:
+                            ma_value = df['close'].rolling(window=window).mean().iloc[-1]
+                            if not pd.isna(ma_value) and ma_value > 0:
+                                indicators[f'ma_{window}'] = float(ma_value)
+                except Exception as manual_ma_error:
+                    logger.error(f"[ERROR] فشل في الحساب اليدوي للمتوسطات: {manual_ma_error}")
             
             # RSI - محسن مع التحقق من صحة البيانات والتعامل مع القيم الشاذة
             if len(df) >= 14:
@@ -2430,25 +2605,62 @@ class MT5Manager:
                     indicators['rsi'] = 50  # قيمة افتراضية محايدة
                     indicators['rsi_interpretation'] = 'خطأ في الحساب'
             
-            # MACD
+            # MACD - مع معالجة أخطاء محسنة
             if len(df) >= 26:
-                macd_line = ta.trend.macd(df['close'])
-                macd_signal = ta.trend.macd_signal(df['close'])
-                macd_histogram = ta.trend.macd_diff(df['close'])
-                
-                indicators['macd'] = {
-                    'macd': macd_line.iloc[-1] if not pd.isna(macd_line.iloc[-1]) else 0,
-                    'signal': macd_signal.iloc[-1] if not pd.isna(macd_signal.iloc[-1]) else 0,
-                    'histogram': macd_histogram.iloc[-1] if not pd.isna(macd_histogram.iloc[-1]) else 0
-                }
-                
-                # تفسير MACD
-                if indicators['macd']['macd'] > indicators['macd']['signal']:
-                    indicators['macd_interpretation'] = 'إشارة صعود'
-                elif indicators['macd']['macd'] < indicators['macd']['signal']:
-                    indicators['macd_interpretation'] = 'إشارة هبوط'
-                else:
-                    indicators['macd_interpretation'] = 'محايد'
+                try:
+                    macd_line = ta.trend.macd(df['close'])
+                    macd_signal = ta.trend.macd_signal(df['close'])
+                    macd_histogram = ta.trend.macd_diff(df['close'])
+                    
+                    # التحقق من صحة البيانات
+                    if macd_line is not None and not macd_line.empty:
+                        macd_val = macd_line.iloc[-1] if not pd.isna(macd_line.iloc[-1]) else 0
+                        signal_val = macd_signal.iloc[-1] if macd_signal is not None and not macd_signal.empty and not pd.isna(macd_signal.iloc[-1]) else 0
+                        hist_val = macd_histogram.iloc[-1] if macd_histogram is not None and not macd_histogram.empty and not pd.isna(macd_histogram.iloc[-1]) else 0
+                        
+                        indicators['macd'] = {
+                            'macd': float(macd_val),
+                            'signal': float(signal_val),
+                            'histogram': float(hist_val)
+                        }
+                        
+                        # تفسير MACD
+                        if indicators['macd']['macd'] > indicators['macd']['signal']:
+                            indicators['macd_interpretation'] = 'إشارة صعود'
+                        elif indicators['macd']['macd'] < indicators['macd']['signal']:
+                            indicators['macd_interpretation'] = 'إشارة هبوط'
+                        else:
+                            indicators['macd_interpretation'] = 'محايد'
+                    else:
+                        logger.warning(f"[WARNING] فشل في حساب MACD للرمز {symbol} - بيانات فارغة")
+                        
+                except Exception as macd_error:
+                    logger.error(f"[ERROR] خطأ في حساب MACD للرمز {symbol}: {macd_error}")
+                    # حساب MACD يدوياً كبديل
+                    try:
+                        ema_12 = df['close'].ewm(span=12).mean()
+                        ema_26 = df['close'].ewm(span=26).mean()
+                        macd_manual = ema_12 - ema_26
+                        signal_manual = macd_manual.ewm(span=9).mean()
+                        histogram_manual = macd_manual - signal_manual
+                        
+                        if len(macd_manual) > 0 and not pd.isna(macd_manual.iloc[-1]):
+                            indicators['macd'] = {
+                                'macd': float(macd_manual.iloc[-1]),
+                                'signal': float(signal_manual.iloc[-1]),
+                                'histogram': float(histogram_manual.iloc[-1])
+                            }
+                            
+                            # تفسير MACD
+                            if indicators['macd']['macd'] > indicators['macd']['signal']:
+                                indicators['macd_interpretation'] = 'إشارة صعود'
+                            elif indicators['macd']['macd'] < indicators['macd']['signal']:
+                                indicators['macd_interpretation'] = 'إشارة هبوط'
+                            else:
+                                indicators['macd_interpretation'] = 'محايد'
+                        
+                    except Exception as manual_macd_error:
+                        logger.error(f"[ERROR] فشل في الحساب اليدوي لـ MACD: {manual_macd_error}")
             
             # حجم التداول - تحليل متقدم مع معالجة الأخطاء محسنة
             try:
@@ -2632,15 +2844,41 @@ class MT5Manager:
                 indicators['volume_interpretation'] = 'حجم طبيعي - بيانات محدودة'
                 indicators['volume_strength'] = 'متوسط'
             
-            # Stochastic Oscillator - تحليل متقدم
+            # Stochastic Oscillator - تحليل متقدم مع معالجة أخطاء
             if len(df) >= 14:
-                stoch_k = ta.momentum.stoch(df['high'], df['low'], df['close'])
-                stoch_d = ta.momentum.stoch_signal(df['high'], df['low'], df['close'])
+                try:
+                    stoch_k = ta.momentum.stoch(df['high'], df['low'], df['close'])
+                    stoch_d = ta.momentum.stoch_signal(df['high'], df['low'], df['close'])
+                except Exception as stoch_error:
+                    logger.error(f"[ERROR] خطأ في حساب Stochastic للرمز {symbol}: {stoch_error}")
+                    # حساب Stochastic يدوياً
+                    try:
+                        # %K calculation
+                        low_14 = df['low'].rolling(window=14).min()
+                        high_14 = df['high'].rolling(window=14).max()
+                        stoch_k = 100 * ((df['close'] - low_14) / (high_14 - low_14))
+                        stoch_d = stoch_k.rolling(window=3).mean()  # %D is 3-period SMA of %K
+                    except Exception as manual_stoch_error:
+                        logger.error(f"[ERROR] فشل في الحساب اليدوي لـ Stochastic: {manual_stoch_error}")
+                        stoch_k = None
+                        stoch_d = None
                 
-                current_k = stoch_k.iloc[-1] if not pd.isna(stoch_k.iloc[-1]) else 50
-                current_d = stoch_d.iloc[-1] if not pd.isna(stoch_d.iloc[-1]) else 50
-                previous_k = stoch_k.iloc[-2] if len(stoch_k) >= 2 and not pd.isna(stoch_k.iloc[-2]) else current_k
-                previous_d = stoch_d.iloc[-2] if len(stoch_d) >= 2 and not pd.isna(stoch_d.iloc[-2]) else current_d
+                # التحقق من وجود بيانات صحيحة
+                if stoch_k is not None and stoch_d is not None and not stoch_k.empty and not stoch_d.empty:
+                    current_k = stoch_k.iloc[-1] if not pd.isna(stoch_k.iloc[-1]) else 50
+                    current_d = stoch_d.iloc[-1] if not pd.isna(stoch_d.iloc[-1]) else 50
+                    previous_k = stoch_k.iloc[-2] if len(stoch_k) >= 2 and not pd.isna(stoch_k.iloc[-2]) else current_k
+                    previous_d = stoch_d.iloc[-2] if len(stoch_d) >= 2 and not pd.isna(stoch_d.iloc[-2]) else current_d
+                    
+                    # التأكد من أن القيم في النطاق الصحيح (0-100)
+                    current_k = max(0, min(100, current_k))
+                    current_d = max(0, min(100, current_d))
+                    previous_k = max(0, min(100, previous_k))
+                    previous_d = max(0, min(100, previous_d))
+                else:
+                    # قيم افتراضية في حالة فشل الحساب
+                    current_k = current_d = previous_k = previous_d = 50
+                    logger.warning(f"[WARNING] استخدام قيم افتراضية لـ Stochastic للرمز {symbol}")
                 
                 indicators['stochastic'] = {
                     'k': current_k,
@@ -2801,19 +3039,38 @@ class MT5Manager:
             # ===== كشف التقاطعات للمتوسطات المتحركة =====
             ma_crossovers = []
             
-            # تقاطعات MA 9 و MA 21
+            # تقاطعات MA 9 و MA 21 - مع معالجة أخطاء محسنة
             if 'ma_9' in indicators and 'ma_21' in indicators and len(df) >= 22:
-                ma_9_prev = ta.trend.sma_indicator(df['close'], window=9).iloc[-2]
-                ma_21_prev = ta.trend.sma_indicator(df['close'], window=21).iloc[-2]
+                try:
+                    ma_9_prev = ta.trend.sma_indicator(df['close'], window=9).iloc[-2]
+                    ma_21_prev = ta.trend.sma_indicator(df['close'], window=21).iloc[-2]
+                    
+                    # التحقق من صحة القيم
+                    if pd.isna(ma_9_prev) or pd.isna(ma_21_prev):
+                        # استخدام حساب يدوي كبديل
+                        ma_9_prev = df['close'].rolling(window=9).mean().iloc[-2]
+                        ma_21_prev = df['close'].rolling(window=21).mean().iloc[-2]
+                        
+                    # التأكد من صحة القيم المحسوبة
+                    if pd.isna(ma_9_prev) or pd.isna(ma_21_prev):
+                        logger.warning(f"[WARNING] فشل في حساب قيم MA السابقة للرمز {symbol}")
+                        ma_9_prev = ma_21_prev = None
+                        
+                except Exception as ma_crossover_error:
+                    logger.error(f"[ERROR] خطأ في حساب تقاطعات MA للرمز {symbol}: {ma_crossover_error}")
+                    ma_9_prev = ma_21_prev = None
                 
                 # التقاطع الذهبي (Golden Cross) - MA9 يقطع MA21 من الأسفل
-                if ma_9_prev <= ma_21_prev and indicators['ma_9'] > indicators['ma_21']:
-                    ma_crossovers.append('تقاطع ذهبي MA9/MA21 - إشارة شراء قوية')
-                    indicators['ma_9_21_crossover'] = 'golden'
-                # تقاطع الموت (Death Cross) - MA9 يقطع MA21 من الأعلى
-                elif ma_9_prev >= ma_21_prev and indicators['ma_9'] < indicators['ma_21']:
-                    ma_crossovers.append('تقاطع الموت MA9/MA21 - إشارة بيع قوية')
-                    indicators['ma_9_21_crossover'] = 'death'
+                if ma_9_prev is not None and ma_21_prev is not None:
+                    if ma_9_prev <= ma_21_prev and indicators['ma_9'] > indicators['ma_21']:
+                        ma_crossovers.append('تقاطع ذهبي MA9/MA21 - إشارة شراء قوية')
+                        indicators['ma_9_21_crossover'] = 'golden'
+                    # تقاطع الموت (Death Cross) - MA9 يقطع MA21 من الأعلى
+                    elif ma_9_prev >= ma_21_prev and indicators['ma_9'] < indicators['ma_21']:
+                        ma_crossovers.append('تقاطع الموت MA9/MA21 - إشارة بيع قوية')
+                        indicators['ma_9_21_crossover'] = 'death'
+                    else:
+                        indicators['ma_9_21_crossover'] = 'none'
                 else:
                     indicators['ma_9_21_crossover'] = 'none'
             
@@ -3390,7 +3647,8 @@ class GeminiAnalyzer:
             - السعر الحالي: {current_price}
             - سعر الشراء: {price_data.get('bid', 'غير متوفر')}
             - سعر البيع: {price_data.get('ask', 'غير متوفر')}
-            - الفرق (Spread): {spread}
+            - الفرق (Spread): {spread} ({price_data.get('spread_points', 0):.1f} نقطة)
+            - تكلفة التداول: انتبه للـ spread عند حساب الربحية
             - مصدر البيانات: {data_source}
             - الوقت: {price_data.get('time', 'الآن')}
             
@@ -3594,15 +3852,23 @@ class GeminiAnalyzer:
             3. **التوصية المحددة:** حدد نوع الصفقة (شراء/بيع)، نقطة الدخول المثلى، الأهداف (TP1/TP2)، وقف الخسارة (SL)
             4. **⚠️ CRITICAL - حساب النقاط والأهداف (إجباري):**
             
-            **معلومات مهمة عن النقاط للرمز {symbol}:**
+            **معلومات مهمة عن النقاط والـ Spread للرمز {symbol}:**
             - نوع الرمز: {asset_type}
             - حجم النقطة: {pip_size}
             - السعر الحالي: {current_price}
+            - الـ Spread الحالي: {price_data.get('spread', 0):.5f} ({price_data.get('spread_points', 0):.1f} نقطة)
             
             **قواعد حساب النقاط (يجب الالتزام بها):**
             - 1 نقطة = حجم النقطة المحدد أعلاه من التغير في السعر
             - الحد الأقصى للنقاط: 999 نقطة (3 خانات فقط)
             - الحد الأدنى للنقاط: 1 نقطة
+            
+            **⚠️ اعتبارات الـ Spread الحرجة:**
+            - الـ Spread = الفرق بين سعر الشراء والبيع
+            - تكلفة تداول فورية يجب طرحها من الربح المتوقع
+            - كلما قل الـ Spread، كلما كانت الصفقة أرخص في التكلفة
+            - في الأوقات المتقلبة، قد يزداد الـ Spread مؤقتاً
+            - يجب أن تتجاوز الأهداف الـ Spread بمرات كافية لضمان الربحية
             
             **يجب حساب وذكر الآتي بوضوح:**
             - سعر الدخول المقترح: [رقم بـ 5 خانات عشرية]
@@ -3625,6 +3891,8 @@ class GeminiAnalyzer:
             - اجمع نقاط جميع المؤشرات واحسب النسبة النهائية
             - النطاق الكامل: 0% إلى 100% - لا تتردد في استخدام النطاق كاملاً
             - يجب أن تكون النسبة انعكاساً حقيقياً لجودة الإشارات وليس رقماً عشوائياً
+            - **اطرح من النسبة إذا كان الـ Spread عالياً:** spread > 3 نقاط (-5%)، spread > 5 نقاط (-10%)
+            - **أضف للنسبة إذا كان الـ Spread منخفضاً:** spread < 1 نقطة (+5%)
             - اكتب بوضوح: "نسبة نجاح الصفقة: X%" حيث X هو الرقم المحسوب من تحليلك
             - إذا كانت الإشارات متضاربة جداً أو معدومة، اكتب نسبة منخفضة (5-35%)
             - إذا كانت جميع المؤشرات متفقة وقوية، اكتب نسبة عالية (75-95%)
@@ -4597,6 +4865,17 @@ class GeminiAnalyzer:
             message += f"📡 مصدر البيانات: 🔗 MetaTrader5 (لحظي - بيانات حقيقية)\n"
             message += f"🌍 مصدر التوقيت: خادم MT5 - محول لمنطقتك الزمنية\n"
             message += f"💰 السعر الحالي: {current_price:,.5f}\n"
+            # إضافة معلومات spread مفصلة
+            if spread > 0:
+                spread_points = price_data.get('spread_points', 0)
+                message += f"📊 أسعار التداول:\n"
+                message += f"   🟢 شراء (Bid): {bid:,.5f}\n"
+                message += f"   🔴 بيع (Ask): {ask:,.5f}\n"
+                message += f"   📏 الفرق (Spread): {spread:.5f}"
+                if spread_points > 0:
+                    message += f" ({spread_points:.1f} نقطة)\n"
+                else:
+                    message += "\n"
             message += f"➡️ التغيير اليومي: {daily_change}\n"
             # استخدام التوقيت المصحح حسب المنطقة الزمنية للمستخدم
             if user_id:
@@ -6796,7 +7075,7 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
                 'time': datetime.now()
             }
         
-        # إجراء تحليل جديد مع Gemini AI للإشعار
+        # إجراء تحليل جديد مع Gemini AI للإشعار مع معالجة محسنة للأخطاء
         fresh_analysis = None
         try:
             fresh_analysis = gemini_analyzer.analyze_market_data_with_retry(symbol, price_data, user_id)
@@ -10418,7 +10697,12 @@ def display_instant_prices(user_id, chat_id, message_id, symbols, category_name,
 ───────────────────────
 """
         
-        # التحقق من اتصال MT5
+        # التحقق من اتصال MT5 مع محاولة إعادة الاتصال
+        if not mt5_manager.connected:
+            logger.warning("[WARNING] MT5 غير متصل، محاولة إعادة الاتصال...")
+            # محاولة إعادة الاتصال
+            mt5_manager.check_real_connection()
+            
         if not mt5_manager.connected:
             message_text += """
 ❌ **غير متصل بـ MetaTrader5**
@@ -10427,6 +10711,7 @@ def display_instant_prices(user_id, chat_id, message_id, symbols, category_name,
 • تأكد من تشغيل MetaTrader5
 • تحقق من اتصال الإنترنت  
 • حاول مرة أخرى بعد قليل
+• تم محاولة إعادة الاتصال تلقائياً
 
 ───────────────────────
 """
@@ -10450,11 +10735,12 @@ def display_instant_prices(user_id, chat_id, message_id, symbols, category_name,
                             display_bid = bid if bid > 0 else last_price
                             display_ask = ask if ask > 0 else last_price
                             display_spread = spread if spread > 0 else abs(display_ask - display_bid)
+                            spread_points = price_data.get('spread_points', 0)
                             
                             prices_data.append(f"""
 {info['emoji']} **{info['name']}**
 📊 شراء: {display_bid:.5f} | بيع: {display_ask:.5f}
-📏 فرق: {display_spread:.5f}
+📏 فرق: {display_spread:.5f}{' (' + str(spread_points) + ' نقطة)' if spread_points > 0 else ''}
 """)
                         else:
                             prices_data.append(f"""
@@ -10691,20 +10977,37 @@ def monitoring_loop():
                         users_by_symbol[symbol] = []
                     users_by_symbol[symbol].append(user_id)
             
-            # الخطوة 2: جلب البيانات لجميع الرموز مرة واحدة فقط
+            # الخطوة 2: جلب البيانات لجميع الرموز مرة واحدة فقط مع معالجة محسنة
             symbols_data = {}  # {symbol: price_data}
+            max_concurrent_requests = 3  # تحديد عدد الطلبات المتزامنة
+            current_requests = 0
+            
             for symbol in all_symbols_needed:
                 try:
+                    # تحديد عدد الطلبات المتزامنة لتجنب الضغط على MT5
+                    if current_requests >= max_concurrent_requests:
+                        time.sleep(0.1)  # انتظار قصير
+                        current_requests = 0
+                    
                     price_data = mt5_manager.get_live_price(symbol)
+                    current_requests += 1
+                    
                     if price_data:
                         symbols_data[symbol] = price_data
+                        logger.debug(f"[DATA_OK] تم جلب بيانات {symbol} بنجاح")
                     else:
                         failed_operations += 1
+                        logger.debug(f"[DATA_FAIL] فشل في جلب بيانات {symbol}")
                         if not mt5_manager.connected:
                             mt5_connection_errors += 1
+                            
                 except Exception as e:
                     logger.error(f"[ERROR] خطأ في جلب بيانات {symbol}: {e}")
                     failed_operations += 1
+                    # فحص نوع الخطأ
+                    if "connection" in str(e).lower() or "timeout" in str(e).lower():
+                        logger.warning(f"[WARNING] مشكلة اتصال في جلب {symbol} - تخطي للرمز التالي")
+                        time.sleep(0.5)  # انتظار إضافي للأخطاء الشبكية
             
             # الخطوة 3: معالجة كل رمز مع المستخدمين المهتمين به
             for symbol, price_data in symbols_data.items():
@@ -10855,27 +11158,54 @@ if __name__ == "__main__":
         while retry_count < max_retries:
             try:
                 logger.info("[SYSTEM] بدء استقبال الرسائل...")
-                bot.infinity_polling(none_stop=True, interval=2, timeout=30, long_polling_timeout=20)
+                bot.infinity_polling(
+                    none_stop=False,  # تغيير إلى False لمعالجة أفضل للأخطاء
+                    interval=1,       # تقليل المدة للاستجابة الأسرع
+                    timeout=60,       # زيادة timeout للاستقرار
+                    long_polling_timeout=30  # زيادة long polling timeout
+                )
                 break  # إذا انتهى بشكل طبيعي
                 
             except telebot.apihelper.ApiException as api_error:
                 retry_count += 1
+                error_str = str(api_error).lower()
                 logger.error(f"[ERROR] خطأ Telegram API (محاولة {retry_count}/{max_retries}): {api_error}")
+                
+                # معالجة خاصة لأخطاء الشبكة والاتصال
+                if "connection" in error_str or "timeout" in error_str or "network" in error_str:
+                    wait_time = min(retry_count * 10, 120)  # انتظار أطول لأخطاء الشبكة
+                else:
+                    wait_time = min(retry_count * 5, 60)
+                    
                 if retry_count >= max_retries:
                     logger.error("[ERROR] تم الوصول للحد الأقصى من المحاولات - إيقاف البوت")
                     break
-                wait_time = min(retry_count * 5, 60)  # انتظار تدريجي حتى 60 ثانية
+                    
                 logger.info(f"[SYSTEM] انتظار {wait_time} ثانية قبل إعادة المحاولة...")
                 time.sleep(wait_time)
                 continue
                 
             except Exception as polling_error:
                 retry_count += 1
+                error_str = str(polling_error).lower()
                 logger.error(f"[ERROR] خطأ عام في الاستقبال (محاولة {retry_count}/{max_retries}): {polling_error}")
+                
+                # إعادة تشغيل المراقبة إذا توقفت
+                if not monitoring_active:
+                    logger.warning("[WARNING] المراقبة متوقفة - إعادة التشغيل...")
+                    monitoring_active = True
+                
+                # معالجة خاصة لأخطاء محددة
+                if "infinity polling" in error_str or "polling exited" in error_str:
+                    logger.warning("[WARNING] انقطاع في infinity polling - محاولة إعادة الاتصال...")
+                    wait_time = min(retry_count * 8, 90)
+                else:
+                    wait_time = min(retry_count * 5, 60)
+                    
                 if retry_count >= max_retries:
                     logger.error("[ERROR] تم الوصول للحد الأقصى من المحاولات - إيقاف البوت")
                     break
-                wait_time = min(retry_count * 3, 30)  # انتظار تدريجي حتى 30 ثانية
+                    
                 logger.info(f"[SYSTEM] انتظار {wait_time} ثانية قبل إعادة المحاولة...")
                 time.sleep(wait_time)
                 continue
