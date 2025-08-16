@@ -14,7 +14,8 @@ import os
 import unittest
 import threading
 import time
-import sqlite3
+import json
+import glob
 from unittest.mock import patch, MagicMock
 
 # Add current directory to path
@@ -81,49 +82,39 @@ class TestEmbeddedBot(unittest.TestCase):
         """Set up test environment"""
         self.bot = EmbeddedTradingBot()
         
-        # Clean up any existing test database
-        if os.path.exists('bot_users.db'):
-            os.remove('bot_users.db')
+        # Clean up any existing test files
+        import shutil
+        if os.path.exists('trading_data'):
+            shutil.rmtree('trading_data')
         
-        # Reinitialize database
-        self.bot.init_database()
+        # Create test directories
+        os.makedirs('trading_data/users', exist_ok=True)
     
     def tearDown(self):
         """Clean up after tests"""
-        if hasattr(self.bot, 'conn'):
-            self.bot.conn.close()
-        
-        if os.path.exists('bot_users.db'):
-            os.remove('bot_users.db')
+        import shutil
+        if os.path.exists('trading_data'):
+            shutil.rmtree('trading_data')
     
-    def test_database_initialization(self):
-        """Test database initialization"""
-        # Check if database file exists
-        self.assertTrue(os.path.exists('bot_users.db'))
-        
-        # Check if tables exist
-        cursor = self.bot.cursor
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = [row[0] for row in cursor.fetchall()]
-        
-        self.assertIn('users', tables)
-        self.assertIn('user_stats', tables)
-        print("✅ Database initialization test passed")
+    def test_directory_initialization(self):
+        """Test directory initialization"""
+        # Check if directories exist
+        self.assertTrue(os.path.exists('trading_data'))
+        self.assertTrue(os.path.exists('trading_data/users'))
+        print("✅ Directory initialization test passed")
     
-    def test_add_user(self):
-        """Test adding users to database"""
-        # Add test user
-        self.bot.add_user(12345, "testuser", "Test User")
+    def test_save_user(self):
+        """Test saving users to JSON"""
+        # Save test user
+        self.bot.save_user_data(12345, "testuser", "Test User")
         
-        # Verify user was added
-        cursor = self.bot.cursor
-        cursor.execute("SELECT * FROM users WHERE user_id = ?", (12345,))
-        user = cursor.fetchone()
+        # Verify user was saved
+        user_data = self.bot.load_user_data(12345)
         
-        self.assertIsNotNone(user)
-        self.assertEqual(user[0], 12345)  # user_id
-        self.assertEqual(user[1], "testuser")  # username
-        print("✅ Add user test passed")
+        self.assertIsNotNone(user_data)
+        self.assertEqual(user_data['user_id'], "12345")
+        self.assertEqual(user_data['username'], "testuser")
+        print("✅ Save user test passed")
     
     def test_users_count(self):
         """Test users count functionality"""
@@ -131,9 +122,9 @@ class TestEmbeddedBot(unittest.TestCase):
         count = self.bot.get_users_count()
         self.assertEqual(count, 0)
         
-        # Add some users
-        self.bot.add_user(12345, "user1", "User 1")
-        self.bot.add_user(67890, "user2", "User 2")
+        # Save some users
+        self.bot.save_user_data(12345, "user1", "User 1")
+        self.bot.save_user_data(67890, "user2", "User 2")
         
         # Count should be 2
         count = self.bot.get_users_count()
@@ -144,8 +135,8 @@ class TestEmbeddedBot(unittest.TestCase):
         """Test user authentication"""
         user_id = 12345
         
-        # Add user first
-        self.bot.add_user(user_id, "testuser", "Test User")
+        # Save user first
+        self.bot.save_user_data(user_id, "testuser", "Test User")
         
         # Authenticate user
         self.bot.authenticate_user(user_id)
@@ -153,11 +144,8 @@ class TestEmbeddedBot(unittest.TestCase):
         # Check if user is in authenticated set
         self.assertIn(user_id, self.bot.authenticated_users)
         
-        # Check database
-        cursor = self.bot.cursor
-        cursor.execute("SELECT is_authenticated FROM users WHERE user_id = ?", (user_id,))
-        is_auth = cursor.fetchone()[0]
-        self.assertEqual(is_auth, 1)
+        # Check authentication status
+        self.assertTrue(self.bot.is_authenticated(user_id))
         print("✅ Authentication test passed")
     
     @patch('telebot.TeleBot', MockBot)
@@ -207,10 +195,10 @@ def test_imports():
         print("  ❌ tkinter")
     
     try:
-        import sqlite3
-        print("  ✅ sqlite3")
+        import glob
+        print("  ✅ glob")
     except ImportError:
-        print("  ❌ sqlite3")
+        print("  ❌ glob")
     
     try:
         import json
@@ -267,7 +255,7 @@ def run_all_tests():
     # Run unit tests
     print("🧪 Running unit tests...")
     
-    # Create test suite
+    # Create test suite 
     suite = unittest.TestLoader().loadTestsFromTestCase(TestEmbeddedBot)
     
     # Run tests

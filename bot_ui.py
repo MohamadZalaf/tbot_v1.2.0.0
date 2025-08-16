@@ -15,6 +15,7 @@ Features:
 - User-friendly Interface
 - Users Count Window (Maroon background, Red text)
 - Embedded Bot Code (No external .py files needed)
+- Uses Original JSON System (No SQLite Database)
 
 Developer: Mohamad Zalaf ©️2025
 Compatible with: Embedded tbot_v1.2.0.py
@@ -29,8 +30,8 @@ import sys
 import threading
 import time
 import json
-import sqlite3
 from typing import Dict, List, Optional, Any
+import glob
 
 # ===============================================
 # EMBEDDED BOT CODE START
@@ -67,17 +68,26 @@ MIN_CONFIDENCE_THRESHOLD = 70
 MAX_DAILY_ALERTS = 50
 GEMINI_MODEL = 'gemini-2.0-flash'
 
+# Data directories (same as original bot)
+DATA_DIR = "trading_data"
+USERS_DIR = os.path.join(DATA_DIR, "users")
+FEEDBACK_DIR = os.path.join(DATA_DIR, "user_feedback")
+TRADE_LOGS_DIR = os.path.join(DATA_DIR, "trade_logs")
+CHAT_LOGS_DIR = os.path.join(DATA_DIR, "chat_logs")
+
+# Create directories if they don't exist
+for directory in [DATA_DIR, USERS_DIR, FEEDBACK_DIR, TRADE_LOGS_DIR, CHAT_LOGS_DIR]:
+    os.makedirs(directory, exist_ok=True)
+
 class EmbeddedTradingBot:
-    """Embedded Trading Bot Class"""
+    """Embedded Trading Bot Class - Uses Original JSON System"""
     
     def __init__(self):
         self.bot = None
         self.is_running = False
-        self.users_data = {}
+        self.user_sessions = {}  # In-memory sessions (like original)
         self.authenticated_users = set()
-        self.user_stats = {}
         self.setup_logging()
-        self.init_database()
         
     def setup_logging(self):
         """Setup logging system"""
@@ -91,93 +101,72 @@ class EmbeddedTradingBot:
         )
         self.logger = logging.getLogger(__name__)
         
-    def init_database(self):
-        """Initialize SQLite database for user data"""
-        try:
-            self.conn = sqlite3.connect('bot_users.db', check_same_thread=False)
-            self.cursor = self.conn.cursor()
-            
-            # Create users table
-            self.cursor.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id INTEGER PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    join_date TEXT,
-                    last_active TEXT,
-                    is_authenticated INTEGER DEFAULT 0
-                )
-            ''')
-            
-            # Create user stats table
-            self.cursor.execute('''
-                CREATE TABLE IF NOT EXISTS user_stats (
-                    user_id INTEGER PRIMARY KEY,
-                    total_requests INTEGER DEFAULT 0,
-                    successful_trades INTEGER DEFAULT 0,
-                    total_points REAL DEFAULT 0.0
-                )
-            ''')
-            
-            self.conn.commit()
-            self.logger.info("Database initialized successfully")
-            
-        except Exception as e:
-            self.logger.error(f"Database initialization error: {e}")
-    
     def get_users_count(self):
-        """Get total number of users"""
+        """Get total number of users from JSON files (original system)"""
         try:
-            self.cursor.execute("SELECT COUNT(*) FROM users")
-            count = self.cursor.fetchone()[0]
-            return count
+            # Count JSON files in users directory
+            user_files = glob.glob(os.path.join(USERS_DIR, "user_*.json"))
+            return len(user_files)
         except Exception as e:
             self.logger.error(f"Error getting users count: {e}")
             return 0
     
-    def add_user(self, user_id, username=None, first_name=None):
-        """Add new user to database"""
+    def load_user_data(self, user_id):
+        """Load user data from JSON file (original system)"""
         try:
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            user_file = os.path.join(USERS_DIR, f"user_{user_id}.json")
+            if os.path.exists(user_file):
+                with open(user_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            return None
+        except Exception as e:
+            self.logger.error(f"Error loading user data for {user_id}: {e}")
+            return None
+    
+    def save_user_data(self, user_id, username=None, first_name=None):
+        """Save user data to JSON file (original system)"""
+        try:
+            user_data = {
+                'user_id': str(user_id),
+                'username': username,
+                'first_name': first_name,
+                'join_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'last_active': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
             
-            # Check if user exists
-            self.cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
-            if self.cursor.fetchone():
-                # Update last active
-                self.cursor.execute(
-                    "UPDATE users SET last_active = ? WHERE user_id = ?",
-                    (current_time, user_id)
-                )
-            else:
-                # Add new user
-                self.cursor.execute(
-                    "INSERT INTO users (user_id, username, first_name, join_date, last_active) VALUES (?, ?, ?, ?, ?)",
-                    (user_id, username, first_name, current_time, current_time)
-                )
+            # Check if user already exists
+            existing_data = self.load_user_data(user_id)
+            if existing_data:
+                # Update only last_active, keep original join_date
+                user_data['join_date'] = existing_data.get('join_date', user_data['join_date'])
+                user_data['username'] = username or existing_data.get('username')
+                user_data['first_name'] = first_name or existing_data.get('first_name')
+            
+            user_file = os.path.join(USERS_DIR, f"user_{user_id}.json")
+            with open(user_file, 'w', encoding='utf-8') as f:
+                json.dump(user_data, f, ensure_ascii=False, indent=2)
                 
-                # Add user stats entry
-                self.cursor.execute(
-                    "INSERT INTO user_stats (user_id) VALUES (?)",
-                    (user_id,)
-                )
-            
-            self.conn.commit()
+            self.logger.info(f"User data saved for {user_id}")
             
         except Exception as e:
-            self.logger.error(f"Error adding user: {e}")
+            self.logger.error(f"Error saving user data for {user_id}: {e}")
     
     def authenticate_user(self, user_id):
-        """Mark user as authenticated"""
+        """Mark user as authenticated (in-memory, like original)"""
         try:
-            self.cursor.execute(
-                "UPDATE users SET is_authenticated = 1 WHERE user_id = ?",
-                (user_id,)
-            )
-            self.conn.commit()
             self.authenticated_users.add(user_id)
+            self.user_sessions[user_id] = {
+                'authenticated': True,
+                'login_time': datetime.now()
+            }
+            self.logger.info(f"User {user_id} authenticated successfully")
             
         except Exception as e:
-            self.logger.error(f"Error authenticating user: {e}")
+            self.logger.error(f"Error authenticating user {user_id}: {e}")
+    
+    def is_authenticated(self, user_id):
+        """Check if user is authenticated (original system)"""
+        return self.user_sessions.get(user_id, {}).get('authenticated', False)
     
     def start_bot(self):
         """Start the trading bot"""
@@ -239,8 +228,8 @@ class EmbeddedTradingBot:
             username = message.from_user.username
             first_name = message.from_user.first_name
             
-            # Add user to database
-            self.add_user(user_id, username, first_name)
+            # Save user data to JSON (original system)
+            self.save_user_data(user_id, username, first_name)
             
             welcome_text = """
 🤖 أهلاً بك في بوت التداول المتقدم v1.2.0
@@ -250,7 +239,7 @@ class EmbeddedTradingBot:
             
             self.bot.reply_to(message, welcome_text)
         
-        @self.bot.message_handler(func=lambda message: message.from_user.id not in self.authenticated_users)
+        @self.bot.message_handler(func=lambda message: not self.is_authenticated(message.from_user.id))
         def handle_password(message):
             user_id = message.from_user.id
             
@@ -274,10 +263,13 @@ class EmbeddedTradingBot:
             else:
                 self.bot.reply_to(message, "❌ كلمة مرور خاطئة. حاول مرة أخرى.")
         
-        @self.bot.message_handler(func=lambda message: message.from_user.id in self.authenticated_users)
+        @self.bot.message_handler(func=lambda message: self.is_authenticated(message.from_user.id))
         def handle_authenticated_messages(message):
             user_id = message.from_user.id
             text = message.text
+            
+            # Update user activity
+            self.save_user_data(user_id, message.from_user.username, message.from_user.first_name)
             
             if text == "📊 تحليل الأسواق":
                 self.bot.reply_to(message, "🔄 جاري تحليل الأسواق... يرجى الانتظار")
@@ -368,7 +360,7 @@ class TradingBotUI:
         # Subtitle
         subtitle_label = tk.Label(
             self.login_frame,
-            text="Advanced Trading Bot Control Panel v1.2.0",
+            text="Advanced Trading Bot Control Panel v1.2.0 - JSON System",
             font=("Arial", 12),
             fg='#cccccc',
             bg='#2b2b2b'
@@ -434,7 +426,7 @@ class TradingBotUI:
         # Title
         header_label = tk.Label(
             header_frame,
-            text="🤖 Trading Bot Control Panel - EMBEDDED VERSION",
+            text="🤖 Trading Bot Control Panel - JSON SYSTEM",
             font=("Arial", 18, "bold"),
             fg='#00ff00',
             bg='#2b2b2b'
@@ -545,8 +537,10 @@ class TradingBotUI:
         self.log_text.pack(fill=tk.BOTH, expand=True, pady=10)
         
         # Add initial log message
-        self.add_log("🔧 Bot Controller Initialized - EMBEDDED VERSION")
-        self.add_log("ℹ️  All bot code is embedded - no external files needed")
+        self.add_log("🔧 Bot Controller Initialized - JSON SYSTEM VERSION")
+        self.add_log("ℹ️  Using original JSON file system (no database)")
+        self.add_log("📁 Users stored in: trading_data/users/")
+        self.add_log("📁 AI training files kept external (as designed)")
         self.add_log("🔐 Please login to access controls")
     
     def show_users_count_window(self):
@@ -558,7 +552,7 @@ class TradingBotUI:
         # Create users count window
         self.users_count_window = tk.Toplevel(self.root)
         self.users_count_window.title("👥 Users Count")
-        self.users_count_window.geometry("300x150")
+        self.users_count_window.geometry("350x180")
         self.users_count_window.resizable(False, False)
         self.users_count_window.configure(bg='#800020')  # Maroon background
         
@@ -590,6 +584,16 @@ class TradingBotUI:
             bg='#800020'
         )
         self.users_count_label.pack(pady=10)
+        
+        # Data source info
+        source_label = tk.Label(
+            main_frame,
+            text="(من ملفات JSON)",
+            font=("Arial", 10),
+            fg='#ffcccc',
+            bg='#800020'
+        )
+        source_label.pack(pady=2)
         
         # Last updated label
         last_updated = tk.Label(
@@ -654,7 +658,7 @@ class TradingBotUI:
             messagebox.showerror("Access Denied", "Please login first!")
             return
         
-        self.add_log("🚀 Starting embedded trading bot...")
+        self.add_log("🚀 Starting embedded trading bot with JSON system...")
         success, message = self.embedded_bot.start_bot()
         
         if success:
@@ -662,6 +666,7 @@ class TradingBotUI:
             self.start_button.config(state='disabled')
             self.stop_button.config(state='normal')
             self.add_log(f"✅ {message}")
+            self.add_log("📁 Users will be saved in trading_data/users/")
         else:
             self.add_log(f"❌ {message}")
             messagebox.showerror("Error", message)

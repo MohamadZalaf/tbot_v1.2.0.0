@@ -73,7 +73,7 @@ a = Analysis(
         'PIL.Image',
         'PIL.ImageDraw',
         'PIL.ImageFont',
-        'sqlite3',
+        'glob',
         'tkinter',
         'tkinter.messagebox',
         'tkinter.scrolledtext',
