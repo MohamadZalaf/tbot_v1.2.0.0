@@ -343,6 +343,62 @@ def get_api_usage_statistics():
 # تهيئة البوت
 bot = telebot.TeleBot(BOT_TOKEN)
 
+@bot.message_handler(commands=['clear_cache'])
+def handle_clear_cache_command(message):
+    """معالج أمر تنظيف الكاش يدوياً - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        # تنظيف جميع أنواع الكاش
+        cache_cleared = 0
+        api_calls_cleared = 0
+        
+        # تنظيف cache البيانات
+        if price_data_cache:
+            cache_cleared = len(price_data_cache)
+            price_data_cache.clear()
+        
+        # تنظيف سجلات API calls
+        if last_api_calls:
+            api_calls_cleared = len(last_api_calls)
+            last_api_calls.clear()
+        
+        # تنظيف إضافي للكاش في MT5Manager إذا كان متاحاً
+        try:
+            if 'mt5_manager' in globals() and hasattr(mt5_manager, 'connected'):
+                # إعادة تحديد صحة الاتصال
+                mt5_manager.check_real_connection()
+        except Exception as e:
+            logger.warning(f"[CACHE] تحذير في تنظيف MT5: {e}")
+        
+        # رسالة النجاح
+        success_message = f"""
+🧹 **تم تنظيف الكاش بنجاح!**
+
+📊 **الإحصائيات:**
+• تم تنظيف {cache_cleared} عنصر من cache البيانات
+• تم تنظيف {api_calls_cleared} سجل من API calls
+• تم إعادة فحص اتصال MT5
+
+✅ **النتيجة:**
+البوت جاهز الآن للحصول على بيانات جديدة تماماً من MT5
+
+🕐 **الوقت:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """
+        
+        bot.reply_to(message, success_message, parse_mode='Markdown')
+        logger.info(f"[DEVELOPER] تم تنظيف الكاش بأمر من المطور (User ID: {user_id})")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في أمر clear_cache: {e}")
+        bot.reply_to(message, f"❌ خطأ في تنظيف الكاش: {str(e)}")
+
 @bot.message_handler(commands=['api_status'])
 def handle_api_status_command(message):
     """معالج أمر التحقق من حالة API - للمطور فقط"""
@@ -1067,7 +1123,7 @@ from dataclasses import dataclass
 
 # كاش البيانات لتقليل الاستدعاءات المتكررة
 price_data_cache = {}
-CACHE_DURATION = 5  # ثوان - تقليل مدة الكاش من 15 إلى 5 ثوان لبيانات أكثر دقة
+CACHE_DURATION = 10  # ثوان - مدة متوازنة للحصول على بيانات دقيقة مع تقليل الضغط على MT5
 
 @dataclass
 class CachedPriceData:
@@ -1569,8 +1625,8 @@ class MT5Manager:
                     else:
                         time_diff = datetime.now() - tick_time
                     
-                    # 5 دقائق بدلاً من 15 للحصول على بيانات لحظية دقيقة
-                    if time_diff.total_seconds() > 300:
+                    # 15 دقيقة للمرونة أكثر (كما في v1.2.1 المستقر)
+                    if time_diff.total_seconds() > 900:
                         logger.warning(f"[WARNING] البيانات قديمة جداً (عمر: {time_diff}) - الاتصال غير فعال")
                         self.connected = False
                         return self._attempt_reconnection()
@@ -1781,11 +1837,10 @@ class MT5Manager:
                     else:
                         time_diff = datetime.now() - tick_time
                     
-                    # زيادة مرونة وقت البيانات إلى 10 دقائق لدقة أكبر
-                    if time_diff.total_seconds() > 600:
+                    # زيادة مرونة وقت البيانات إلى 15 دقيقة (كما في v1.2.1 المستقر)
+                    if time_diff.total_seconds() > 900:
                         logger.warning(f"[WARNING] بيانات MT5 قديمة للرمز {symbol} (عمر البيانات: {time_diff})")
-                        # إذا كانت البيانات قديمة جداً، تجاهل هذا الرمز
-                        return None
+                        # لا نعيد None فوراً، قد تكون مشكلة مؤقتة في الرمز
                     else:
                         logger.debug(f"[OK] تم جلب البيانات الحديثة من MT5 للرمز {symbol}")
                         data = {
