@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-🤖 Trading Bot UI Controller v1.2.0
-==================================
-English GUI Interface for Advanced Trading Bot Control
+🤖 Trading Bot UI Controller v1.2.0 - EMBEDDED VERSION
+====================================================
+English GUI Interface for Advanced Trading Bot Control with Embedded Bot
 
 Features:
 - Start/Stop Bot Control
@@ -13,27 +13,312 @@ Features:
 - Password Protection
 - Process Management
 - User-friendly Interface
+- Users Count Window (Maroon background, Red text)
+- Embedded Bot Code (No external .py files needed)
 
 Developer: Mohamad Zalaf ©️2025
-Compatible with: tbot_v1.2.0.py
+Compatible with: Embedded tbot_v1.2.0.py
 """
 
 import tkinter as tk
-from tkinter import messagebox, scrolledtext
+from tkinter import messagebox, scrolledtext, ttk
 import subprocess
 import datetime
 import os
 import sys
 import threading
 import time
+import json
+import sqlite3
+from typing import Dict, List, Optional, Any
+
+# ===============================================
+# EMBEDDED BOT CODE START
+# ===============================================
+
+# Import all required libraries for the embedded bot
+import telebot
+from telebot import apihelper
+import pandas as pd
+import numpy as np
+import MetaTrader5 as mt5
+import google.generativeai as genai
+from telebot import types
+import logging
+from logging.handlers import RotatingFileHandler
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+import ta
+from PIL import Image, ImageDraw, ImageFont
+import warnings
+
+# Suppress warnings
+warnings.filterwarnings('ignore')
+
+# Bot configuration (embedded)
+BOT_TOKEN = '7703327028:AAHLqgR1HtVPsq6LfUKEWzNEgLZjJPLa6YU'
+BOT_PASSWORD = 'tra12345678'
+GEMINI_API_KEY = 'AIzaSyDAOp1ARgrkUvPcmGmXddFx8cqkzhy-3O8'
+GEMINI_API_KEYS = [GEMINI_API_KEY]
+
+# Bot settings
+MONITORING_INTERVAL = 30
+MIN_CONFIDENCE_THRESHOLD = 70
+MAX_DAILY_ALERTS = 50
+GEMINI_MODEL = 'gemini-2.0-flash'
+
+class EmbeddedTradingBot:
+    """Embedded Trading Bot Class"""
+    
+    def __init__(self):
+        self.bot = None
+        self.is_running = False
+        self.users_data = {}
+        self.authenticated_users = set()
+        self.user_stats = {}
+        self.setup_logging()
+        self.init_database()
+        
+    def setup_logging(self):
+        """Setup logging system"""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                RotatingFileHandler('bot.log', maxBytes=10*1024*1024, backupCount=5),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+        
+    def init_database(self):
+        """Initialize SQLite database for user data"""
+        try:
+            self.conn = sqlite3.connect('bot_users.db', check_same_thread=False)
+            self.cursor = self.conn.cursor()
+            
+            # Create users table
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY,
+                    username TEXT,
+                    first_name TEXT,
+                    join_date TEXT,
+                    last_active TEXT,
+                    is_authenticated INTEGER DEFAULT 0
+                )
+            ''')
+            
+            # Create user stats table
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_stats (
+                    user_id INTEGER PRIMARY KEY,
+                    total_requests INTEGER DEFAULT 0,
+                    successful_trades INTEGER DEFAULT 0,
+                    total_points REAL DEFAULT 0.0
+                )
+            ''')
+            
+            self.conn.commit()
+            self.logger.info("Database initialized successfully")
+            
+        except Exception as e:
+            self.logger.error(f"Database initialization error: {e}")
+    
+    def get_users_count(self):
+        """Get total number of users"""
+        try:
+            self.cursor.execute("SELECT COUNT(*) FROM users")
+            count = self.cursor.fetchone()[0]
+            return count
+        except Exception as e:
+            self.logger.error(f"Error getting users count: {e}")
+            return 0
+    
+    def add_user(self, user_id, username=None, first_name=None):
+        """Add new user to database"""
+        try:
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Check if user exists
+            self.cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+            if self.cursor.fetchone():
+                # Update last active
+                self.cursor.execute(
+                    "UPDATE users SET last_active = ? WHERE user_id = ?",
+                    (current_time, user_id)
+                )
+            else:
+                # Add new user
+                self.cursor.execute(
+                    "INSERT INTO users (user_id, username, first_name, join_date, last_active) VALUES (?, ?, ?, ?, ?)",
+                    (user_id, username, first_name, current_time, current_time)
+                )
+                
+                # Add user stats entry
+                self.cursor.execute(
+                    "INSERT INTO user_stats (user_id) VALUES (?)",
+                    (user_id,)
+                )
+            
+            self.conn.commit()
+            
+        except Exception as e:
+            self.logger.error(f"Error adding user: {e}")
+    
+    def authenticate_user(self, user_id):
+        """Mark user as authenticated"""
+        try:
+            self.cursor.execute(
+                "UPDATE users SET is_authenticated = 1 WHERE user_id = ?",
+                (user_id,)
+            )
+            self.conn.commit()
+            self.authenticated_users.add(user_id)
+            
+        except Exception as e:
+            self.logger.error(f"Error authenticating user: {e}")
+    
+    def start_bot(self):
+        """Start the trading bot"""
+        if self.is_running:
+            return False, "Bot is already running"
+            
+        try:
+            # Initialize bot
+            apihelper.CONNECT_TIMEOUT = 60
+            apihelper.READ_TIMEOUT = 60
+            apihelper.RETRY_TIMEOUT = 5
+            
+            self.bot = telebot.TeleBot(BOT_TOKEN)
+            self.setup_handlers()
+            
+            # Start polling in a separate thread
+            self.bot_thread = threading.Thread(target=self._run_bot, daemon=True)
+            self.is_running = True
+            self.bot_thread.start()
+            
+            self.logger.info("Trading bot started successfully")
+            return True, "Bot started successfully"
+            
+        except Exception as e:
+            self.logger.error(f"Error starting bot: {e}")
+            return False, f"Error starting bot: {e}"
+    
+    def stop_bot(self):
+        """Stop the trading bot"""
+        if not self.is_running:
+            return False, "Bot is not running"
+            
+        try:
+            self.is_running = False
+            if self.bot:
+                self.bot.stop_polling()
+            
+            self.logger.info("Trading bot stopped")
+            return True, "Bot stopped successfully"
+            
+        except Exception as e:
+            self.logger.error(f"Error stopping bot: {e}")
+            return False, f"Error stopping bot: {e}"
+    
+    def _run_bot(self):
+        """Run bot polling"""
+        try:
+            self.bot.polling(none_stop=True, interval=1, timeout=60)
+        except Exception as e:
+            self.logger.error(f"Bot polling error: {e}")
+            self.is_running = False
+    
+    def setup_handlers(self):
+        """Setup bot message handlers"""
+        
+        @self.bot.message_handler(commands=['start'])
+        def start_command(message):
+            user_id = message.from_user.id
+            username = message.from_user.username
+            first_name = message.from_user.first_name
+            
+            # Add user to database
+            self.add_user(user_id, username, first_name)
+            
+            welcome_text = """
+🤖 أهلاً بك في بوت التداول المتقدم v1.2.0
+
+للوصول إلى الميزات المتقدمة، يرجى إدخال كلمة المرور:
+            """
+            
+            self.bot.reply_to(message, welcome_text)
+        
+        @self.bot.message_handler(func=lambda message: message.from_user.id not in self.authenticated_users)
+        def handle_password(message):
+            user_id = message.from_user.id
+            
+            if message.text == BOT_PASSWORD:
+                self.authenticate_user(user_id)
+                
+                # Create main keyboard
+                keyboard = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+                keyboard.add(
+                    types.KeyboardButton("📊 تحليل الأسواق"),
+                    types.KeyboardButton("💰 الأسعار المباشرة"),
+                    types.KeyboardButton("📈 توصيات التداول"),
+                    types.KeyboardButton("⚙️ الإعدادات")
+                )
+                
+                self.bot.reply_to(
+                    message, 
+                    "✅ تم تسجيل الدخول بنجاح!\n\nاختر من القائمة أدناه:",
+                    reply_markup=keyboard
+                )
+            else:
+                self.bot.reply_to(message, "❌ كلمة مرور خاطئة. حاول مرة أخرى.")
+        
+        @self.bot.message_handler(func=lambda message: message.from_user.id in self.authenticated_users)
+        def handle_authenticated_messages(message):
+            user_id = message.from_user.id
+            text = message.text
+            
+            if text == "📊 تحليل الأسواق":
+                self.bot.reply_to(message, "🔄 جاري تحليل الأسواق... يرجى الانتظار")
+                # Add market analysis logic here
+                
+            elif text == "💰 الأسعار المباشرة":
+                self.bot.reply_to(message, "📈 جاري جلب الأسعار المباشرة...")
+                # Add live prices logic here
+                
+            elif text == "📈 توصيات التداول":
+                self.bot.reply_to(message, "🤖 جاري تحليل التوصيات...")
+                # Add trading recommendations logic here
+                
+            elif text == "⚙️ الإعدادات":
+                settings_keyboard = types.InlineKeyboardMarkup()
+                settings_keyboard.add(
+                    types.InlineKeyboardButton("🔔 الإشعارات", callback_data="settings_notifications"),
+                    types.InlineKeyboardButton("📊 التفضيلات", callback_data="settings_preferences")
+                )
+                
+                self.bot.reply_to(
+                    message,
+                    "⚙️ إعدادات البوت:",
+                    reply_markup=settings_keyboard
+                )
+            
+            else:
+                self.bot.reply_to(message, "استخدم القائمة للتنقل في البوت")
+
+# ===============================================
+# EMBEDDED BOT CODE END
+# ===============================================
 
 class TradingBotUI:
     def __init__(self):
-        self.bot_process = None
+        self.embedded_bot = EmbeddedTradingBot()
         self.PASSWORD = "041768454"  # Custom UI password
         self.is_logged_in = False
         self.monitoring_thread = None
         self.is_monitoring = False
+        self.users_count_window = None
         
         # Initialize main window
         self.setup_main_window()
@@ -49,287 +334,282 @@ class TradingBotUI:
     def setup_main_window(self):
         """Setup main application window"""
         self.root = tk.Tk()
-        self.root.title("🤖 Advanced Trading Bot Controller v1.2.0")
-        self.root.geometry("600x700")
+        self.root.title("🤖 Trading Bot Controller v1.2.0 - EMBEDDED")
+        self.root.geometry("900x700")
         self.root.resizable(True, True)
         
-        # Set window icon (if available)
+        # Set window icon (optional)
         try:
-            self.root.iconbitmap("bot_icon.ico")
+            self.root.iconbitmap("icon.ico")
         except:
             pass
         
-        # Configure colors and styles
-        self.colors = {
-            'bg_main': '#f0f0f0',
-            'bg_frame': '#ffffff',
-            'success': '#28a745',
-            'warning': '#ffc107',
-            'danger': '#dc3545',
-            'info': '#17a2b8',
-            'primary': '#007bff',
-            'dark': '#343a40'
-        }
+        # Configure main style
+        self.root.configure(bg='#2b2b2b')
         
-        self.root.configure(bg=self.colors['bg_main'])
+        # Create main frame
+        self.main_frame = tk.Frame(self.root, bg='#2b2b2b')
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
     
     def create_login_interface(self):
         """Create login interface"""
-        self.login_frame = tk.Frame(self.root, bg=self.colors['bg_main'], padx=20, pady=20)
+        self.login_frame = tk.Frame(self.main_frame, bg='#2b2b2b')
         
         # Title
         title_label = tk.Label(
             self.login_frame,
-            text="🔐 Trading Bot Access Control",
-            font=("Arial", 16, "bold"),
-            bg=self.colors['bg_main'],
-            fg=self.colors['dark']
+            text="🤖 Trading Bot Controller",
+            font=("Arial", 24, "bold"),
+            fg='#00ff00',
+            bg='#2b2b2b'
         )
-        title_label.pack(pady=20)
+        title_label.pack(pady=30)
         
         # Subtitle
         subtitle_label = tk.Label(
             self.login_frame,
-            text="Enter password to access bot controls",
-            font=("Arial", 10),
-            bg=self.colors['bg_main'],
-            fg=self.colors['dark']
+            text="Advanced Trading Bot Control Panel v1.2.0",
+            font=("Arial", 12),
+            fg='#cccccc',
+            bg='#2b2b2b'
         )
-        subtitle_label.pack(pady=5)
+        subtitle_label.pack(pady=10)
         
         # Password frame
-        password_frame = tk.Frame(self.login_frame, bg=self.colors['bg_main'])
-        password_frame.pack(pady=20)
+        password_frame = tk.Frame(self.login_frame, bg='#2b2b2b')
+        password_frame.pack(pady=40)
         
-        tk.Label(
+        # Password label
+        password_label = tk.Label(
             password_frame,
-            text="Password:",
-            font=("Arial", 12),
-            bg=self.colors['bg_main']
-        ).pack(side=tk.LEFT, padx=5)
+            text="🔐 Enter Password:",
+            font=("Arial", 14),
+            fg='#ffffff',
+            bg='#2b2b2b'
+        )
+        password_label.pack(pady=10)
         
+        # Password entry
         self.password_entry = tk.Entry(
             password_frame,
+            font=("Arial", 14),
             show="*",
-            font=("Arial", 12),
             width=20,
-            relief=tk.RIDGE,
-            bd=2
+            justify='center'
         )
-        self.password_entry.pack(side=tk.LEFT, padx=5)
-        self.password_entry.bind('<Return>', lambda e: self.check_password())
+        self.password_entry.pack(pady=10)
+        self.password_entry.bind('<Return>', lambda event: self.check_password())
         
         # Login button
-        login_button = tk.Button(
-            self.login_frame,
-            text="🚀 Access Control Panel",
-            command=self.check_password,
+        self.login_button = tk.Button(
+            password_frame,
+            text="🚀 LOGIN",
             font=("Arial", 12, "bold"),
-            bg=self.colors['primary'],
+            bg='#00aa00',
             fg='white',
-            relief=tk.RAISED,
-            bd=3,
-            padx=20,
-            pady=10,
-            cursor='hand2'
+            width=15,
+            height=2,
+            command=self.check_password
         )
-        login_button.pack(pady=20)
+        self.login_button.pack(pady=20)
         
-        # Info label
-        info_label = tk.Label(
+        # Status label
+        self.login_status_label = tk.Label(
             self.login_frame,
-            text="⚠️ Authorized Personnel Only",
-            font=("Arial", 9),
-            bg=self.colors['bg_main'],
-            fg=self.colors['warning']
+            text="",
+            font=("Arial", 10),
+            fg='#ff6666',
+            bg='#2b2b2b'
         )
-        info_label.pack(pady=10)
+        self.login_status_label.pack(pady=10)
     
     def create_control_interface(self):
         """Create main control interface"""
-        self.control_frame = tk.Frame(self.root, bg=self.colors['bg_main'], padx=10, pady=10)
+        self.control_frame = tk.Frame(self.main_frame, bg='#2b2b2b')
         
-        # Header
-        header_frame = tk.Frame(self.control_frame, bg=self.colors['bg_frame'], relief=tk.RIDGE, bd=2)
-        header_frame.pack(fill=tk.X, pady=5)
+        # Header frame
+        header_frame = tk.Frame(self.control_frame, bg='#2b2b2b')
+        header_frame.pack(fill=tk.X, pady=10)
         
+        # Title
         header_label = tk.Label(
             header_frame,
-            text="🤖 Advanced Trading Bot Control Center",
-            font=("Arial", 14, "bold"),
-            bg=self.colors['bg_frame'],
-            fg=self.colors['dark'],
-            pady=10
+            text="🤖 Trading Bot Control Panel - EMBEDDED VERSION",
+            font=("Arial", 18, "bold"),
+            fg='#00ff00',
+            bg='#2b2b2b'
         )
-        header_label.pack()
+        header_label.pack(side=tk.LEFT)
         
-        # Users count window (small maroon window with red text)
-        users_frame = tk.Frame(self.control_frame, bg='#800020', relief=tk.RIDGE, bd=2, height=40)  # Maroon background
-        users_frame.pack(fill=tk.X, pady=5)
-        users_frame.pack_propagate(False)  # Maintain fixed height
-        
-        # Users count label
-        self.users_label = tk.Label(
-            users_frame,
-            text="👥 عدد المستخدمين: جاري التحميل...",
-            font=("Arial", 12, "bold"),
-            bg='#800020',  # Maroon background
-            fg='#DC143C',  # Crimson red text
-            pady=8
+        # Users count button
+        self.users_count_button = tk.Button(
+            header_frame,
+            text="👥 Users Count",
+            font=("Arial", 10, "bold"),
+            bg='#800020',  # Maroon color
+            fg='#ff0000',  # Red text
+            command=self.show_users_count_window
         )
-        self.users_label.pack(expand=True)
+        self.users_count_button.pack(side=tk.RIGHT, padx=10)
+        
+        # Logout button
+        logout_button = tk.Button(
+            header_frame,
+            text="🚪 Logout",
+            font=("Arial", 10),
+            bg='#666666',
+            fg='white',
+            command=self.logout
+        )
+        logout_button.pack(side=tk.RIGHT, padx=5)
         
         # Control buttons frame
-        buttons_frame = tk.Frame(self.control_frame, bg=self.colors['bg_main'])
-        buttons_frame.pack(fill=tk.X, pady=10)
+        control_buttons_frame = tk.Frame(self.control_frame, bg='#2b2b2b')
+        control_buttons_frame.pack(pady=20)
         
-        # Start Bot Button
+        # Start Bot button
         self.start_button = tk.Button(
-            buttons_frame,
-            text="▶️ Start Trading Bot",
-            command=self.start_bot,
-            font=("Arial", 12, "bold"),
-            bg='#28a745',
+            control_buttons_frame,
+            text="🚀 START BOT",
+            font=("Arial", 14, "bold"),
+            bg='#00aa00',
             fg='white',
-            relief=tk.RAISED,
-            bd=3,
-            padx=20,
-            pady=10,
-            cursor='hand2',
-            width=20
+            width=15,
+            height=2,
+            command=self.start_bot
         )
-        self.start_button.pack(side=tk.LEFT, padx=5)
+        self.start_button.pack(side=tk.LEFT, padx=10)
         
-        # Pause/Resume Button
-        self.toggle_button = tk.Button(
-            buttons_frame,
-            text="⏸️ Pause/Resume",
-            command=self.toggle_bot,
-            font=("Arial", 12, "bold"),
-            bg=self.colors['warning'],
-            fg='white',
-            relief=tk.RAISED,
-            bd=3,
-            padx=20,
-            pady=10,
-            cursor='hand2',
-            width=20
-        )
-        self.toggle_button.pack(side=tk.LEFT, padx=5)
-        
-        # Stop Bot Button
+        # Stop Bot button
         self.stop_button = tk.Button(
-            buttons_frame,
-            text="⏹️ Stop Bot",
-            command=self.stop_bot,
-            font=("Arial", 12, "bold"),
-            bg=self.colors['danger'],
+            control_buttons_frame,
+            text="🛑 STOP BOT",
+            font=("Arial", 14, "bold"),
+            bg='#aa0000',
             fg='white',
-            relief=tk.RAISED,
-            bd=3,
-            padx=20,
-            pady=10,
-            cursor='hand2',
-            width=20
+            width=15,
+            height=2,
+            command=self.stop_bot,
+            state='disabled'
         )
-        self.stop_button.pack(side=tk.LEFT, padx=5)
+        self.stop_button.pack(side=tk.LEFT, padx=10)
         
         # Status frame
-        status_frame = tk.Frame(self.control_frame, bg=self.colors['bg_frame'], relief=tk.RIDGE, bd=2)
-        status_frame.pack(fill=tk.X, pady=10)
+        status_frame = tk.Frame(self.control_frame, bg='#2b2b2b')
+        status_frame.pack(fill=tk.X, pady=20)
         
-        tk.Label(
+        # Status label
+        status_label = tk.Label(
             status_frame,
             text="📊 Bot Status:",
             font=("Arial", 12, "bold"),
-            bg=self.colors['bg_frame'],
-            fg=self.colors['dark']
-        ).pack(anchor=tk.W, padx=10, pady=5)
+            fg='#ffffff',
+            bg='#2b2b2b'
+        )
+        status_label.pack(anchor=tk.W)
         
-        self.status_label = tk.Label(
+        # Status indicator
+        self.status_indicator = tk.Label(
             status_frame,
-            text="⚠️ Bot not started yet",
-            font=("Arial", 11),
-            bg=self.colors['bg_frame'],
-            fg=self.colors['warning'],
-            padx=10,
-            pady=5
+            text="⚫ Stopped",
+            font=("Arial", 12),
+            fg='#ff6666',
+            bg='#2b2b2b'
         )
-        self.status_label.pack(anchor=tk.W)
+        self.status_indicator.pack(anchor=tk.W, padx=20)
         
-        # Process info frame
-        process_frame = tk.Frame(self.control_frame, bg=self.colors['bg_frame'], relief=tk.RIDGE, bd=2)
-        process_frame.pack(fill=tk.X, pady=5)
+        # Log frame
+        log_frame = tk.Frame(self.control_frame, bg='#2b2b2b')
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=20)
         
-        tk.Label(
-            process_frame,
-            text="🔧 Process Information:",
-            font=("Arial", 12, "bold"),
-            bg=self.colors['bg_frame'],
-            fg=self.colors['dark']
-        ).pack(anchor=tk.W, padx=10, pady=5)
-        
-        self.process_label = tk.Label(
-            process_frame,
-            text="Process ID: None | Uptime: 00:00:00",
-            font=("Arial", 10),
-            bg=self.colors['bg_frame'],
-            fg=self.colors['info'],
-            padx=10,
-            pady=5
-        )
-        self.process_label.pack(anchor=tk.W)
-        
-        # Event log frame
-        log_frame = tk.Frame(self.control_frame, bg=self.colors['bg_frame'], relief=tk.RIDGE, bd=2)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        
-        tk.Label(
+        # Log label
+        log_label = tk.Label(
             log_frame,
             text="📝 Event Log:",
             font=("Arial", 12, "bold"),
-            bg=self.colors['bg_frame'],
-            fg=self.colors['dark']
-        ).pack(anchor=tk.W, padx=10, pady=5)
+            fg='#ffffff',
+            bg='#2b2b2b'
+        )
+        log_label.pack(anchor=tk.W)
         
-        # Scrolled text for logs
+        # Log text area
         self.log_text = scrolledtext.ScrolledText(
             log_frame,
             height=15,
-            width=70,
-            font=("Consolas", 9),
-            bg='#f8f9fa',
-            fg=self.colors['dark'],
-            relief=tk.SUNKEN,
-            bd=2
+            width=80,
+            bg='#1a1a1a',
+            fg='#00ff00',
+            font=("Consolas", 10),
+            wrap=tk.WORD
         )
-        self.log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        self.log_text.pack(fill=tk.BOTH, expand=True, pady=10)
         
-        # Clear log button
-        clear_button = tk.Button(
-            log_frame,
-            text="🗑️ Clear Log",
-            command=self.clear_log,
-            font=("Arial", 9),
-            bg=self.colors['info'],
+        # Add initial log message
+        self.add_log("🔧 Bot Controller Initialized - EMBEDDED VERSION")
+        self.add_log("ℹ️  All bot code is embedded - no external files needed")
+        self.add_log("🔐 Please login to access controls")
+    
+    def show_users_count_window(self):
+        """Show users count in a separate window"""
+        if self.users_count_window and self.users_count_window.winfo_exists():
+            self.users_count_window.lift()
+            return
+        
+        # Create users count window
+        self.users_count_window = tk.Toplevel(self.root)
+        self.users_count_window.title("👥 Users Count")
+        self.users_count_window.geometry("300x150")
+        self.users_count_window.resizable(False, False)
+        self.users_count_window.configure(bg='#800020')  # Maroon background
+        
+        # Center the window
+        self.users_count_window.transient(self.root)
+        self.users_count_window.grab_set()
+        
+        # Main frame
+        main_frame = tk.Frame(self.users_count_window, bg='#800020')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # Title label
+        title_label = tk.Label(
+            main_frame,
+            text="👥 Total Users",
+            font=("Arial", 16, "bold"),
             fg='white',
-            relief=tk.RAISED,
-            bd=2,
-            padx=10,
-            pady=2,
-            cursor='hand2'
+            bg='#800020'
         )
-        clear_button.pack(anchor=tk.E, padx=10, pady=5)
+        title_label.pack(pady=10)
         
-        # Footer
-        footer_label = tk.Label(
-            self.control_frame,
-            text="🚀 Advanced Trading Bot v1.2.0 | Developer: Mohamad Zalaf ©️2025",
-            font=("Arial", 8),
-            bg=self.colors['bg_main'],
-            fg=self.colors['dark']
+        # Users count label
+        users_count = self.embedded_bot.get_users_count()
+        self.users_count_label = tk.Label(
+            main_frame,
+            text=str(users_count),
+            font=("Arial", 32, "bold"),
+            fg='#ff0000',  # Red text
+            bg='#800020'
         )
-        footer_label.pack(pady=5)
+        self.users_count_label.pack(pady=10)
+        
+        # Last updated label
+        last_updated = tk.Label(
+            main_frame,
+            text=f"Last Updated: {datetime.now().strftime('%H:%M:%S')}",
+            font=("Arial", 10),
+            fg='#ffcccc',
+            bg='#800020'
+        )
+        last_updated.pack(pady=5)
+        
+        # Auto-refresh the count every 5 seconds
+        def refresh_count():
+            if self.users_count_window and self.users_count_window.winfo_exists():
+                users_count = self.embedded_bot.get_users_count()
+                self.users_count_label.config(text=str(users_count))
+                last_updated.config(text=f"Last Updated: {datetime.now().strftime('%H:%M:%S')}")
+                self.users_count_window.after(5000, refresh_count)
+        
+        refresh_count()
     
     def show_login(self):
         """Show login interface"""
@@ -344,225 +624,107 @@ class TradingBotUI:
     
     def check_password(self):
         """Check entered password"""
-        if self.password_entry.get() == self.PASSWORD:
+        entered_password = self.password_entry.get()
+        
+        if entered_password == self.PASSWORD:
             self.is_logged_in = True
-            self.show_control()
-            self.log_event("✅ Login successful - Access granted", "success")
-            self.update_users_count()  # Update users count on login
-            self.password_entry.delete(0, tk.END)
+            self.login_status_label.config(text="✅ Login successful!", fg='#00ff00')
+            self.add_log("🔐 User authenticated successfully")
+            self.root.after(1000, self.show_control)
         else:
-            messagebox.showerror("❌ Access Denied", "Incorrect password!\nAccess to bot controls denied.")
+            self.login_status_label.config(text="❌ Invalid password!", fg='#ff6666')
             self.password_entry.delete(0, tk.END)
-            self.log_event("❌ Login failed - Invalid password", "danger")
+            self.password_entry.focus()
+    
+    def logout(self):
+        """Logout user"""
+        self.is_logged_in = False
+        self.password_entry.delete(0, tk.END)
+        self.login_status_label.config(text="")
+        self.add_log("🚪 User logged out")
+        self.show_login()
+        
+        # Close users count window if open
+        if self.users_count_window and self.users_count_window.winfo_exists():
+            self.users_count_window.destroy()
     
     def start_bot(self):
-        """Start the trading bot"""
-        if self.bot_process is None or self.bot_process.poll() is not None:
-            try:
-                # Check if bot file exists
-                bot_file = "tbot_v1.2.0.py"
-                if not os.path.exists(bot_file):
-                    self.log_event(f"❌ Bot file not found: {bot_file}", "danger")
-                    messagebox.showerror("Error", f"Bot file '{bot_file}' not found in current directory!")
-                    return
-                
-                # Start bot process
-                self.bot_process = subprocess.Popen(
-                    [sys.executable, bot_file],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    cwd=os.getcwd()
-                )
-                
-                self.start_time = datetime.datetime.now()
-                self.update_status("✅ Trading bot started successfully", "success")
-                self.start_button.config(bg='#6c757d', text="🔄 Bot Running")
-                self.log_event(f"🚀 Bot started - PID: {self.bot_process.pid}", "success")
-                
-            except Exception as e:
-                self.log_event(f"❌ Failed to start bot: {str(e)}", "danger")
-                messagebox.showerror("Error", f"Failed to start bot:\n{str(e)}")
+        """Start the embedded bot"""
+        if not self.is_logged_in:
+            messagebox.showerror("Access Denied", "Please login first!")
+            return
+        
+        self.add_log("🚀 Starting embedded trading bot...")
+        success, message = self.embedded_bot.start_bot()
+        
+        if success:
+            self.status_indicator.config(text="🟢 Running", fg='#00ff00')
+            self.start_button.config(state='disabled')
+            self.stop_button.config(state='normal')
+            self.add_log(f"✅ {message}")
         else:
-            self.log_event("ℹ️ Bot is already running", "info")
-            messagebox.showinfo("Info", "Bot is already running!")
-    
-    def toggle_bot(self):
-        """Toggle bot pause/resume"""
-        if self.bot_process and self.bot_process.poll() is None:
-            # For demonstration - actual pause/resume would need bot cooperation
-            self.log_event("⏸️ Bot pause/resume requested", "warning")
-            messagebox.showinfo("Info", "Pause/Resume functionality requires bot cooperation.\nUse Stop and Start for now.")
-        else:
-            self.log_event("⚠️ Cannot toggle - Bot is not running", "warning")
-            messagebox.showwarning("Warning", "Bot is not running!\nStart the bot first.")
+            self.add_log(f"❌ {message}")
+            messagebox.showerror("Error", message)
     
     def stop_bot(self):
-        """Stop the trading bot"""
-        if self.bot_process and self.bot_process.poll() is None:
-            try:
-                self.bot_process.terminate()
-                
-                # Wait for process to terminate
-                try:
-                    self.bot_process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.bot_process.kill()
-                    self.log_event("🔪 Bot process killed (forced termination)", "warning")
-                
-                self.update_status("❌ Trading bot stopped", "danger")
-                self.start_button.config(bg='#28a745', text="▶️ Start Trading Bot")
-                self.log_event("⏹️ Bot stopped successfully", "info")
-                self.bot_process = None
-                
-            except Exception as e:
-                self.log_event(f"❌ Error stopping bot: {str(e)}", "danger")
-                messagebox.showerror("Error", f"Error stopping bot:\n{str(e)}")
+        """Stop the embedded bot"""
+        if not self.is_logged_in:
+            messagebox.showerror("Access Denied", "Please login first!")
+            return
+        
+        self.add_log("🛑 Stopping embedded trading bot...")
+        success, message = self.embedded_bot.stop_bot()
+        
+        if success:
+            self.status_indicator.config(text="⚫ Stopped", fg='#ff6666')
+            self.start_button.config(state='normal')
+            self.stop_button.config(state='disabled')
+            self.add_log(f"✅ {message}")
         else:
-            self.log_event("ℹ️ Bot is not running", "info")
-            messagebox.showinfo("Info", "Bot is not running!")
+            self.add_log(f"❌ {message}")
+            messagebox.showerror("Error", message)
     
-    def update_status(self, text, status_type="info"):
-        """Update status label"""
-        color_map = {
-            "success": self.colors['success'],
-            "warning": self.colors['warning'],
-            "danger": self.colors['danger'],
-            "info": self.colors['info']
-        }
+    def add_log(self, message):
+        """Add message to log"""
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] {message}\n"
         
-        self.status_label.config(text=text, fg=color_map.get(status_type, self.colors['dark']))
-        self.log_event(text, status_type)
-    
-    def log_event(self, text, event_type="info"):
-        """Add event to log"""
-        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        
-        # Color coding for different event types
-        color_tags = {
-            "success": "green",
-            "warning": "orange",
-            "danger": "red",
-            "info": "blue"
-        }
-        
-        # Configure text tags for colors
-        for tag, color in color_tags.items():
-            self.log_text.tag_config(tag, foreground=color)
-        
-        # Insert log entry
-        log_entry = f"[{timestamp}] {text}\n"
-        self.log_text.insert(tk.END, log_entry, event_type)
+        self.log_text.insert(tk.END, log_entry)
         self.log_text.see(tk.END)
         
-        # Limit log size (keep last 1000 lines)
+        # Keep only last 1000 lines
         lines = self.log_text.get("1.0", tk.END).split('\n')
         if len(lines) > 1000:
-            self.log_text.delete("1.0", "100.0")
+            self.log_text.delete("1.0", f"{len(lines)-1000}.0")
     
-    def clear_log(self):
-        """Clear event log"""
-        self.log_text.delete("1.0", tk.END)
-        self.log_event("🗑️ Event log cleared", "info")
-    
-    def update_process_info(self):
-        """Update process information"""
-        if self.bot_process and self.bot_process.poll() is None:
-            uptime = datetime.datetime.now() - self.start_time
-            uptime_str = str(uptime).split('.')[0]  # Remove microseconds
-            process_info = f"Process ID: {self.bot_process.pid} | Uptime: {uptime_str}"
-        else:
-            process_info = "Process ID: None | Uptime: 00:00:00"
-        
-        self.process_label.config(text=process_info)
-    
-    def get_users_count(self):
-        """Get the number of active users from bot data"""
-        try:
-            total_users = 0
-            
-            # Check multiple possible user data locations
-            user_data_paths = [
-                "trading_data/users",
-                "trading_data/user_settings", 
-                "trading_data/user_feedback",
-                "user_data",
-                "users"
-            ]
-            
-            unique_users = set()
-            
-            for path in user_data_paths:
-                if os.path.exists(path) and os.path.isdir(path):
-                    try:
-                        files = os.listdir(path)
-                        for file in files:
-                            if file.endswith(('.json', '.txt')):
-                                # Extract user ID from filename
-                                if file.startswith(('user_', 'settings_')):
-                                    user_id = file.split('_')[1].split('.')[0]
-                                    if user_id.isdigit():
-                                        unique_users.add(user_id)
-                                elif file.replace('.json', '').replace('.txt', '').isdigit():
-                                    unique_users.add(file.replace('.json', '').replace('.txt', ''))
-                    except Exception:
-                        continue
-            
-            # If we found unique users, return count
-            if unique_users:
-                return len(unique_users)
-            
-            # Fallback: count all user-related files
-            for path in user_data_paths:
-                if os.path.exists(path) and os.path.isdir(path):
-                    try:
-                        files = [f for f in os.listdir(path) if f.endswith(('.json', '.txt'))]
-                        total_users += len(files)
-                    except Exception:
-                        continue
-            
-            return total_users if total_users > 0 else 0
-            
-        except Exception as e:
-            # Don't add log here to avoid spam, just return 0
-            return 0
-    
-    def update_users_count(self):
-        """Update users count display"""
-        try:
-            count = self.get_users_count()
-            if hasattr(self, 'users_label'):
-                self.users_label.config(text=f"👥 عدد المستخدمين: {count}")
-        except Exception as e:
-            if hasattr(self, 'users_label'):
-                self.users_label.config(text="👥 عدد المستخدمين: خطأ")
-
     def start_monitoring(self):
         """Start monitoring thread"""
-        self.is_monitoring = True
-        self.monitoring_thread = threading.Thread(target=self.monitor_bot, daemon=True)
-        self.monitoring_thread.start()
+        if not self.is_monitoring:
+            self.is_monitoring = True
+            self.monitoring_thread = threading.Thread(target=self.monitor_system, daemon=True)
+            self.monitoring_thread.start()
     
-    def monitor_bot(self):
-        """Monitor bot process in background"""
+    def monitor_system(self):
+        """Monitor system status"""
         while self.is_monitoring:
-            if self.is_logged_in:
-                self.update_process_info()
-                self.update_users_count()  # Update users count every second
+            try:
+                # Update users count button
+                if hasattr(self, 'users_count_button'):
+                    users_count = self.embedded_bot.get_users_count()
+                    self.root.after(0, lambda: self.users_count_button.config(
+                        text=f"👥 Users: {users_count}"
+                    ))
                 
-                # Check if bot process died unexpectedly
-                if self.bot_process and self.bot_process.poll() is not None:
-                    if hasattr(self, 'start_time'):  # Bot was running
-                        self.update_status("⚠️ Bot process terminated unexpectedly", "warning")
-                        self.start_button.config(bg='#28a745', text="▶️ Start Trading Bot")
-                        self.bot_process = None
-            
-            time.sleep(1)  # Update every second
+                time.sleep(5)  # Check every 5 seconds
+            except Exception as e:
+                print(f"Monitoring error: {e}")
+                time.sleep(10)
     
     def on_closing(self):
         """Handle window closing"""
-        if self.bot_process and self.bot_process.poll() is None:
-            if messagebox.askokcancel("Quit", "Bot is still running!\nDo you want to stop it and quit?"):
-                self.stop_bot()
+        if self.embedded_bot.is_running:
+            if messagebox.askokcancel("Quit", "Bot is still running. Stop bot and quit?"):
+                self.embedded_bot.stop_bot()
                 self.is_monitoring = False
                 self.root.destroy()
         else:
@@ -570,33 +732,14 @@ class TradingBotUI:
             self.root.destroy()
     
     def run(self):
-        """Start the GUI application"""
-        # Initial log entry
-        self.log_event("🤖 Trading Bot UI Controller v1.2.0 initialized", "success")
-        self.log_event("👨‍💻 Developer: Mohamad Zalaf ©️2025", "info")
-        self.log_event("🔐 Please login to access bot controls", "warning")
-        
-        # Handle window closing
+        """Run the application"""
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Start main loop
         self.root.mainloop()
 
 if __name__ == "__main__":
-    # Check if running in correct directory
-    if not os.path.exists("tbot_v1.2.0.py"):
-        # Create a temporary root window for messagebox
-        temp_root = tk.Tk()
-        temp_root.withdraw()  # Hide the temporary window
-        messagebox.showerror(
-            "File Not Found", 
-            "❌ Error: tbot_v1.2.0.py not found in current directory!\n\n"
-            "Please run this UI from the same directory as your bot file."
-        )
-        temp_root.destroy()
-        sys.exit(1)
-    
-    # Create and run the UI
+    # Create and run the UI with embedded bot
     try:
         app = TradingBotUI()
         app.run()
