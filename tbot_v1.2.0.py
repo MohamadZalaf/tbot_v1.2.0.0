@@ -2240,92 +2240,7 @@ class MT5Manager:
                 'error': str(e)
             }
     
-    def calculate_spread_in_points(self, symbol: str, spread_price: float) -> float:
-        """حساب spread بالنقاط حسب نوع الرمز"""
-        try:
-            asset_type, pip_size = get_asset_type_and_pip_size(symbol)
-            if pip_size > 0:
-                spread_points = round(spread_price / pip_size, 1)
-                return spread_points
-            return 0
-        except Exception as e:
-            logger.debug(f"[DEBUG] خطأ في حساب spread بالنقاط للرمز {symbol}: {e}")
-            return 0
 
-    def ensure_symbol_available(self, symbol: str) -> str:
-        """التأكد من توفر الرمز مع البحث عن بدائل"""
-        try:
-            # قائمة الرموز البديلة للأصول الشائعة
-            symbol_alternatives = {
-                # المعادن النفيسة
-                'XAUUSD': ['XAUUSD', 'GOLD', 'XAUUSD.m', 'GOLD.m', 'GOLD.raw', 'XAUUSD.c'],
-                'GOLD': ['GOLD', 'XAUUSD', 'GOLD.m', 'XAUUSD.m', 'GOLD.raw', 'XAUUSD.c'],
-                'XAGUSD': ['XAGUSD', 'SILVER', 'XAGUSD.m', 'SILVER.m', 'XAGUSD.c'],
-                'SILVER': ['SILVER', 'XAGUSD', 'SILVER.m', 'XAGUSD.m', 'XAGUSD.c'],
-                'XPTUSD': ['XPTUSD', 'PLATINUM', 'XPTUSD.m', 'PLATINUM.m'],
-                'XPDUSD': ['XPDUSD', 'PALLADIUM', 'XPDUSD.m', 'PALLADIUM.m'],
-                
-                # العملات الرقمية
-                'BTCUSD': ['BTCUSD', 'BITCOIN', 'BTC', 'BTCUSD.m', 'BTC.USD', 'BTCUSD.c'],
-                'BITCOIN': ['BITCOIN', 'BTCUSD', 'BTC', 'BTCUSD.m', 'BTC.USD'],
-                'ETHUSD': ['ETHUSD', 'ETHEREUM', 'ETH', 'ETHUSD.m', 'ETH.USD'],
-                'ETHEREUM': ['ETHEREUM', 'ETHUSD', 'ETH', 'ETHUSD.m', 'ETH.USD'],
-                'LTCUSD': ['LTCUSD', 'LITECOIN', 'LTC', 'LTCUSD.m', 'LTC.USD'],
-                
-                # أزواج العملات الرئيسية
-                'EURUSD': ['EURUSD', 'EURUSD.m', 'EURUSD.c', 'EUR/USD'],
-                'GBPUSD': ['GBPUSD', 'GBPUSD.m', 'GBPUSD.c', 'GBP/USD'],
-                'USDJPY': ['USDJPY', 'USDJPY.m', 'USDJPY.c', 'USD/JPY'],
-                'AUDUSD': ['AUDUSD', 'AUDUSD.m', 'AUDUSD.c', 'AUD/USD'],
-                'USDCAD': ['USDCAD', 'USDCAD.m', 'USDCAD.c', 'USD/CAD'],
-                'USDCHF': ['USDCHF', 'USDCHF.m', 'USDCHF.c', 'USD/CHF'],
-                'NZDUSD': ['NZDUSD', 'NZDUSD.m', 'NZDUSD.c', 'NZD/USD'],
-                
-                # المؤشرات
-                'US30': ['US30', 'US30.m', 'US30.c', 'DOW30', 'DJ30'],
-                'US500': ['US500', 'US500.m', 'US500.c', 'SPX500', 'SP500'],
-                'NAS100': ['NAS100', 'NAS100.m', 'NAS100.c', 'NASDAQ', 'NDX'],
-                'GER30': ['GER30', 'GER30.m', 'GER30.c', 'DAX30', 'DAX'],
-                'UK100': ['UK100', 'UK100.m', 'UK100.c', 'FTSE100', 'FTSE'],
-                
-                # النفط
-                'USOIL': ['USOIL', 'CRUDE', 'WTI', 'USOIL.m', 'CRUDE.m'],
-                'UKOIL': ['UKOIL', 'BRENT', 'BRENT.m', 'UKOIL.m']
-            }
-            
-            # البحث عن الرمز الأصلي أولاً
-            symbol_info = mt5.symbol_info(symbol)
-            if symbol_info is not None:
-                # تفعيل الرمز إذا لم يكن مفعلاً
-                if not symbol_info.visible:
-                    logger.info(f"[SYMBOL_ENABLE] تفعيل الرمز {symbol}")
-                    mt5.symbol_select(symbol, True)
-                    time.sleep(0.2)  # انتظار أطول للتأكد من التفعيل
-                return symbol
-            
-            # البحث في البدائل
-            alternatives = symbol_alternatives.get(symbol.upper(), [symbol])
-            for alt_symbol in alternatives:
-                try:
-                    alt_info = mt5.symbol_info(alt_symbol)
-                    if alt_info is not None:
-                        if not alt_info.visible:
-                            logger.info(f"[SYMBOL_ENABLE] تفعيل الرمز البديل {alt_symbol}")
-                            mt5.symbol_select(alt_symbol, True)
-                            time.sleep(0.2)
-                        logger.info(f"[SYMBOL_ALT] استخدام الرمز البديل {alt_symbol} بدلاً من {symbol}")
-                        return alt_symbol
-                except Exception as alt_error:
-                    logger.debug(f"[DEBUG] فشل فحص الرمز البديل {alt_symbol}: {alt_error}")
-                    continue
-            
-            # إذا لم يتم العثور على أي بديل
-            logger.warning(f"[SYMBOL_NOT_FOUND] لم يتم العثور على الرمز {symbol} أو أي بديل")
-            return symbol  # إرجاع الرمز الأصلي للمحاولة مرة أخيرة
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في فحص توفر الرمز {symbol}: {e}")
-            return symbol
 
     def get_live_price(self, symbol: str) -> Optional[Dict]:
         """جلب السعر اللحظي الحقيقي - MT5 هو المصدر الأساسي الأولي مع نظام كاش"""
@@ -2371,12 +2286,7 @@ class MT5Manager:
                 if tick is not None and hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0:
                     # التحقق من أن البيانات حديثة (ليست قديمة)
                     tick_time = datetime.fromtimestamp(tick.time)
-                    if TIMEZONE_AVAILABLE:
-                        tick_time = pytz.UTC.localize(tick_time)
-                        current_utc = pytz.UTC.localize(datetime.utcnow())
-                        time_diff = current_utc - tick_time
-                    else:
-                        time_diff = datetime.now() - tick_time
+                    time_diff = datetime.now() - tick_time
                     
                     # زيادة مرونة وقت البيانات إلى 15 دقيقة
                     if time_diff.total_seconds() > 900:
@@ -2408,9 +2318,9 @@ class MT5Manager:
                 if "connection" in str(e).lower() or "terminal" in str(e).lower():
                     self.connected = False
         else:
-            logger.debug(f"[DEBUG] MT5 غير متصل حقيقياً - سيتم استخدام مصدر بديل لـ {symbol}")
+            logger.debug(f"[DEBUG] MT5 غير متصل حقيقياً لـ {symbol}")
         
-        # إذا فشل MT5 في جلب البيانات، إرجاع None بدلاً من استخدام مصدر بديل
+        # إذا فشل MT5 في جلب البيانات، إرجاع None
         logger.error(f"[ERROR] فشل في جلب البيانات من MT5 للرمز {symbol}")
         return None
     
