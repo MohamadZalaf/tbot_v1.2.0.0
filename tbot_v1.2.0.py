@@ -399,6 +399,174 @@ def handle_clear_cache_command(message):
         logger.error(f"[ERROR] خطأ في أمر clear_cache: {e}")
         bot.reply_to(message, f"❌ خطأ في تنظيف الكاش: {str(e)}")
 
+@bot.message_handler(commands=['mt5_debug'])
+def handle_mt5_debug_command(message):
+    """معالج أمر تشخيص MT5 مفصل - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        bot.reply_to(message, "🔍 جاري تشخيص اتصال MT5...")
+        
+        # 1. فحص إصدار MT5
+        try:
+            mt5_version = mt5.version()
+            version_status = f"✅ MT5 متاح - الإصدار: {mt5_version}" if mt5_version else "❌ MT5 غير متاح"
+        except Exception as e:
+            version_status = f"❌ خطأ في فحص MT5: {str(e)}"
+        
+        # 2. فحص حالة التهيئة
+        try:
+            init_result = mt5.initialize()
+            if init_result:
+                init_status = "✅ تم تهيئة MT5 بنجاح"
+            else:
+                error_code = mt5.last_error()
+                init_status = f"❌ فشل تهيئة MT5 - كود الخطأ: {error_code}"
+        except Exception as e:
+            init_status = f"❌ خطأ في تهيئة MT5: {str(e)}"
+        
+        # 3. فحص معلومات الحساب
+        try:
+            account_info = mt5.account_info()
+            if account_info:
+                account_status = f"""✅ معلومات الحساب:
+• رقم الحساب: {account_info.login}
+• الخادم: {account_info.server}
+• الشركة: {account_info.company}
+• العملة: {account_info.currency}
+• الرصيد: {account_info.balance}
+• نوع الحساب: {'Demo' if account_info.trade_mode == 0 else 'Live'}
+• حالة التداول: {'مسموح' if account_info.trade_allowed else 'غير مسموح'}"""
+            else:
+                error_code = mt5.last_error()
+                account_status = f"❌ فشل في جلب معلومات الحساب - كود الخطأ: {error_code}"
+        except Exception as e:
+            account_status = f"❌ خطأ في جلب معلومات الحساب: {str(e)}"
+        
+        # 4. اختبار جلب البيانات
+        test_results = []
+        test_symbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "GOLD", "BTCUSD"]
+        
+        for symbol in test_symbols:
+            try:
+                tick = mt5.symbol_info_tick(symbol)
+                if tick:
+                    test_results.append(f"✅ {symbol}: {tick.bid}/{tick.ask}")
+                else:
+                    test_results.append(f"❌ {symbol}: لا توجد بيانات")
+            except Exception as e:
+                test_results.append(f"❌ {symbol}: خطأ - {str(e)}")
+        
+        data_test_status = "\n".join(test_results[:6])  # أول 6 نتائج
+        
+        # 5. فحص حالة الاتصال في البوت
+        bot_connection_status = "✅ متصل" if mt5_manager.connected else "❌ غير متصل"
+        
+        # تجميع التقرير
+        debug_report = f"""
+🔍 **تقرير تشخيص MT5 الشامل**
+
+📊 **حالة MT5:**
+{version_status}
+{init_status}
+
+👤 **الحساب:**
+{account_status}
+
+🔌 **حالة البوت:**
+• اتصال البوت بـ MT5: {bot_connection_status}
+• آخر محاولة اتصال: منذ {int(time.time() - mt5_manager.last_connection_attempt)} ثانية
+
+📈 **اختبار البيانات:**
+{data_test_status}
+
+🕐 **الوقت:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+💡 **نصائح الإصلاح:**
+1. تأكد من تشغيل MT5 وتسجيل الدخول
+2. فعّل خيار "Allow automated trading" في MT5
+3. تأكد من اتصال الإنترنت
+4. جرب إعادة تشغيل MT5 والبوت
+        """
+        
+        bot.reply_to(message, debug_report, parse_mode='Markdown')
+        logger.info(f"[DEVELOPER] تم تشغيل تشخيص MT5 بأمر من المطور (User ID: {user_id})")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في أمر mt5_debug: {e}")
+        bot.reply_to(message, f"❌ خطأ في التشخيص: {str(e)}")
+
+@bot.message_handler(commands=['mt5_reconnect'])
+def handle_mt5_reconnect_command(message):
+    """معالج أمر إعادة الاتصال بـ MT5 يدوياً - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        bot.reply_to(message, "🔄 جاري إعادة محاولة الاتصال بـ MT5...")
+        
+        # تنظيف الكاش أولاً
+        if price_data_cache:
+            cache_count = len(price_data_cache)
+            price_data_cache.clear()
+            logger.info(f"[RECONNECT] تم تنظيف {cache_count} عنصر من الكاش")
+        
+        # محاولة إعادة الاتصال
+        try:
+            # إغلاق الاتصال الحالي
+            mt5_manager.connected = False
+            mt5.shutdown()
+            
+            # انتظار قصير
+            time.sleep(2)
+            
+            # محاولة اتصال جديد
+            success = mt5_manager.initialize_mt5()
+            
+            if success:
+                # فحص إضافي للتأكد
+                account_info = mt5.account_info()
+                if account_info:
+                    success_message = f"""
+✅ **تم إعادة الاتصال بنجاح!**
+
+📊 **معلومات الحساب:**
+• رقم الحساب: {account_info.login}
+• الخادم: {account_info.server}
+• الرصيد: {account_info.balance}
+• العملة: {account_info.currency}
+
+🕐 **الوقت:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+✅ البوت جاهز الآن لجلب البيانات من MT5
+                    """
+                    bot.reply_to(message, success_message, parse_mode='Markdown')
+                else:
+                    bot.reply_to(message, "⚠️ تم الاتصال لكن فشل في جلب معلومات الحساب")
+            else:
+                bot.reply_to(message, "❌ فشل في إعادة الاتصال - راجع السجلات للتفاصيل")
+                
+        except Exception as reconnect_error:
+            logger.error(f"[RECONNECT_ERROR] خطأ في إعادة الاتصال: {reconnect_error}")
+            bot.reply_to(message, f"❌ خطأ في إعادة الاتصال: {str(reconnect_error)}")
+        
+        logger.info(f"[DEVELOPER] تم تشغيل إعادة اتصال MT5 بأمر من المطور (User ID: {user_id})")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في أمر mt5_reconnect: {e}")
+        bot.reply_to(message, f"❌ خطأ في أمر إعادة الاتصال: {str(e)}")
+
 @bot.message_handler(commands=['api_status'])
 def handle_api_status_command(message):
     """معالج أمر التحقق من حالة API - للمطور فقط"""
@@ -1243,11 +1411,15 @@ def setup_logging():
     file_handler.setFormatter(formatter)
     console_handler.setFormatter(formatter)
     
-    # إعداد logger الرئيسي
+    # إعداد logger الرئيسي - مستوى DEBUG للتشخيص المفصل
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(logging.DEBUG)  # تفعيل التشخيص المفصل
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
+    
+    # تخفيض مستوى logging للمكتبات الخارجية
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('requests').setLevel(logging.WARNING)
     
     # منع تكرار الرسائل
     root_logger.propagate = False
@@ -1528,28 +1700,105 @@ class MT5Manager:
                 # إغلاق الاتصال السابق إذا كان موجوداً
                 try:
                     mt5.shutdown()
-                except:
-                    pass
+                    logger.debug("[DEBUG] تم إغلاق الاتصال السابق")
+                except Exception as shutdown_error:
+                    logger.debug(f"[DEBUG] لا يوجد اتصال سابق للإغلاق: {shutdown_error}")
                 
-                # محاولة الاتصال
+                # محاولة الاتصال مع تشخيص مفصل
+                logger.info("[CONNECTING] محاولة الاتصال بـ MetaTrader5...")
+                
+                # التحقق من وجود MT5 أولاً
+                try:
+                    mt5_version = mt5.version()
+                    if mt5_version:
+                        logger.info(f"[MT5_FOUND] تم العثور على MT5 - الإصدار: {mt5_version}")
+                    else:
+                        logger.error("[MT5_NOT_FOUND] لم يتم العثور على MetaTrader5 - تأكد من تثبيته وتشغيله")
+                        return False
+                except Exception as version_error:
+                    logger.error(f"[MT5_VERSION_ERROR] خطأ في فحص إصدار MT5: {version_error}")
+                    logger.error("[SUGGESTION] تأكد من:")
+                    logger.error("  1. تثبيت MetaTrader5 بشكل صحيح")
+                    logger.error("  2. تشغيل MT5 والاتصال بحساب تجريبي أو حقيقي")
+                    logger.error("  3. عدم وجود إعدادات أمان تمنع الاتصال")
+                    return False
+                
                 if not mt5.initialize():
-                    logger.error("[ERROR] فشل في تهيئة MT5")
+                    # الحصول على رمز الخطأ المفصل
+                    error_code = mt5.last_error()
+                    error_descriptions = {
+                        (1, 'RET_OK'): 'نجح العمل',
+                        (2, 'RET_ERROR'): 'خطأ عام',
+                        (3, 'RET_TIMEOUT'): 'انتهت مهلة العملية',
+                        (4, 'RET_NOT_FOUND'): 'لم يتم العثور على العنصر',
+                        (5, 'RET_NO_MEMORY'): 'لا توجد ذاكرة كافية',
+                        (6, 'RET_INVALID_PARAMS'): 'معاملات غير صحيحة',
+                        (10001, 'TRADE_RETCODE_REQUOTE'): 'إعادة تسعير',
+                        (10004, 'TRADE_RETCODE_REJECT'): 'رفض الطلب',
+                        (10006, 'TRADE_RETCODE_CANCEL'): 'إلغاء الطلب',
+                        (10007, 'TRADE_RETCODE_PLACED'): 'تم وضع الطلب',
+                        (10018, 'TRADE_RETCODE_CONNECTION'): 'لا يوجد اتصال بالخادم',
+                        (10019, 'TRADE_RETCODE_ONLY_REAL'): 'العملية مسموحة للحسابات الحقيقية فقط',
+                        (10020, 'TRADE_RETCODE_LIMIT_ORDERS'): 'تم الوصول للحد الأقصى من الطلبات المعلقة',
+                        (10021, 'TRADE_RETCODE_LIMIT_VOLUME'): 'تم الوصول للحد الأقصى من الحجم',
+                        (10025, 'TRADE_RETCODE_AUTOTRADING_DISABLED'): 'التداول الآلي معطل',
+                    }
+                    
+                    error_desc = "غير معروف"
+                    if error_code:
+                        for (code, name), desc in error_descriptions.items():
+                            if error_code[0] == code:
+                                error_desc = f"{desc} ({name})"
+                                break
+                    
+                    logger.error(f"[ERROR] فشل في تهيئة MT5 - كود الخطأ: {error_code} - {error_desc}")
+                    logger.error("[TROUBLESHOOTING] أسباب محتملة:")
+                    logger.error("  1. MetaTrader5 غير مُشغل")
+                    logger.error("  2. لا يوجد اتصال بحساب (demo/live)")
+                    logger.error("  3. التداول الآلي معطل في MT5")
+                    logger.error("  4. حساب محدود الصلاحيات")
+                    logger.error("  5. مشكلة في اتصال الإنترنت")
                     self.connected = False
                     return False
                 
                 # التحقق من الاتصال
+                logger.info("[ACCOUNT_CHECK] فحص معلومات الحساب...")
                 account_info = mt5.account_info()
                 if account_info is None:
-                    logger.error("[ERROR] فشل في الحصول على معلومات الحساب")
+                    error_code = mt5.last_error()
+                    logger.error(f"[ERROR] فشل في الحصول على معلومات الحساب - كود الخطأ: {error_code}")
+                    logger.error("[ACCOUNT_ISSUE] مشاكل محتملة:")
+                    logger.error("  1. لم يتم تسجيل الدخول لحساب في MT5")
+                    logger.error("  2. انقطع الاتصال بالخادم")
+                    logger.error("  3. مشكلة في بيانات الاعتماد")
+                    logger.error("  4. الخادم غير متاح")
                     mt5.shutdown()
                     self.connected = False
                     return False
                 
                 # اختبار جلب بيانات تجريبية للتأكد من الاتصال
-                test_tick = mt5.symbol_info_tick("EURUSD")
-                if test_tick is None:
-                    logger.warning("[WARNING] فشل في اختبار جلب البيانات")
-                    # لا نغلق الاتصال هنا لأن بعض الحسابات قد لا تدعم EURUSD
+                logger.info("[DATA_TEST] اختبار جلب البيانات...")
+                test_symbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "GOLD"]
+                successful_tests = 0
+                
+                for test_symbol in test_symbols:
+                    try:
+                        test_tick = mt5.symbol_info_tick(test_symbol)
+                        if test_tick is not None:
+                            successful_tests += 1
+                            logger.info(f"[DATA_OK] نجح اختبار البيانات للرمز {test_symbol}")
+                            break
+                    except Exception as test_error:
+                        logger.debug(f"[DATA_TEST] فشل اختبار {test_symbol}: {test_error}")
+                        continue
+                
+                if successful_tests == 0:
+                    logger.warning("[DATA_WARNING] فشل في جلب البيانات من جميع الرموز التجريبية")
+                    logger.warning("[DATA_CAUSES] أسباب محتملة:")
+                    logger.warning("  1. الحساب لا يدعم الرموز المختبرة")
+                    logger.warning("  2. السوق مغلق حالياً")
+                    logger.warning("  3. مشكلة في تدفق البيانات")
+                    # لا نغلق الاتصال هنا لأن بعض الحسابات قد لا تدعم هذه الرموز
                 
                 self.connected = True
                 logger.info("[OK] تم الاتصال بـ MetaTrader5 بنجاح!")
