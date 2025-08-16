@@ -567,6 +567,90 @@ def handle_mt5_reconnect_command(message):
         logger.error(f"[ERROR] خطأ في أمر mt5_reconnect: {e}")
         bot.reply_to(message, f"❌ خطأ في أمر إعادة الاتصال: {str(e)}")
 
+@bot.message_handler(commands=['set_mt5_path'])
+def handle_set_mt5_path_command(message):
+    """معالج أمر تحديد مسار MT5 يدوياً - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        # الحصول على المسار من الرسالة
+        command_parts = message.text.split(' ', 1)
+        if len(command_parts) < 2:
+            help_message = """
+🛠️ **أمر تحديد مسار MT5**
+
+**الاستخدام:**
+`/set_mt5_path C:\\Program Files\\MetaTrader 5\\terminal64.exe`
+
+**أمثلة للمسارات الشائعة:**
+
+**Windows:**
+• `C:\\Program Files\\MetaTrader 5\\terminal64.exe`
+• `C:\\Program Files (x86)\\MetaTrader 5\\terminal64.exe`
+
+**Linux:**
+• `/opt/metatrader5/terminal64`
+• `~/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe`
+
+**macOS:**
+• `/Applications/MetaTrader 5.app/Contents/MacOS/terminal64`
+
+💡 **نصيحة:** يمكنك أيضاً تعيين متغير البيئة `MT5_PATH`
+            """
+            bot.reply_to(message, help_message, parse_mode='Markdown')
+            return
+        
+        mt5_path = command_parts[1].strip()
+        
+        # التحقق من وجود الملف
+        if not os.path.exists(mt5_path):
+            bot.reply_to(message, f"❌ المسار غير موجود: `{mt5_path}`", parse_mode='Markdown')
+            return
+        
+        # تعيين متغير البيئة
+        os.environ['MT5_PATH'] = mt5_path
+        
+        # محاولة الاتصال بالمسار الجديد
+        try:
+            # إغلاق الاتصال الحالي
+            mt5_manager.connected = False
+            mt5.shutdown()
+            time.sleep(1)
+            
+            # محاولة الاتصال بالمسار الجديد
+            if mt5.initialize(path=mt5_path, timeout=30000):
+                success_message = f"""
+✅ **تم تحديد مسار MT5 بنجاح!**
+
+📁 **المسار:** `{mt5_path}`
+🔌 **حالة الاتصال:** متصل بنجاح
+
+💾 تم حفظ المسار في متغيرات البيئة للجلسة الحالية.
+
+🔄 لجعل هذا التغيير دائماً، أضف هذا السطر لملف .bashrc أو .profile:
+`export MT5_PATH="{mt5_path}"`
+                """
+                bot.reply_to(message, success_message, parse_mode='Markdown')
+                mt5_manager.connected = True
+            else:
+                error_code = mt5.last_error()
+                bot.reply_to(message, f"❌ فشل الاتصال بالمسار المحدد.\nكود الخطأ: {error_code}", parse_mode='Markdown')
+                
+        except Exception as test_error:
+            bot.reply_to(message, f"❌ خطأ في اختبار المسار: {str(test_error)}")
+        
+        logger.info(f"[DEVELOPER] تم تحديد مسار MT5: {mt5_path} بأمر من المطور (User ID: {user_id})")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في أمر set_mt5_path: {e}")
+        bot.reply_to(message, f"❌ خطأ في الأمر: {str(e)}")
+
 @bot.message_handler(commands=['api_status'])
 def handle_api_status_command(message):
     """معالج أمر التحقق من حالة API - للمطور فقط"""
@@ -1723,8 +1807,83 @@ class MT5Manager:
                     logger.error("  3. عدم وجود إعدادات أمان تمنع الاتصال")
                     return False
                 
-                if not mt5.initialize():
-                    # الحصول على رمز الخطأ المفصل
+                # محاولة الاتصال بطرق متعددة حسب أفضل الممارسات
+                connection_successful = False
+                
+                # الطريقة 1: محاولة الاتصال بدون معاملات (للاتصال بالحساب المفتوح حالياً)
+                logger.info("[INIT_METHOD_1] محاولة الاتصال بالحساب المفتوح حالياً...")
+                if mt5.initialize():
+                    connection_successful = True
+                    logger.info("[INIT_SUCCESS] نجح الاتصال بالطريقة الأولى")
+                else:
+                    logger.debug("[INIT_METHOD_1] فشل - جاري المحاولة بطريقة أخرى...")
+                
+                # الطريقة 2: محاولة الاتصال مع تحديد مسار MT5 (للنظم التي تتطلب ذلك)
+                if not connection_successful:
+                    try:
+                        import platform
+                        system = platform.system()
+                        
+                        # مسارات MT5 الافتراضية حسب نظام التشغيل
+                        mt5_paths = []
+                        
+                        # التحقق من متغير البيئة أولاً
+                        env_path = os.getenv('MT5_PATH')
+                        if env_path and os.path.exists(env_path):
+                            mt5_paths.append(env_path)
+                            logger.info(f"[ENV_PATH] تم العثور على مسار MT5 في متغيرات البيئة: {env_path}")
+                        
+                        if system == "Windows":
+                            mt5_paths.extend([
+                                r"C:\Program Files\MetaTrader 5\terminal64.exe",
+                                r"C:\Program Files (x86)\MetaTrader 5\terminal64.exe",
+                                # إضافة مسارات أخرى محتملة
+                                os.path.expanduser(r"~\AppData\Local\Programs\MetaTrader 5\terminal64.exe"),
+                                os.path.expanduser(r"~\Desktop\MetaTrader 5\terminal64.exe"),
+                            ])
+                        elif system == "Linux":
+                            mt5_paths.extend([
+                                "/opt/metatrader5/terminal64",
+                                os.path.expanduser("~/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"),
+                                "/usr/local/bin/mt5",
+                            ])
+                        elif system == "Darwin":  # macOS
+                            mt5_paths.extend([
+                                "/Applications/MetaTrader 5.app/Contents/MacOS/terminal64",
+                                os.path.expanduser("~/Applications/MetaTrader 5.app/Contents/MacOS/terminal64"),
+                            ])
+                        
+                        for mt5_path in mt5_paths:
+                            # التحقق من وجود الملف قبل المحاولة (تجاهل المسارات غير الموجودة)
+                            if not os.path.exists(mt5_path):
+                                logger.debug(f"[PATH_SKIP] المسار غير موجود: {mt5_path}")
+                                continue
+                                
+                            try:
+                                logger.info(f"[INIT_METHOD_2] محاولة الاتصال بالمسار: {mt5_path}")
+                                if mt5.initialize(path=mt5_path, timeout=30000):  # 30 ثانية timeout
+                                    connection_successful = True
+                                    logger.info(f"[INIT_SUCCESS] نجح الاتصال بالمسار: {mt5_path}")
+                                    break
+                            except Exception as path_error:
+                                logger.debug(f"[INIT_PATH_ERROR] فشل المسار {mt5_path}: {path_error}")
+                                continue
+                                
+                    except Exception as path_detection_error:
+                        logger.debug(f"[PATH_DETECTION_ERROR] خطأ في تحديد المسار: {path_detection_error}")
+                
+                # الطريقة 3: محاولة أخيرة بدون مسار ولكن مع timeout
+                if not connection_successful:
+                    logger.info("[INIT_METHOD_3] المحاولة الأخيرة مع timeout...")
+                    try:
+                        if mt5.initialize(timeout=60000):  # 60 ثانية timeout
+                            connection_successful = True
+                            logger.info("[INIT_SUCCESS] نجح الاتصال بالمحاولة الأخيرة")
+                    except Exception as final_error:
+                        logger.debug(f"[INIT_FINAL_ERROR] فشل المحاولة الأخيرة: {final_error}")
+                
+                # إذا فشلت جميع المحاولات
+                if not connection_successful:
                     error_code = mt5.last_error()
                     error_descriptions = {
                         (1, 'RET_OK'): 'نجح العمل',
@@ -1751,13 +1910,15 @@ class MT5Manager:
                                 error_desc = f"{desc} ({name})"
                                 break
                     
-                    logger.error(f"[ERROR] فشل في تهيئة MT5 - كود الخطأ: {error_code} - {error_desc}")
+                    logger.error(f"[ERROR] فشل في تهيئة MT5 بجميع الطرق - كود الخطأ: {error_code} - {error_desc}")
                     logger.error("[TROUBLESHOOTING] أسباب محتملة:")
-                    logger.error("  1. MetaTrader5 غير مُشغل")
-                    logger.error("  2. لا يوجد اتصال بحساب (demo/live)")
-                    logger.error("  3. التداول الآلي معطل في MT5")
-                    logger.error("  4. حساب محدود الصلاحيات")
-                    logger.error("  5. مشكلة في اتصال الإنترنت")
+                    logger.error("  1. MetaTrader5 غير مُشغل أو غير مُثبت")
+                    logger.error("  2. لا يوجد اتصال بحساب (demo/live) في MT5")
+                    logger.error("  3. التداول الآلي معطل في MT5 (Tools->Options->Expert Advisors)")
+                    logger.error("  4. حساب محدود الصلاحيات أو منتهي الصلاحية")
+                    logger.error("  5. مشكلة في اتصال الإنترنت أو الخادم")
+                    logger.error("  6. MT5 يعمل بصلاحيات مختلفة عن Python script")
+                    logger.error("  7. إصدار MT5 غير متوافق مع مكتبة Python")
                     self.connected = False
                     return False
                 
