@@ -81,6 +81,11 @@ except ImportError:
 # متغير للتحكم في حلقة المراقبة
 monitoring_active = False
 
+# إضافة locks لتجنب التضارب في عمليات MT5
+import threading
+mt5_operation_lock = threading.RLock()  # RLock للسماح بإعادة الاستخدام من نفس الـ thread
+analysis_in_progress = False
+
 # مكتبة المناطق الزمنية (اختيارية)
 try:
     import pytz
@@ -2109,8 +2114,8 @@ class MT5Manager:
                     else:
                         time_diff = datetime.now() - tick_time
                     
-                    # 15 دقيقة للمرونة أكثر (كما في v1.2.1 المستقر)
-                    if time_diff.total_seconds() > 900:
+                    # 5 دقائق للحصول على بيانات أكثر حداثة
+                    if time_diff.total_seconds() > 300:
                         logger.warning(f"[WARNING] البيانات قديمة جداً (عمر: {time_diff}) - الاتصال غير فعال")
                         self.connected = False
                         return self._attempt_reconnection()
@@ -2309,76 +2314,78 @@ class MT5Manager:
         # ✅ المصدر الأساسي الأولي: MetaTrader5
         if real_connection_status:
             try:
-                # تحقق من تفعيل الرمز أولاً (كما في mt5_debug)
-                symbol_info = mt5.symbol_info(symbol)
-                if symbol_info is None:
-                    # البحث في الرموز البديلة للأصول الشائعة
-                    symbol_alternatives = {
-                        # المعادن النفيسة
-                        'XAUUSD': ['XAUUSD', 'GOLD', 'XAUUSD.m', 'GOLD.m', 'XAUUSD.c'],
-                        'GOLD': ['GOLD', 'XAUUSD', 'GOLD.m', 'XAUUSD.m', 'XAUUSD.c'],
-                        'XAGUSD': ['XAGUSD', 'SILVER', 'XAGUSD.m', 'SILVER.m'],
-                        
-                        # العملات الرقمية
-                        'BTCUSD': ['BTCUSD', 'BITCOIN', 'BTC', 'BTCUSD.m'],
-                        'ETHUSD': ['ETHUSD', 'ETHEREUM', 'ETH', 'ETHUSD.m'],
-                        
-                        # أزواج العملات الرئيسية
-                        'EURUSD': ['EURUSD', 'EURUSD.m', 'EURUSD.c'],
-                        'GBPUSD': ['GBPUSD', 'GBPUSD.m', 'GBPUSD.c'],
-                        'USDJPY': ['USDJPY', 'USDJPY.m', 'USDJPY.c'],
-                        'AUDUSD': ['AUDUSD', 'AUDUSD.m', 'AUDUSD.c'],
-                        'USDCAD': ['USDCAD', 'USDCAD.m', 'USDCAD.c'],
-                        'USDCHF': ['USDCHF', 'USDCHF.m', 'USDCHF.c'],
-                        'NZDUSD': ['NZDUSD', 'NZDUSD.m', 'NZDUSD.c'],
-                        
-                        # المؤشرات
-                        'US30': ['US30', 'US30.m', 'US30.c', 'DOW30'],
-                        'US500': ['US500', 'US500.m', 'SPX500', 'SP500'],
-                        'NAS100': ['NAS100', 'NAS100.m', 'NASDAQ'],
-                        'GER30': ['GER30', 'GER30.m', 'DAX30', 'DAX'],
-                        'UK100': ['UK100', 'UK100.m', 'FTSE100'],
-                        
-                        # النفط
-                        'USOIL': ['USOIL', 'CRUDE', 'WTI', 'USOIL.m'],
-                        'UKOIL': ['UKOIL', 'BRENT', 'BRENT.m']
-                    }
-                    
-                    alternatives = symbol_alternatives.get(symbol.upper(), [symbol])
-                    for alt_symbol in alternatives:
-                        alt_info = mt5.symbol_info(alt_symbol)
-                        if alt_info is not None:
-                            symbol = alt_symbol  # استخدم الرمز البديل
-                            symbol_info = alt_info
-                            logger.info(f"[SYMBOL_ALT] استخدام الرمز البديل {alt_symbol}")
-                            break
-                    
+                # استخدام lock لتجنب التضارب في عمليات MT5
+                with mt5_operation_lock:
+                    # تحقق من تفعيل الرمز أولاً (كما في mt5_debug)
+                    symbol_info = mt5.symbol_info(symbol)
                     if symbol_info is None:
-                        logger.warning(f"[WARNING] الرمز {symbol} غير متاح في هذا الوسيط")
-                        return None
-                
-                # تجربة تفعيل الرمز إذا لم يكن مفعلاً (كما في mt5_debug)
-                if not symbol_info.visible:
-                    logger.info(f"[SYMBOL_ENABLE] تفعيل الرمز {symbol}")
-                    mt5.symbol_select(symbol, True)
-                    time.sleep(0.5)  # انتظار للتفعيل
-                
-                # جلب آخر تيك للرمز من MT5 (البيانات الأكثر دقة)
-                tick = mt5.symbol_info_tick(symbol)
-                
-                # إذا فشل، جرب مرة أخرى مع انتظار أطول (كما في mt5_debug)
-                if not tick or not (hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0):
-                    logger.debug(f"[RETRY] إعادة محاولة جلب البيانات للرمز {symbol}")
-                    time.sleep(1)  # انتظار أطول كما في mt5_debug
+                        # البحث في الرموز البديلة للأصول الشائعة
+                        symbol_alternatives = {
+                            # المعادن النفيسة
+                            'XAUUSD': ['XAUUSD', 'GOLD', 'XAUUSD.m', 'GOLD.m', 'XAUUSD.c'],
+                            'GOLD': ['GOLD', 'XAUUSD', 'GOLD.m', 'XAUUSD.m', 'XAUUSD.c'],
+                            'XAGUSD': ['XAGUSD', 'SILVER', 'XAGUSD.m', 'SILVER.m'],
+                            
+                            # العملات الرقمية
+                            'BTCUSD': ['BTCUSD', 'BITCOIN', 'BTC', 'BTCUSD.m'],
+                            'ETHUSD': ['ETHUSD', 'ETHEREUM', 'ETH', 'ETHUSD.m'],
+                            
+                            # أزواج العملات الرئيسية
+                            'EURUSD': ['EURUSD', 'EURUSD.m', 'EURUSD.c'],
+                            'GBPUSD': ['GBPUSD', 'GBPUSD.m', 'GBPUSD.c'],
+                            'USDJPY': ['USDJPY', 'USDJPY.m', 'USDJPY.c'],
+                            'AUDUSD': ['AUDUSD', 'AUDUSD.m', 'AUDUSD.c'],
+                            'USDCAD': ['USDCAD', 'USDCAD.m', 'USDCAD.c'],
+                            'USDCHF': ['USDCHF', 'USDCHF.m', 'USDCHF.c'],
+                            'NZDUSD': ['NZDUSD', 'NZDUSD.m', 'NZDUSD.c'],
+                            
+                            # المؤشرات
+                            'US30': ['US30', 'US30.m', 'US30.c', 'DOW30'],
+                            'US500': ['US500', 'US500.m', 'SPX500', 'SP500'],
+                            'NAS100': ['NAS100', 'NAS100.m', 'NASDAQ'],
+                            'GER30': ['GER30', 'GER30.m', 'DAX30', 'DAX'],
+                            'UK100': ['UK100', 'UK100.m', 'FTSE100'],
+                            
+                            # النفط
+                            'USOIL': ['USOIL', 'CRUDE', 'WTI', 'USOIL.m'],
+                            'UKOIL': ['UKOIL', 'BRENT', 'BRENT.m']
+                        }
+                        
+                        alternatives = symbol_alternatives.get(symbol.upper(), [symbol])
+                        for alt_symbol in alternatives:
+                            alt_info = mt5.symbol_info(alt_symbol)
+                            if alt_info is not None:
+                                symbol = alt_symbol  # استخدم الرمز البديل
+                                symbol_info = alt_info
+                                logger.info(f"[SYMBOL_ALT] استخدام الرمز البديل {alt_symbol}")
+                                break
+                        
+                        if symbol_info is None:
+                            logger.warning(f"[WARNING] الرمز {symbol} غير متاح في هذا الوسيط")
+                            return None
+                    
+                    # تجربة تفعيل الرمز إذا لم يكن مفعلاً (كما في mt5_debug)
+                    if not symbol_info.visible:
+                        logger.info(f"[SYMBOL_ENABLE] تفعيل الرمز {symbol}")
+                        mt5.symbol_select(symbol, True)
+                        time.sleep(0.5)  # انتظار للتفعيل
+                    
+                    # جلب آخر تيك للرمز من MT5 (البيانات الأكثر دقة)
                     tick = mt5.symbol_info_tick(symbol)
+                    
+                    # إذا فشل، جرب مرة أخرى مع انتظار أطول (كما في mt5_debug)
+                    if not tick or not (hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0):
+                        logger.debug(f"[RETRY] إعادة محاولة جلب البيانات للرمز {symbol}")
+                        time.sleep(1)  # انتظار أطول كما في mt5_debug
+                        tick = mt5.symbol_info_tick(symbol)
                 
                 if tick is not None and hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0:
                     # التحقق من أن البيانات حديثة (ليست قديمة)
                     tick_time = datetime.fromtimestamp(tick.time)
                     time_diff = datetime.now() - tick_time
                     
-                    # زيادة مرونة وقت البيانات إلى 15 دقيقة
-                    if time_diff.total_seconds() > 900:
+                    # تقليل timeout إلى 5 دقائق للحصول على بيانات أكثر حداثة
+                    if time_diff.total_seconds() > 300:
                         logger.warning(f"[WARNING] بيانات MT5 قديمة للرمز {symbol} (عمر البيانات: {time_diff}) - محاولة تحديث...")
                         # محاولة تحديث السعر بطلب جديد
                         time.sleep(0.2)
@@ -2386,7 +2393,7 @@ class MT5Manager:
                         if fresh_tick and fresh_tick.bid > 0 and fresh_tick.ask > 0:
                             fresh_time = datetime.fromtimestamp(fresh_tick.time)
                             fresh_diff = datetime.now() - fresh_time
-                            if fresh_diff.total_seconds() <= 900:
+                            if fresh_diff.total_seconds() <= 300:
                                 tick = fresh_tick
                                 tick_time = fresh_time
                                 time_diff = fresh_diff
@@ -2404,10 +2411,10 @@ class MT5Manager:
                         'volume': tick.volume,
                         'time': tick_time,
                         'spread': tick.ask - tick.bid,
-                        'source': 'MetaTrader5 (مصدر أساسي)',
-                        'data_age': time_diff.total_seconds(),
-                        'is_fresh': time_diff.total_seconds() <= 900
-                    }
+                    'source': 'MetaTrader5 (مصدر أساسي)',
+                    'data_age': time_diff.total_seconds(),
+                    'is_fresh': time_diff.total_seconds() <= 300
+                }
                     # حفظ في الكاش
                     cache_price_data(symbol, data)
                     return data
@@ -2497,7 +2504,8 @@ class MT5Manager:
                 return None
             
             # جلب أحدث البيانات اللحظية (M1 للحصول على أقصى دقة لحظية)
-            df = self.get_market_data(symbol, mt5.TIMEFRAME_M1, 100)  # M1 لأحدث البيانات اللحظية
+            with mt5_operation_lock:
+                df = self.get_market_data(symbol, mt5.TIMEFRAME_M1, 100)  # M1 لأحدث البيانات اللحظية
             if df is None or len(df) < 20:
                 logger.warning(f"[WARNING] بيانات غير كافية لحساب المؤشرات لـ {symbol}")
                 return None
@@ -8143,6 +8151,11 @@ def handle_single_symbol_analysis(call):
         
         logger.info(f"[START] بدء تحليل الرمز {symbol} للمستخدم {user_id}")
         
+        # تعطيل المراقبة مؤقتاً لتجنب التضارب مع MT5
+        global analysis_in_progress
+        analysis_in_progress = True
+        logger.debug(f"[ANALYSIS_LOCK] تم تفعيل قفل التحليل للرمز {symbol}")
+        
         # العثور على معلومات الرمز
         symbol_info = ALL_SYMBOLS.get(symbol)
         if not symbol_info:
@@ -8288,6 +8301,10 @@ def handle_single_symbol_analysis(call):
             bot.answer_callback_query(call.id, "حدث خطأ في التحليل", show_alert=True)
         except:
             pass
+    finally:
+        # إعادة تفعيل المراقبة
+        analysis_in_progress = False
+        logger.debug(f"[ANALYSIS_UNLOCK] تم إلغاء قفل التحليل")
 
 @bot.callback_query_handler(func=lambda call: call.data == "analyze_symbols")
 def handle_analyze_symbols(call):
@@ -10928,6 +10945,12 @@ def monitoring_loop():
     while monitoring_active:
         try:
             current_time = time.time()
+            
+            # إيقاف مؤقت إذا كان التحليل اليدوي قيد التنفيذ
+            if analysis_in_progress:
+                logger.debug("[MONITORING_PAUSE] إيقاف مؤقت للمراقبة - تحليل يدوي قيد التنفيذ")
+                time.sleep(5)  # انتظار 5 ثوان
+                continue
             
             # فحص دوري لحالة اتصال MT5
             if current_time - last_connection_check > connection_check_interval:
