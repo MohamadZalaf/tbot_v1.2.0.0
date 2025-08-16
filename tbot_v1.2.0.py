@@ -31,9 +31,9 @@ import os
 import sys
 
 # إعداد timeout محسن لـ Telegram API
-apihelper.CONNECT_TIMEOUT = 30  # تقليل من 60 إلى 30 ثانية
-apihelper.READ_TIMEOUT = 30     # تقليل من 60 إلى 30 ثانية
-apihelper.RETRY_TIMEOUT = 2     # إضافة timeout للمحاولات المتكررة
+apihelper.CONNECT_TIMEOUT = 60  # زيادة إلى 60 ثانية للاستقرار
+apihelper.READ_TIMEOUT = 60     # زيادة إلى 60 ثانية للاستقرار
+apihelper.RETRY_TIMEOUT = 5     # زيادة timeout للمحاولات المتكررة
 import pandas as pd
 import numpy as np
 import MetaTrader5 as mt5
@@ -449,21 +449,57 @@ def handle_mt5_debug_command(message):
         except Exception as e:
             account_status = f"❌ خطأ في جلب معلومات الحساب: {str(e)}"
         
-        # 4. اختبار جلب البيانات
+        # 4. اختبار جلب البيانات مع تحسينات لمعالجة الذهب
         test_results = []
         test_symbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "GOLD", "BTCUSD"]
+        gold_symbols = ["XAUUSD", "GOLD", "XAUUSD.m", "GOLD.m", "XAUUSD.c"]  # رموز بديلة للذهب
         
         for symbol in test_symbols:
             try:
+                # تحقق من تفعيل الرمز أولاً
+                symbol_info = mt5.symbol_info(symbol)
+                if symbol_info is None:
+                    # إذا كان رمز الذهب، جرب الرموز البديلة
+                    if symbol in ["XAUUSD", "GOLD"]:
+                        found_alternative = False
+                        for alt_symbol in gold_symbols:
+                            alt_info = mt5.symbol_info(alt_symbol)
+                            if alt_info is not None:
+                                symbol = alt_symbol  # استخدم الرمز البديل
+                                symbol_info = alt_info
+                                found_alternative = True
+                                break
+                        if not found_alternative:
+                            test_results.append(f"❌ {symbol}: الرمز غير متاح في هذا الوسيط")
+                            continue
+                    else:
+                        test_results.append(f"❌ {symbol}: الرمز غير متاح")
+                        continue
+                
+                # تجربة تفعيل الرمز إذا لم يكن مفعلاً
+                if not symbol_info.visible:
+                    mt5.symbol_select(symbol, True)
+                    time.sleep(0.5)  # انتظار قصير للتفعيل
+                
+                # جلب البيانات
                 tick = mt5.symbol_info_tick(symbol)
-                if tick:
-                    test_results.append(f"✅ {symbol}: {tick.bid}/{tick.ask}")
+                if tick and tick.bid > 0 and tick.ask > 0:
+                    spread = tick.ask - tick.bid
+                    test_results.append(f"✅ {symbol}: {tick.bid:.5f}/{tick.ask:.5f} (spread: {spread:.5f})")
                 else:
-                    test_results.append(f"❌ {symbol}: لا توجد بيانات")
+                    # محاولة أخرى مع انتظار
+                    time.sleep(1)
+                    tick = mt5.symbol_info_tick(symbol)
+                    if tick and tick.bid > 0 and tick.ask > 0:
+                        spread = tick.ask - tick.bid
+                        test_results.append(f"✅ {symbol}: {tick.bid:.5f}/{tick.ask:.5f} (spread: {spread:.5f})")
+                    else:
+                        test_results.append(f"⚠️ {symbol}: بيانات غير صحيحة أو السوق مغلق")
+                        
             except Exception as e:
                 test_results.append(f"❌ {symbol}: خطأ - {str(e)}")
         
-        data_test_status = "\n".join(test_results[:6])  # أول 6 نتائج
+        data_test_status = "\n".join(test_results)  # جميع النتائج
         
         # 5. فحص حالة الاتصال في البوت
         bot_connection_status = "✅ متصل" if mt5_manager.connected else "❌ غير متصل"
@@ -1385,18 +1421,23 @@ class CachedPriceData:
     
 def is_cache_valid(symbol: str, required_source: str = None) -> bool:
     """التحقق من صلاحية البيانات المخزنة مؤقتاً مع التحقق من المصدر"""
-    if symbol not in price_data_cache:
-        return False
-    
-    cached_item = price_data_cache[symbol]
-    time_diff = datetime.now() - cached_item.timestamp
-    
-    # التحقق من انتهاء صلاحية الوقت
-    if time_diff.total_seconds() >= CACHE_DURATION:
-        return False
-    
-    # التحقق من تطابق المصدر إذا تم تحديده
-    if required_source and cached_item.source != required_source:
+    try:
+        if symbol not in price_data_cache:
+            return False
+        
+        cached_item = price_data_cache[symbol]
+        time_diff = datetime.now() - cached_item.timestamp
+        
+        # التحقق من انتهاء صلاحية الوقت (زيادة مدة الكاش للاستقرار)
+        cache_duration = CACHE_DURATION * 1.5  # زيادة مدة الكاش بـ 50%
+        if time_diff.total_seconds() >= cache_duration:
+            return False
+        
+        # التحقق من تطابق المصدر إذا تم تحديده
+        if required_source and cached_item.source != required_source:
+            return False
+    except Exception as e:
+        logger.debug(f"[DEBUG] خطأ في فحص صلاحية الكاش للرمز {symbol}: {e}")
         return False
         
     return True
@@ -2202,6 +2243,75 @@ class MT5Manager:
                 'error': str(e)
             }
     
+    def ensure_symbol_available(self, symbol: str) -> str:
+        """التأكد من توفر الرمز مع البحث عن بدائل"""
+        try:
+            # قائمة الرموز البديلة للأصول الشائعة
+            symbol_alternatives = {
+                # المعادن النفيسة
+                'XAUUSD': ['XAUUSD', 'GOLD', 'XAUUSD.m', 'GOLD.m', 'GOLD.raw', 'XAUUSD.c'],
+                'GOLD': ['GOLD', 'XAUUSD', 'GOLD.m', 'XAUUSD.m', 'GOLD.raw', 'XAUUSD.c'],
+                'XAGUSD': ['XAGUSD', 'SILVER', 'XAGUSD.m', 'SILVER.m', 'XAGUSD.c'],
+                'SILVER': ['SILVER', 'XAGUSD', 'SILVER.m', 'XAGUSD.m', 'XAGUSD.c'],
+                'XPTUSD': ['XPTUSD', 'PLATINUM', 'XPTUSD.m', 'PLATINUM.m'],
+                'XPDUSD': ['XPDUSD', 'PALLADIUM', 'XPDUSD.m', 'PALLADIUM.m'],
+                
+                # العملات الرقمية
+                'BTCUSD': ['BTCUSD', 'BITCOIN', 'BTC', 'BTCUSD.m', 'BTC.USD', 'BTCUSD.c'],
+                'BITCOIN': ['BITCOIN', 'BTCUSD', 'BTC', 'BTCUSD.m', 'BTC.USD'],
+                'ETHUSD': ['ETHUSD', 'ETHEREUM', 'ETH', 'ETHUSD.m', 'ETH.USD'],
+                'ETHEREUM': ['ETHEREUM', 'ETHUSD', 'ETH', 'ETHUSD.m', 'ETH.USD'],
+                'LTCUSD': ['LTCUSD', 'LITECOIN', 'LTC', 'LTCUSD.m', 'LTC.USD'],
+                
+                # أزواج العملات الرئيسية
+                'EURUSD': ['EURUSD', 'EURUSD.m', 'EURUSD.c', 'EUR/USD'],
+                'GBPUSD': ['GBPUSD', 'GBPUSD.m', 'GBPUSD.c', 'GBP/USD'],
+                'USDJPY': ['USDJPY', 'USDJPY.m', 'USDJPY.c', 'USD/JPY'],
+                'AUDUSD': ['AUDUSD', 'AUDUSD.m', 'AUDUSD.c', 'AUD/USD'],
+                'USDCAD': ['USDCAD', 'USDCAD.m', 'USDCAD.c', 'USD/CAD'],
+                'USDCHF': ['USDCHF', 'USDCHF.m', 'USDCHF.c', 'USD/CHF'],
+                'NZDUSD': ['NZDUSD', 'NZDUSD.m', 'NZDUSD.c', 'NZD/USD'],
+                
+                # المؤشرات
+                'US30': ['US30', 'US30.m', 'US30.c', 'DOW30', 'DJ30'],
+                'US500': ['US500', 'US500.m', 'US500.c', 'SPX500', 'SP500'],
+                'NAS100': ['NAS100', 'NAS100.m', 'NAS100.c', 'NASDAQ', 'NDX'],
+                'GER30': ['GER30', 'GER30.m', 'GER30.c', 'DAX30', 'DAX'],
+                'UK100': ['UK100', 'UK100.m', 'UK100.c', 'FTSE100', 'FTSE'],
+                
+                # النفط
+                'USOIL': ['USOIL', 'CRUDE', 'WTI', 'USOIL.m', 'CRUDE.m'],
+                'UKOIL': ['UKOIL', 'BRENT', 'BRENT.m', 'UKOIL.m']
+            }
+            
+            # البحث عن الرمز الأصلي أولاً
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info is not None:
+                # تفعيل الرمز إذا لم يكن مفعلاً
+                if not symbol_info.visible:
+                    mt5.symbol_select(symbol, True)
+                    time.sleep(0.1)
+                return symbol
+            
+            # البحث في البدائل
+            alternatives = symbol_alternatives.get(symbol.upper(), [symbol])
+            for alt_symbol in alternatives:
+                alt_info = mt5.symbol_info(alt_symbol)
+                if alt_info is not None:
+                    if not alt_info.visible:
+                        mt5.symbol_select(alt_symbol, True)
+                        time.sleep(0.1)
+                    logger.info(f"[SYMBOL_ALT] استخدام الرمز البديل {alt_symbol} بدلاً من {symbol}")
+                    return alt_symbol
+            
+            # إذا لم يتم العثور على أي بديل
+            logger.warning(f"[SYMBOL_NOT_FOUND] لم يتم العثور على الرمز {symbol} أو أي بديل")
+            return symbol  # إرجاع الرمز الأصلي للمحاولة مرة أخيرة
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في فحص توفر الرمز {symbol}: {e}")
+            return symbol
+
     def get_live_price(self, symbol: str) -> Optional[Dict]:
         """جلب السعر اللحظي الحقيقي - MT5 هو المصدر الأساسي الأولي مع نظام كاش"""
         
@@ -2233,9 +2343,12 @@ class MT5Manager:
         # ✅ المصدر الأساسي الأولي: MetaTrader5
         if real_connection_status:
             try:
+                # التأكد من توفر الرمز مع البحث عن بدائل
+                available_symbol = self.ensure_symbol_available(symbol)
+                
                 # جلب آخر تيك للرمز من MT5 (البيانات الأكثر دقة)
-                with self.connection_lock:
-                    tick = mt5.symbol_info_tick(symbol)
+                # تجنب استخدام lock هنا لمنع deadlock في المراقبة
+                tick = mt5.symbol_info_tick(available_symbol)
                 
                 if tick is not None and hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0:
                     # التحقق من أن البيانات حديثة (ليست قديمة)
@@ -2254,7 +2367,8 @@ class MT5Manager:
                     else:
                         logger.debug(f"[OK] تم جلب البيانات الحديثة من MT5 للرمز {symbol}")
                         data = {
-                            'symbol': symbol,
+                            'symbol': symbol,  # الرمز المطلوب أصلاً
+                            'actual_symbol': available_symbol,  # الرمز المستخدم فعلياً
                             'bid': tick.bid,
                             'ask': tick.ask,
                             'last': tick.last,
@@ -6796,7 +6910,7 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
                 'time': datetime.now()
             }
         
-        # إجراء تحليل جديد مع Gemini AI للإشعار
+        # إجراء تحليل جديد مع Gemini AI للإشعار مع معالجة محسنة للأخطاء
         fresh_analysis = None
         try:
             fresh_analysis = gemini_analyzer.analyze_market_data_with_retry(symbol, price_data, user_id)
@@ -10418,7 +10532,12 @@ def display_instant_prices(user_id, chat_id, message_id, symbols, category_name,
 ───────────────────────
 """
         
-        # التحقق من اتصال MT5
+        # التحقق من اتصال MT5 مع محاولة إعادة الاتصال
+        if not mt5_manager.connected:
+            logger.warning("[WARNING] MT5 غير متصل، محاولة إعادة الاتصال...")
+            # محاولة إعادة الاتصال
+            mt5_manager.check_real_connection()
+            
         if not mt5_manager.connected:
             message_text += """
 ❌ **غير متصل بـ MetaTrader5**
@@ -10427,6 +10546,7 @@ def display_instant_prices(user_id, chat_id, message_id, symbols, category_name,
 • تأكد من تشغيل MetaTrader5
 • تحقق من اتصال الإنترنت  
 • حاول مرة أخرى بعد قليل
+• تم محاولة إعادة الاتصال تلقائياً
 
 ───────────────────────
 """
@@ -10691,20 +10811,37 @@ def monitoring_loop():
                         users_by_symbol[symbol] = []
                     users_by_symbol[symbol].append(user_id)
             
-            # الخطوة 2: جلب البيانات لجميع الرموز مرة واحدة فقط
+            # الخطوة 2: جلب البيانات لجميع الرموز مرة واحدة فقط مع معالجة محسنة
             symbols_data = {}  # {symbol: price_data}
+            max_concurrent_requests = 3  # تحديد عدد الطلبات المتزامنة
+            current_requests = 0
+            
             for symbol in all_symbols_needed:
                 try:
+                    # تحديد عدد الطلبات المتزامنة لتجنب الضغط على MT5
+                    if current_requests >= max_concurrent_requests:
+                        time.sleep(0.1)  # انتظار قصير
+                        current_requests = 0
+                    
                     price_data = mt5_manager.get_live_price(symbol)
+                    current_requests += 1
+                    
                     if price_data:
                         symbols_data[symbol] = price_data
+                        logger.debug(f"[DATA_OK] تم جلب بيانات {symbol} بنجاح")
                     else:
                         failed_operations += 1
+                        logger.debug(f"[DATA_FAIL] فشل في جلب بيانات {symbol}")
                         if not mt5_manager.connected:
                             mt5_connection_errors += 1
+                            
                 except Exception as e:
                     logger.error(f"[ERROR] خطأ في جلب بيانات {symbol}: {e}")
                     failed_operations += 1
+                    # فحص نوع الخطأ
+                    if "connection" in str(e).lower() or "timeout" in str(e).lower():
+                        logger.warning(f"[WARNING] مشكلة اتصال في جلب {symbol} - تخطي للرمز التالي")
+                        time.sleep(0.5)  # انتظار إضافي للأخطاء الشبكية
             
             # الخطوة 3: معالجة كل رمز مع المستخدمين المهتمين به
             for symbol, price_data in symbols_data.items():
@@ -10855,27 +10992,54 @@ if __name__ == "__main__":
         while retry_count < max_retries:
             try:
                 logger.info("[SYSTEM] بدء استقبال الرسائل...")
-                bot.infinity_polling(none_stop=True, interval=2, timeout=30, long_polling_timeout=20)
+                bot.infinity_polling(
+                    none_stop=False,  # تغيير إلى False لمعالجة أفضل للأخطاء
+                    interval=1,       # تقليل المدة للاستجابة الأسرع
+                    timeout=60,       # زيادة timeout للاستقرار
+                    long_polling_timeout=30  # زيادة long polling timeout
+                )
                 break  # إذا انتهى بشكل طبيعي
                 
             except telebot.apihelper.ApiException as api_error:
                 retry_count += 1
+                error_str = str(api_error).lower()
                 logger.error(f"[ERROR] خطأ Telegram API (محاولة {retry_count}/{max_retries}): {api_error}")
+                
+                # معالجة خاصة لأخطاء الشبكة والاتصال
+                if "connection" in error_str or "timeout" in error_str or "network" in error_str:
+                    wait_time = min(retry_count * 10, 120)  # انتظار أطول لأخطاء الشبكة
+                else:
+                    wait_time = min(retry_count * 5, 60)
+                    
                 if retry_count >= max_retries:
                     logger.error("[ERROR] تم الوصول للحد الأقصى من المحاولات - إيقاف البوت")
                     break
-                wait_time = min(retry_count * 5, 60)  # انتظار تدريجي حتى 60 ثانية
+                    
                 logger.info(f"[SYSTEM] انتظار {wait_time} ثانية قبل إعادة المحاولة...")
                 time.sleep(wait_time)
                 continue
                 
             except Exception as polling_error:
                 retry_count += 1
+                error_str = str(polling_error).lower()
                 logger.error(f"[ERROR] خطأ عام في الاستقبال (محاولة {retry_count}/{max_retries}): {polling_error}")
+                
+                # إعادة تشغيل المراقبة إذا توقفت
+                if not monitoring_active:
+                    logger.warning("[WARNING] المراقبة متوقفة - إعادة التشغيل...")
+                    monitoring_active = True
+                
+                # معالجة خاصة لأخطاء محددة
+                if "infinity polling" in error_str or "polling exited" in error_str:
+                    logger.warning("[WARNING] انقطاع في infinity polling - محاولة إعادة الاتصال...")
+                    wait_time = min(retry_count * 8, 90)
+                else:
+                    wait_time = min(retry_count * 5, 60)
+                    
                 if retry_count >= max_retries:
                     logger.error("[ERROR] تم الوصول للحد الأقصى من المحاولات - إيقاف البوت")
                     break
-                wait_time = min(retry_count * 3, 30)  # انتظار تدريجي حتى 30 ثانية
+                    
                 logger.info(f"[SYSTEM] انتظار {wait_time} ثانية قبل إعادة المحاولة...")
                 time.sleep(wait_time)
                 continue
