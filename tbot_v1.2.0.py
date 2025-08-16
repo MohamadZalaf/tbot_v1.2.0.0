@@ -1327,6 +1327,17 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         
         if current_price and current_price > 0:
             body += f"💰 السعر الحالي: {current_price:,.5f}\n"
+            # إضافة معلومات spread للإشعارات
+            bid = price_data.get('bid', 0)
+            ask = price_data.get('ask', 0)
+            spread = price_data.get('spread', 0)
+            if spread > 0 and bid > 0 and ask > 0:
+                spread_points = price_data.get('spread_points', 0)
+                body += f"📊 شراء: {bid:,.5f} | بيع: {ask:,.5f}"
+                if spread_points > 0:
+                    body += f" | فرق: {spread:.5f} ({spread_points:.1f} نقطة)\n"
+                else:
+                    body += f" | فرق: {spread:.5f}\n"
         else:
             body += f"⚠️ السعر اللحظي: يرجى التأكد من اتصال MT5\n"
         
@@ -2243,6 +2254,18 @@ class MT5Manager:
                 'error': str(e)
             }
     
+    def calculate_spread_in_points(self, symbol: str, spread_price: float) -> float:
+        """حساب spread بالنقاط حسب نوع الرمز"""
+        try:
+            asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+            if pip_size > 0:
+                spread_points = round(spread_price / pip_size, 1)
+                return spread_points
+            return 0
+        except Exception as e:
+            logger.debug(f"[DEBUG] خطأ في حساب spread بالنقاط للرمز {symbol}: {e}")
+            return 0
+
     def ensure_symbol_available(self, symbol: str) -> str:
         """التأكد من توفر الرمز مع البحث عن بدائل"""
         try:
@@ -2289,20 +2312,26 @@ class MT5Manager:
             if symbol_info is not None:
                 # تفعيل الرمز إذا لم يكن مفعلاً
                 if not symbol_info.visible:
+                    logger.info(f"[SYMBOL_ENABLE] تفعيل الرمز {symbol}")
                     mt5.symbol_select(symbol, True)
-                    time.sleep(0.1)
+                    time.sleep(0.2)  # انتظار أطول للتأكد من التفعيل
                 return symbol
             
             # البحث في البدائل
             alternatives = symbol_alternatives.get(symbol.upper(), [symbol])
             for alt_symbol in alternatives:
-                alt_info = mt5.symbol_info(alt_symbol)
-                if alt_info is not None:
-                    if not alt_info.visible:
-                        mt5.symbol_select(alt_symbol, True)
-                        time.sleep(0.1)
-                    logger.info(f"[SYMBOL_ALT] استخدام الرمز البديل {alt_symbol} بدلاً من {symbol}")
-                    return alt_symbol
+                try:
+                    alt_info = mt5.symbol_info(alt_symbol)
+                    if alt_info is not None:
+                        if not alt_info.visible:
+                            logger.info(f"[SYMBOL_ENABLE] تفعيل الرمز البديل {alt_symbol}")
+                            mt5.symbol_select(alt_symbol, True)
+                            time.sleep(0.2)
+                        logger.info(f"[SYMBOL_ALT] استخدام الرمز البديل {alt_symbol} بدلاً من {symbol}")
+                        return alt_symbol
+                except Exception as alt_error:
+                    logger.debug(f"[DEBUG] فشل فحص الرمز البديل {alt_symbol}: {alt_error}")
+                    continue
             
             # إذا لم يتم العثور على أي بديل
             logger.warning(f"[SYMBOL_NOT_FOUND] لم يتم العثور على الرمز {symbol} أو أي بديل")
@@ -2350,6 +2379,12 @@ class MT5Manager:
                 # تجنب استخدام lock هنا لمنع deadlock في المراقبة
                 tick = mt5.symbol_info_tick(available_symbol)
                 
+                # إذا فشل، جرب مرة أخرى بعد انتظار قصير (كما في mt5_debug)
+                if not tick or not (hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0):
+                    logger.debug(f"[RETRY] إعادة محاولة جلب البيانات للرمز {available_symbol}")
+                    time.sleep(0.5)
+                    tick = mt5.symbol_info_tick(available_symbol)
+                
                 if tick is not None and hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0:
                     # التحقق من أن البيانات حديثة (ليست قديمة)
                     tick_time = datetime.fromtimestamp(tick.time)
@@ -2366,6 +2401,9 @@ class MT5Manager:
                         # لا نعيد None فوراً، قد تكون مشكلة مؤقتة في الرمز
                     else:
                         logger.debug(f"[OK] تم جلب البيانات الحديثة من MT5 للرمز {symbol}")
+                        # حساب spread بدقة أكبر
+                        spread = round(tick.ask - tick.bid, 5) if tick.ask > tick.bid else 0
+                        
                         data = {
                             'symbol': symbol,  # الرمز المطلوب أصلاً
                             'actual_symbol': available_symbol,  # الرمز المستخدم فعلياً
@@ -2374,7 +2412,8 @@ class MT5Manager:
                             'last': tick.last,
                             'volume': tick.volume,
                             'time': tick_time,
-                            'spread': tick.ask - tick.bid,
+                            'spread': spread,
+                            'spread_points': self.calculate_spread_in_points(symbol, spread),
                             'source': 'MetaTrader5 (مصدر أساسي)',
                             'data_age': time_diff.total_seconds()
                         }
@@ -3504,7 +3543,8 @@ class GeminiAnalyzer:
             - السعر الحالي: {current_price}
             - سعر الشراء: {price_data.get('bid', 'غير متوفر')}
             - سعر البيع: {price_data.get('ask', 'غير متوفر')}
-            - الفرق (Spread): {spread}
+            - الفرق (Spread): {spread} ({price_data.get('spread_points', 0):.1f} نقطة)
+            - تكلفة التداول: انتبه للـ spread عند حساب الربحية
             - مصدر البيانات: {data_source}
             - الوقت: {price_data.get('time', 'الآن')}
             
@@ -3708,15 +3748,23 @@ class GeminiAnalyzer:
             3. **التوصية المحددة:** حدد نوع الصفقة (شراء/بيع)، نقطة الدخول المثلى، الأهداف (TP1/TP2)، وقف الخسارة (SL)
             4. **⚠️ CRITICAL - حساب النقاط والأهداف (إجباري):**
             
-            **معلومات مهمة عن النقاط للرمز {symbol}:**
+            **معلومات مهمة عن النقاط والـ Spread للرمز {symbol}:**
             - نوع الرمز: {asset_type}
             - حجم النقطة: {pip_size}
             - السعر الحالي: {current_price}
+            - الـ Spread الحالي: {price_data.get('spread', 0):.5f} ({price_data.get('spread_points', 0):.1f} نقطة)
             
             **قواعد حساب النقاط (يجب الالتزام بها):**
             - 1 نقطة = حجم النقطة المحدد أعلاه من التغير في السعر
             - الحد الأقصى للنقاط: 999 نقطة (3 خانات فقط)
             - الحد الأدنى للنقاط: 1 نقطة
+            
+            **⚠️ اعتبارات الـ Spread الحرجة:**
+            - الـ Spread = الفرق بين سعر الشراء والبيع
+            - تكلفة تداول فورية يجب طرحها من الربح المتوقع
+            - كلما قل الـ Spread، كلما كانت الصفقة أرخص في التكلفة
+            - في الأوقات المتقلبة، قد يزداد الـ Spread مؤقتاً
+            - يجب أن تتجاوز الأهداف الـ Spread بمرات كافية لضمان الربحية
             
             **يجب حساب وذكر الآتي بوضوح:**
             - سعر الدخول المقترح: [رقم بـ 5 خانات عشرية]
@@ -3739,6 +3787,8 @@ class GeminiAnalyzer:
             - اجمع نقاط جميع المؤشرات واحسب النسبة النهائية
             - النطاق الكامل: 0% إلى 100% - لا تتردد في استخدام النطاق كاملاً
             - يجب أن تكون النسبة انعكاساً حقيقياً لجودة الإشارات وليس رقماً عشوائياً
+            - **اطرح من النسبة إذا كان الـ Spread عالياً:** spread > 3 نقاط (-5%)، spread > 5 نقاط (-10%)
+            - **أضف للنسبة إذا كان الـ Spread منخفضاً:** spread < 1 نقطة (+5%)
             - اكتب بوضوح: "نسبة نجاح الصفقة: X%" حيث X هو الرقم المحسوب من تحليلك
             - إذا كانت الإشارات متضاربة جداً أو معدومة، اكتب نسبة منخفضة (5-35%)
             - إذا كانت جميع المؤشرات متفقة وقوية، اكتب نسبة عالية (75-95%)
@@ -4711,6 +4761,17 @@ class GeminiAnalyzer:
             message += f"📡 مصدر البيانات: 🔗 MetaTrader5 (لحظي - بيانات حقيقية)\n"
             message += f"🌍 مصدر التوقيت: خادم MT5 - محول لمنطقتك الزمنية\n"
             message += f"💰 السعر الحالي: {current_price:,.5f}\n"
+            # إضافة معلومات spread مفصلة
+            if spread > 0:
+                spread_points = price_data.get('spread_points', 0)
+                message += f"📊 أسعار التداول:\n"
+                message += f"   🟢 شراء (Bid): {bid:,.5f}\n"
+                message += f"   🔴 بيع (Ask): {ask:,.5f}\n"
+                message += f"   📏 الفرق (Spread): {spread:.5f}"
+                if spread_points > 0:
+                    message += f" ({spread_points:.1f} نقطة)\n"
+                else:
+                    message += "\n"
             message += f"➡️ التغيير اليومي: {daily_change}\n"
             # استخدام التوقيت المصحح حسب المنطقة الزمنية للمستخدم
             if user_id:
@@ -10570,11 +10631,12 @@ def display_instant_prices(user_id, chat_id, message_id, symbols, category_name,
                             display_bid = bid if bid > 0 else last_price
                             display_ask = ask if ask > 0 else last_price
                             display_spread = spread if spread > 0 else abs(display_ask - display_bid)
+                            spread_points = price_data.get('spread_points', 0)
                             
                             prices_data.append(f"""
 {info['emoji']} **{info['name']}**
 📊 شراء: {display_bid:.5f} | بيع: {display_ask:.5f}
-📏 فرق: {display_spread:.5f}
+📏 فرق: {display_spread:.5f}{' (' + str(spread_points) + ' نقطة)' if spread_points > 0 else ''}
 """)
                         else:
                             prices_data.append(f"""
