@@ -657,11 +657,21 @@ class MT5Manager:
                         # لا نغير حالة الاتصال فوراً، قد تكون مشكلة مؤقتة في الرمز
                     else:
                         logger.debug(f"[OK] تم جلب البيانات الحديثة من MT5 للرمز {symbol}")
+                        # تحسين السعر الحالي - استخدام أفضل قيمة متاحة
+                        best_price = tick.last
+                        if best_price <= 0:  # إذا كان last = 0، استخدم متوسط bid/ask
+                            if tick.bid > 0 and tick.ask > 0:
+                                best_price = (tick.bid + tick.ask) / 2
+                            elif tick.bid > 0:
+                                best_price = tick.bid
+                            elif tick.ask > 0:
+                                best_price = tick.ask
+                        
                         data = {
                             'symbol': symbol,
                             'bid': tick.bid,
                             'ask': tick.ask,
-                            'last': tick.last,
+                            'last': best_price,  # استخدام أفضل سعر متاح
                             'volume': tick.volume,
                             'time': tick_time,
                             'spread': tick.ask - tick.bid,

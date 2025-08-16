@@ -1215,29 +1215,32 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                         target2 = target2 or current_price * (1 + tp2_pct)
                         stop_loss = stop_loss or current_price * (1 - sl_pct)
 
-        # التحقق من منطقية القيم قبل المتابعة
-        if action == 'BUY':
-            # في صفقة الشراء: الأهداف يجب أن تكون أعلى من السعر والاستوب أقل
-            if target1 and target1 <= current_price:
-                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 1 للشراء - كان {target1:.5f}, تم تعديله")
-                target1 = current_price * 1.015
-            if target2 and target2 <= current_price:
-                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 2 للشراء - كان {target2:.5f}, تم تعديله")
-                target2 = current_price * 1.03
-            if stop_loss and stop_loss >= current_price:
-                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح وقف الخسارة للشراء - كان {stop_loss:.5f}, تم تعديله")
-                stop_loss = current_price * 0.985
-        elif action == 'SELL':
-            # في صفقة البيع: الأهداف يجب أن تكون أقل من السعر والاستوب أعلى
-            if target1 and target1 >= current_price:
-                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 1 للبيع - كان {target1:.5f}, تم تعديله")
-                target1 = current_price * 0.985
-            if target2 and target2 >= current_price:
-                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح هدف 2 للبيع - كان {target2:.5f}, تم تعديله")
-                target2 = current_price * 0.97
-            if stop_loss and stop_loss <= current_price:
-                logger.warning(f"[LOGIC_ERROR] {symbol}: تصحيح وقف الخسارة للبيع - كان {stop_loss:.5f}, تم تعديله")
-                stop_loss = current_price * 1.015
+        # التحقق من منطقية القيم قبل المتابعة - مع تحسين الرسائل
+        if current_price > 0:  # تأكد من أن السعر الحالي صحيح
+            if action == 'BUY':
+                # في صفقة الشراء: الأهداف يجب أن تكون أعلى من السعر والاستوب أقل
+                if target1 and target1 <= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 1 للشراء - من {target1:.5f} إلى {current_price * 1.015:.5f}")
+                    target1 = current_price * 1.015
+                if target2 and target2 <= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 2 للشراء - من {target2:.5f} إلى {current_price * 1.03:.5f}")
+                    target2 = current_price * 1.03
+                if stop_loss and stop_loss >= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح وقف الخسارة للشراء - من {stop_loss:.5f} إلى {current_price * 0.985:.5f}")
+                    stop_loss = current_price * 0.985
+            elif action == 'SELL':
+                # في صفقة البيع: الأهداف يجب أن تكون أقل من السعر والاستوب أعلى
+                if target1 and target1 >= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 1 للبيع - من {target1:.5f} إلى {current_price * 0.985:.5f}")
+                    target1 = current_price * 0.985
+                if target2 and target2 >= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 2 للبيع - من {target2:.5f} إلى {current_price * 0.97:.5f}")
+                    target2 = current_price * 0.97
+                if stop_loss and stop_loss <= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح وقف الخسارة للبيع - من {stop_loss:.5f} إلى {current_price * 1.015:.5f}")
+                    stop_loss = current_price * 1.015
+        else:
+            logger.error(f"[PRICE_ERROR] {symbol}: السعر الحالي غير صحيح ({current_price}) - لا يمكن حساب الأهداف")
 
         # حساب النقاط بدقة مع ضمان قيم صحيحة - محسن ومطور
         def calc_points_for_symbol(price_diff, symbol_name):
@@ -2401,28 +2404,45 @@ class MT5Manager:
                     
                     # زيادة التحمل إلى 15 دقيقة لتجنب رفض البيانات الصحيحة (كما في v1.2.1)
                     if time_diff.total_seconds() > 900:
-                        logger.warning(f"[WARNING] بيانات MT5 قديمة للرمز {symbol} (عمر البيانات: {time_diff}) - محاولة تحديث...")
-                        # محاولة تحديث السعر بطلب جديد
-                        time.sleep(0.2)
-                        fresh_tick = mt5.symbol_info_tick(symbol)
-                        if fresh_tick and fresh_tick.bid > 0 and fresh_tick.ask > 0:
-                            fresh_time = datetime.fromtimestamp(fresh_tick.time)
-                            fresh_diff = datetime.now() - fresh_time
-                            if fresh_diff.total_seconds() <= 900:
-                                tick = fresh_tick
-                                tick_time = fresh_time
-                                time_diff = fresh_diff
-                                logger.info(f"[REFRESH] تم تحديث البيانات بنجاح للرمز {symbol}")
-                            else:
-                                logger.warning(f"[WARNING] البيانات لا تزال قديمة بعد التحديث للرمز {symbol}")
+                        # تقليل التحذيرات - فقط لليوم الواحد (86400 ثانية)
+                        if time_diff.total_seconds() < 86400:
+                            logger.debug(f"[DATA_AGE] بيانات {symbol} عمرها {time_diff.total_seconds():.0f} ثانية - مقبولة")
+                        else:
+                            logger.warning(f"[WARNING] بيانات MT5 قديمة جداً للرمز {symbol} (عمر: {time_diff.total_seconds():.0f} ثانية)")
+                        
+                        # محاولة تحديث السعر بطلب جديد فقط للبيانات اللحظية المباشرة
+                        if force_fresh:
+                            time.sleep(0.2)
+                            fresh_tick = mt5.symbol_info_tick(symbol)
+                            if fresh_tick and fresh_tick.bid > 0 and fresh_tick.ask > 0:
+                                fresh_time = datetime.fromtimestamp(fresh_tick.time)
+                                fresh_diff = datetime.now() - fresh_time
+                                if fresh_diff.total_seconds() < time_diff.total_seconds():
+                                    tick = fresh_tick
+                                    tick_time = fresh_time
+                                    time_diff = fresh_diff
+                                    logger.info(f"[REFRESH] تم تحديث البيانات اللحظية للرمز {symbol}")
                     
                     # إنشاء البيانات بغض النظر عن العمر (لتجنب فشل كامل)
-                    logger.debug(f"[OK] معالجة البيانات للرمز {symbol} (عمر: {time_diff.total_seconds():.1f}s)")
+                    if time_diff.total_seconds() < 86400:  # أقل من يوم
+                        logger.debug(f"[OK] معالجة البيانات للرمز {symbol} (عمر: {time_diff.total_seconds():.0f}s)")
+                    else:
+                        logger.info(f"[OLD_DATA] معالجة بيانات قديمة للرمز {symbol} (عمر: {time_diff.total_seconds():.0f}s)")
+                    # تحسين السعر الحالي - استخدام أفضل قيمة متاحة
+                    best_price = tick.last
+                    if best_price <= 0:  # إذا كان last = 0، استخدم متوسط bid/ask
+                        if tick.bid > 0 and tick.ask > 0:
+                            best_price = (tick.bid + tick.ask) / 2
+                        elif tick.bid > 0:
+                            best_price = tick.bid
+                        elif tick.ask > 0:
+                            best_price = tick.ask
+                    
                     data = {
                         'symbol': symbol,
                         'bid': tick.bid,
                         'ask': tick.ask,
-                        'last': tick.last,
+                        'last': best_price,  # استخدام أفضل سعر متاح
                         'volume': tick.volume,
                         'time': tick_time,
                         'spread': tick.ask - tick.bid,
@@ -6897,8 +6917,10 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
         
         confidence_factors.append(("الذكاء الاصطناعي", ai_score, 25))
         
-        # 4. تحليل اتجاه السوق العام (10% من النتيجة)
+        # 4. تحليل اتجاه السوق العام (15% من النتيجة - دمج التقلبات هنا)
         trend_score = 0
+        volatility_adjustment = 0
+        
         if technical_data and technical_data.get('indicators'):
             overall_trend = technical_data['indicators'].get('overall_trend', '')
             if action == 'BUY' and 'صاعد' in overall_trend:
@@ -6909,24 +6931,23 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
                 trend_score = 5
             elif action != 'HOLD':  # إشارة ضد الاتجاه
                 trend_score = -5
-        
-        confidence_factors.append(("الاتجاه العام", trend_score, 10))
-        
-        # 5. عامل التقلبات والاستقرار (10% من النتيجة)
-        volatility_score = 5  # قيمة افتراضية
-        if technical_data and technical_data.get('indicators'):
+            
+            # دمج عامل التقلبات مع الاتجاه
             bollinger = technical_data['indicators'].get('bollinger', {})
             if bollinger.get('upper') and bollinger.get('lower'):
                 band_width = bollinger['upper'] - bollinger['lower']
                 # تقدير التقلبات من عرض البولنجر باندز
                 if band_width > 0:
                     # تقلبات معتدلة تعطي ثقة أعلى
-                    volatility_score = 8
+                    volatility_adjustment = 5
                 else:
                     # تقلبات عالية أو منخفضة جداً تقلل الثقة
-                    volatility_score = 3
+                    volatility_adjustment = 0
+            else:
+                volatility_adjustment = 3  # قيمة افتراضية
         
-        confidence_factors.append(("التقلبات", volatility_score, 10))
+        total_trend_score = trend_score + volatility_adjustment
+        confidence_factors.append(("الاتجاه العام", total_trend_score, 15))
         
         # حساب النتيجة النهائية
         total_weighted_score = 0
