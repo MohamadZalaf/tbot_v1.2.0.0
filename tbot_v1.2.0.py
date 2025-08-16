@@ -2114,11 +2114,12 @@ class MT5Manager:
                     else:
                         time_diff = datetime.now() - tick_time
                     
-                    # 5 دقائق للحصول على بيانات أكثر حداثة
-                    if time_diff.total_seconds() > 300:
-                        logger.warning(f"[WARNING] البيانات قديمة جداً (عمر: {time_diff}) - الاتصال غير فعال")
-                        self.connected = False
-                        return self._attempt_reconnection()
+                    # زيادة التحمل إلى 15 دقيقة لتجنب الانقطاع الزائف (كما في v1.2.1)
+                    if time_diff.total_seconds() > 900:
+                        logger.warning(f"[WARNING] البيانات قديمة جداً (عمر: {time_diff}) - الاتصال قد يكون غير فعال")
+                        # لا نقطع الاتصال فوراً - نحتاج تأكيد أكثر
+                        # self.connected = False
+                        # return self._attempt_reconnection()
                 except:
                     # إذا فشل في قراءة وقت التيك، لا نعتبر هذا خطأ كريتيكال
                     pass
@@ -2384,8 +2385,8 @@ class MT5Manager:
                     tick_time = datetime.fromtimestamp(tick.time)
                     time_diff = datetime.now() - tick_time
                     
-                    # تقليل timeout إلى 5 دقائق للحصول على بيانات أكثر حداثة
-                    if time_diff.total_seconds() > 300:
+                    # زيادة التحمل إلى 15 دقيقة لتجنب رفض البيانات الصحيحة (كما في v1.2.1)
+                    if time_diff.total_seconds() > 900:
                         logger.warning(f"[WARNING] بيانات MT5 قديمة للرمز {symbol} (عمر البيانات: {time_diff}) - محاولة تحديث...")
                         # محاولة تحديث السعر بطلب جديد
                         time.sleep(0.2)
@@ -2393,7 +2394,7 @@ class MT5Manager:
                         if fresh_tick and fresh_tick.bid > 0 and fresh_tick.ask > 0:
                             fresh_time = datetime.fromtimestamp(fresh_tick.time)
                             fresh_diff = datetime.now() - fresh_time
-                            if fresh_diff.total_seconds() <= 300:
+                            if fresh_diff.total_seconds() <= 900:
                                 tick = fresh_tick
                                 tick_time = fresh_time
                                 time_diff = fresh_diff
@@ -2413,7 +2414,7 @@ class MT5Manager:
                         'spread': tick.ask - tick.bid,
                     'source': 'MetaTrader5 (مصدر أساسي)',
                     'data_age': time_diff.total_seconds(),
-                    'is_fresh': time_diff.total_seconds() <= 300
+                    'is_fresh': time_diff.total_seconds() <= 900
                 }
                     # حفظ في الكاش
                     cache_price_data(symbol, data)
@@ -8173,22 +8174,34 @@ def handle_single_symbol_analysis(call):
         )
         
         # جلب البيانات اللحظية من MT5 فقط (بدون بيانات تجريبية لحماية المستخدم)
-        price_data = mt5_manager.get_live_price(symbol)
+        try:
+            price_data = mt5_manager.get_live_price(symbol)
+        except Exception as data_error:
+            logger.error(f"[ERROR] خطأ في جلب البيانات من MT5 للرمز {symbol}: {data_error}")
+            price_data = None
+            
         if not price_data:
             logger.error(f"[ERROR] فشل في جلب البيانات الحقيقية من MT5 للرمز {symbol}")
-            bot.edit_message_text(
-                f"❌ **لا يمكن الحصول على بيانات حقيقية**\n\n"
-                f"لا يمكن الحصول على بيانات {symbol_info['emoji']} {symbol_info['name']} من MetaTrader5.\n\n"
-                "🔧 **متطلبات التشغيل:**\n"
-                "• يجب تشغيل MetaTrader5 على نفس الجهاز\n"
-                "• يجب تسجيل الدخول لحساب حقيقي أو تجريبي في MT5\n"
-                "• تأكد من وجود اتصال إنترنت مستقر\n"
-                "• تأكد من إضافة الرمز للمراقبة في MT5\n\n"
-                "⚠️ **تحذير:** لا يمكن التحليل بدون بيانات حقيقية لحمايتك من قرارات خاطئة.",
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode='Markdown'
-            )
+            try:
+                bot.edit_message_text(
+                    f"❌ **لا يمكن الحصول على بيانات حقيقية**\n\n"
+                    f"لا يمكن الحصول على بيانات {symbol_info['emoji']} {symbol_info['name']} من MetaTrader5.\n\n"
+                    "🔧 **متطلبات التشغيل:**\n"
+                    "• يجب تشغيل MetaTrader5 على نفس الجهاز\n"
+                    "• يجب تسجيل الدخول لحساب حقيقي أو تجريبي في MT5\n"
+                    "• تأكد من وجود اتصال إنترنت مستقر\n"
+                    "• تأكد من إضافة الرمز للمراقبة في MT5\n\n"
+                    "⚠️ **تحذير:** لا يمكن التحليل بدون بيانات حقيقية لحمايتك من قرارات خاطئة.",
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode='Markdown'
+                )
+            except Exception as msg_error:
+                logger.error(f"[ERROR] فشل في إرسال رسالة الخطأ: {msg_error}")
+                try:
+                    bot.answer_callback_query(call.id, "❌ فشل في جلب البيانات من MT5", show_alert=True)
+                except:
+                    pass
             return
         
         # تحليل ذكي مع Gemini AI مع بديل
