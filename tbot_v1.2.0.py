@@ -907,33 +907,51 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         # جلب حجم النقطة (pip size) الخاص بالرمز
         asset_type, pip_size = get_asset_type_and_pip_size(symbol)
         
-        # حساب النقاط للأهداف ووقف الخسارة بشكل صحيح
+        # استخدام النقاط المحسوبة من AI إذا كانت متوفرة، وإلا حسابها يدوياً
         points1 = 0
         points2 = 0
         stop_points = 0
         
-        try:
-            logger.debug(f"[DEBUG] حساب النقاط للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
+        # إعطاء الأولوية للنقاط المحسوبة من AI
+        if analysis and analysis.get('ai_calculated'):
+            points1 = analysis.get('target1_points', 0) or 0
+            points2 = analysis.get('target2_points', 0) or 0  
+            stop_points = analysis.get('stop_points', 0) or 0
             
-            # حساب النقاط للهدف الأول
-            if target1 and entry_price and target1 != entry_price and pip_size > 0:
-                price_diff1 = abs(target1 - entry_price)
-                points1 = price_diff1 / pip_size
-                logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط={points1:.1f}")
+            # تطبيق حد أقصى 3 خانات (999)
+            points1 = min(points1, 999) if points1 else 0
+            points2 = min(points2, 999) if points2 else 0
+            stop_points = min(stop_points, 999) if stop_points else 0
+            
+            logger.info(f"[AI_POINTS] استخدام النقاط المحسوبة من AI للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
+        
+        # إذا لم تكن النقاط متوفرة من AI، احسبها يدوياً
+        if not (points1 or points2 or stop_points):
+            try:
+                logger.debug(f"[DEBUG] حساب النقاط يدوياً للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
                 
-            # حساب النقاط للهدف الثاني
-            if target2 and entry_price and target2 != entry_price and pip_size > 0:
-                price_diff2 = abs(target2 - entry_price)
-                points2 = price_diff2 / pip_size
-                logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط={points2:.1f}")
-                
-            # حساب النقاط لوقف الخسارة
-            if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
-                price_diff_stop = abs(entry_price - stop_loss)
-                stop_points = price_diff_stop / pip_size
-                logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط={stop_points:.1f}")
-                
-            logger.info(f"[POINTS] النقاط المحسوبة للرمز {symbol}: Target1={points1:.1f}, Target2={points2:.1f}, Stop={stop_points:.1f}")
+                # حساب النقاط للهدف الأول
+                if target1 and entry_price and target1 != entry_price and pip_size > 0:
+                    price_diff1 = abs(target1 - entry_price)
+                    points1 = min(price_diff1 / pip_size, 999)  # حد أقصى 999
+                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط={points1:.0f}")
+                    
+                # حساب النقاط للهدف الثاني
+                if target2 and entry_price and target2 != entry_price and pip_size > 0:
+                    price_diff2 = abs(target2 - entry_price)
+                    points2 = min(price_diff2 / pip_size, 999)  # حد أقصى 999
+                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط={points2:.0f}")
+                    
+                # حساب النقاط لوقف الخسارة
+                if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
+                    price_diff_stop = abs(entry_price - stop_loss)
+                    stop_points = min(price_diff_stop / pip_size, 999)  # حد أقصى 999
+                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط={stop_points:.0f}")
+                    
+                logger.info(f"[MANUAL_POINTS] النقاط المحسوبة يدوياً للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
+            
+            except Exception as e:
+                logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
             
         except Exception as e:
             logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
@@ -987,10 +1005,10 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         
         # معلومات الصفقة
         body += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-        body += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.1f} نقطة)\n"
+        body += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
         if target2:
-            body += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.1f} نقطة)\n"
-        body += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.1f} نقطة)\n"
+            body += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
+        body += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
         body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
         body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
         
@@ -2933,6 +2951,9 @@ class GeminiAnalyzer:
             # تحميل الأنماط المتعلمة من الصور
             learned_patterns = self._load_learned_patterns()
             
+            # حساب معلومات النقاط للرمز
+            asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+            
             # إنشاء prompt للتحليل المتقدم مع المؤشرات الفنية
             prompt = f"""
             أنت محلل مالي خبير متخصص في التداول اللحظي. قم بتحليل البيانات اللحظية التالية للرمز {symbol}:
@@ -2946,6 +2967,11 @@ class GeminiAnalyzer:
             - الفرق (Spread): {spread}
             - مصدر البيانات: {data_source}
             - الوقت: {price_data.get('time', 'الآن')}
+            
+            ⚠️ معلومات مهمة عن النقاط للرمز {symbol}:
+            - نوع الرمز: {asset_type}
+            - حجم النقطة: {pip_size}
+            - قاعدة الحساب: 1 نقطة = {pip_size} من التغير في السعر
             {technical_analysis}
             {crossover_history_context}
             {symbol_type_context}
@@ -3140,8 +3166,32 @@ class GeminiAnalyzer:
             1. **التحليل التفصيلي:** اعرض نقاط كل مؤشر وتبريرك بناءً على إشارات واضحة
             2. **حساب النسبة خطوة بخطوة:** أظهر العملية الحسابية الكاملة والشفافة
             3. **التوصية المحددة:** حدد نوع الصفقة (شراء/بيع)، نقطة الدخول المثلى، الأهداف (TP1/TP2)، وقف الخسارة (SL)
-            4. **تقييم نسبة العائد/المخاطرة:** احسب Risk/Reward Ratio بدقة
-            5. **إدارة المخاطر المتقدمة:** اقترح حجم الصفقة (Lot Size) وحساب الخسارة المحتملة بالنقاط
+            4. **⚠️ CRITICAL - حساب النقاط والأهداف (إجباري):**
+            
+            **معلومات مهمة عن النقاط للرمز {symbol}:**
+            - نوع الرمز: {asset_type}
+            - حجم النقطة: {pip_size}
+            - السعر الحالي: {current_price}
+            
+            **قواعد حساب النقاط (يجب الالتزام بها):**
+            - 1 نقطة = حجم النقطة المحدد أعلاه من التغير في السعر
+            - الحد الأقصى للنقاط: 999 نقطة (3 خانات فقط)
+            - الحد الأدنى للنقاط: 1 نقطة
+            
+            **يجب حساب وذكر الآتي بوضوح:**
+            - سعر الدخول المقترح: [رقم بـ 5 خانات عشرية]
+            - الهدف الأول (TP1): [رقم بـ 5 خانات عشرية] ([النقاط المحسوبة] نقطة)
+            - الهدف الثاني (TP2): [رقم بـ 5 خانات عشرية] ([النقاط المحسوبة] نقطة) 
+            - وقف الخسارة (SL): [رقم بـ 5 خانات عشرية] ([النقاط المحسوبة] نقطة)
+            
+            **مثال على التنسيق المطلوب:**
+            - سعر الدخول: 1.08450
+            - TP1: 1.08580 (13 نقطة)
+            - TP2: 1.08750 (30 نقطة)
+            - SL: 1.08320 (13 نقطة)
+            
+            5. **تقييم نسبة العائد/المخاطرة:** احسب Risk/Reward Ratio بدقة
+            6. **إدارة المخاطر المتقدمة:** اقترح حجم الصفقة (Lot Size) وحساب الخسارة المحتملة بالدولار
             6. **تحليل التباين:** لا تتجاهل التباين بين المؤشرات (مثلاً: تقاطع سلبي في MACD مع RSI صاعد)
             
             7. **⚠️ CRITICAL - نسبة النجاح المحسوبة بناءً على تحليلك (0-100%):**
@@ -3285,32 +3335,67 @@ class GeminiAnalyzer:
                                     except Exception:
                                         pass
                     return None
+                def _find_price_with_points(patterns):
+                    """استخراج السعر والنقاط معاً"""
+                    for p in patterns:
+                        m = re.search(p, analysis_text, re.IGNORECASE | re.UNICODE)
+                        if m:
+                            try:
+                                price = float(m.group(1))
+                                points = float(m.group(2)) if len(m.groups()) > 1 else None
+                                return price, points
+                            except Exception:
+                                pass
+                    return None, None
+                
+                # استخراج سعر الدخول
                 entry_price_ai = _find_number([
-                    r'(?:نقطة|سعر)\s*الدخول\s*[:：]?\s*([\d\.]+)',
+                    r'سعر\s*الدخول\s*المقترح\s*[:：]\s*([\d\.]+)',
+                    r'سعر\s*الدخول\s*[:：]\s*([\d\.]+)',
                     r'entry\s*(?:price)?\s*[:：]?\s*([\d\.]+)'
                 ])
-                target1_ai = _find_number([
-                    r'(?:TP1|الهدف\s*الأول|Target\s*1|T1)\s*[:：]?\s*([\d\.]+)',
-                    r'هدف\s*أول\s*[:：]?\s*([\d\.]+)',
-                    r'الهدف\s*1\s*[:：]?\s*([\d\.]+)'
+                
+                # استخراج الأهداف مع النقاط
+                target1_ai, target1_points_ai = _find_price_with_points([
+                    r'(?:TP1|الهدف\s*الأول)\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*نقطة\)',
+                    r'(?:TP1|الهدف\s*الأول)\s*[:：]\s*([\d\.]+)',
+                    r'هدف\s*أول\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*نقطة\)',
+                    r'Target\s*1\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*(?:points?|نقطة)\)'
                 ])
-                target2_ai = _find_number([
-                    r'(?:TP2|الهدف\s*الثاني|Target\s*2|T2)\s*[:：]?\s*([\d\.]+)',
-                    r'هدف\s*ثاني\s*[:：]?\s*([\d\.]+)',
-                    r'الهدف\s*2\s*[:：]?\s*([\d\.]+)'
+                
+                target2_ai, target2_points_ai = _find_price_with_points([
+                    r'(?:TP2|الهدف\s*الثاني)\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*نقطة\)',
+                    r'(?:TP2|الهدف\s*الثاني)\s*[:：]\s*([\d\.]+)',
+                    r'هدف\s*ثاني\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*نقطة\)',
+                    r'Target\s*2\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*(?:points?|نقطة)\)'
                 ])
-                stop_loss_ai = _find_number([
-                    r'(?:SL|وقف\s*الخسارة|Stop\s*Loss)\s*[:：]?\s*([\d\.]+)',
-                    r'إيقاف\s*الخسارة\s*[:：]?\s*([\d\.]+)',
-                    r'وقف\s*خسارة\s*[:：]?\s*([\d\.]+)'
+                
+                # استخراج وقف الخسارة مع النقاط
+                stop_loss_ai, stop_points_ai = _find_price_with_points([
+                    r'(?:SL|وقف\s*الخسارة)\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*نقطة\)',
+                    r'(?:SL|وقف\s*الخسارة)\s*[:：]\s*([\d\.]+)',
+                    r'Stop\s*Loss\s*[:：]\s*([\d\.]+)\s*\((\d+)\s*(?:points?|نقطة)\)'
                 ])
+                
                 risk_reward_ai = _find_number([
                     r'(?:RR|R\s*/\s*R|Risk\s*/\s*Reward|نسبة\s*المخاطرة\s*/\s*المكافأة)\s*[:：]?\s*1\s*[:：]\s*([\d\.]+)',
                     r'(?:RR|Risk\s*/\s*Reward|نسبة\s*المخاطرة\s*/\s*المكافأة)\s*[:：]?\s*([\d\.]+)'
                 ])
+                
+                # تطبيق حد أقصى 3 خانات للنقاط
+                if target1_points_ai and target1_points_ai > 999:
+                    target1_points_ai = 999
+                if target2_points_ai and target2_points_ai > 999:
+                    target2_points_ai = 999  
+                if stop_points_ai and stop_points_ai > 999:
+                    stop_points_ai = 999
+                
+                # تسجيل النتائج المستخرجة
+                logger.info(f"[AI_EXTRACT] {symbol}: Entry={entry_price_ai}, TP1={target1_ai}({target1_points_ai}), TP2={target2_ai}({target2_points_ai}), SL={stop_loss_ai}({stop_points_ai})")
             except Exception as _ai_parse_e:
                 logger.debug(f"[AI_PARSE] فشل استخراج القيم العددية من AI: {_ai_parse_e}")
                 entry_price_ai = target1_ai = target2_ai = stop_loss_ai = risk_reward_ai = None
+                target1_points_ai = target2_points_ai = stop_points_ai = None
             
             # تسجيل تفاصيل لتتبع نسبة النجاح المستخرجة
             logger.info(f"[AI_ANALYSIS] {symbol}: التوصية={recommendation}, نسبة النجاح={confidence}")
@@ -3331,7 +3416,11 @@ class GeminiAnalyzer:
                 'target1': target1_ai,
                 'target2': target2_ai,
                 'stop_loss': stop_loss_ai,
-                'risk_reward_ratio': risk_reward_ai
+                'risk_reward_ratio': risk_reward_ai,
+                'target1_points': target1_points_ai,
+                'target2_points': target2_points_ai,
+                'stop_points': stop_points_ai,
+                'ai_calculated': True  # إشارة أن النقاط محسوبة من AI
             }
             
         except Exception as e:
@@ -4102,9 +4191,9 @@ class GeminiAnalyzer:
                 message += f"🟡 نوع الصفقة: انتظار (HOLD)\n"
             
             message += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-            message += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.1f} نقطة)\n"
-            message += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.1f} نقطة)\n"
-            message += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.1f} نقطة)\n"
+            message += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
+            message += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
+            message += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
             message += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
             message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
             
