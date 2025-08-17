@@ -110,6 +110,52 @@ class EmbeddedTradingBot:
             self.logger.error(f"Error getting users count: {e}")
             return 0
     
+    def get_users_details(self):
+        """Get detailed information about all users"""
+        try:
+            users_details = []
+            user_files = glob.glob(os.path.join(USERS_DIR, "user_*.json"))
+            
+            for user_file in user_files:
+                try:
+                    with open(user_file, 'r', encoding='utf-8') as f:
+                        user_data = json.load(f)
+                        
+                    # Extract user ID from filename
+                    user_id = os.path.basename(user_file).replace('user_', '').replace('.json', '')
+                    
+                    # Get user details
+                    username = user_data.get('username', 'غير محدد')
+                    first_name = user_data.get('first_name', 'غير محدد')
+                    last_name = user_data.get('last_name', '')
+                    full_name = f"{first_name} {last_name}".strip()
+                    
+                    # Get additional info
+                    registration_date = user_data.get('registration_date', 'غير محدد')
+                    last_activity = user_data.get('last_activity', 'غير محدد')
+                    trading_mode = user_data.get('trading_mode', 'غير محدد')
+                    
+                    users_details.append({
+                        'user_id': user_id,
+                        'username': username,
+                        'full_name': full_name,
+                        'registration_date': registration_date,
+                        'last_activity': last_activity,
+                        'trading_mode': trading_mode
+                    })
+                    
+                except Exception as e:
+                    self.logger.error(f"Error reading user file {user_file}: {e}")
+                    continue
+            
+            # Sort by user ID
+            users_details.sort(key=lambda x: int(x['user_id']) if x['user_id'].isdigit() else 0)
+            return users_details
+            
+        except Exception as e:
+            self.logger.error(f"Error getting users details: {e}")
+            return []
+    
     def load_user_data(self, user_id):
         """Load user data from JSON file (original system)"""
         try:
@@ -432,6 +478,17 @@ class TradingBotUI:
         )
         header_label.pack(side=tk.LEFT)
         
+        # Users details button
+        users_details_button = tk.Button(
+            header_frame,
+            text="📋 Users Details",
+            font=("Arial", 9, "bold"),
+            bg='#4a4a4a',  # Dark gray
+            fg='#ffffff',  # White text
+            command=self.show_users_details_window
+        )
+        users_details_button.pack(side=tk.RIGHT, padx=5)
+        
         # Users count button
         self.users_count_button = tk.Button(
             header_frame,
@@ -441,7 +498,7 @@ class TradingBotUI:
             fg='#ff0000',  # Red text
             command=self.show_users_count_window
         )
-        self.users_count_button.pack(side=tk.RIGHT, padx=10)
+        self.users_count_button.pack(side=tk.RIGHT, padx=5)
         
         # Logout button
         logout_button = tk.Button(
@@ -613,6 +670,197 @@ class TradingBotUI:
                 self.users_count_window.after(5000, refresh_count)
         
         refresh_count()
+    
+    def show_users_details_window(self):
+        """Show detailed users information in a separate window"""
+        try:
+            # Create users details window
+            details_window = tk.Toplevel(self.root)
+            details_window.title("📋 Users Details")
+            details_window.geometry("900x600")
+            details_window.configure(bg='#2b2b2b')
+            
+            # Center the window
+            details_window.transient(self.root)
+            details_window.grab_set()
+            
+            # Main frame with scrollbar
+            main_frame = tk.Frame(details_window, bg='#2b2b2b')
+            main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            
+            # Title label
+            title_label = tk.Label(
+                main_frame,
+                text="📋 Users Details",
+                font=("Arial", 16, "bold"),
+                fg='#ffffff',
+                bg='#2b2b2b'
+            )
+            title_label.pack(pady=10)
+            
+            # Create Treeview for users data
+            columns = ('ID', 'Username', 'Full Name', 'Trading Mode', 'Registration', 'Last Activity')
+            tree_frame = tk.Frame(main_frame, bg='#2b2b2b')
+            tree_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+            
+            # Create Treeview with scrollbars
+            tree_scroll_y = ttk.Scrollbar(tree_frame)
+            tree_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            tree_scroll_x = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL)
+            tree_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+            
+            users_tree = ttk.Treeview(
+                tree_frame,
+                columns=columns,
+                show='headings',
+                yscrollcommand=tree_scroll_y.set,
+                xscrollcommand=tree_scroll_x.set
+            )
+            
+            tree_scroll_y.config(command=users_tree.yview)
+            tree_scroll_x.config(command=users_tree.xview)
+            
+            # Configure column headings and widths
+            users_tree.heading('ID', text='User ID')
+            users_tree.heading('Username', text='Username')
+            users_tree.heading('Full Name', text='Full Name')
+            users_tree.heading('Trading Mode', text='Trading Mode')
+            users_tree.heading('Registration', text='Registration Date')
+            users_tree.heading('Last Activity', text='Last Activity')
+            
+            users_tree.column('ID', width=100, minwidth=80)
+            users_tree.column('Username', width=120, minwidth=100)
+            users_tree.column('Full Name', width=150, minwidth=120)
+            users_tree.column('Trading Mode', width=120, minwidth=100)
+            users_tree.column('Registration', width=150, minwidth=120)
+            users_tree.column('Last Activity', width=150, minwidth=120)
+            
+            users_tree.pack(fill=tk.BOTH, expand=True)
+            
+            # Get users details and populate tree
+            users_details = self.embedded_bot.get_users_details()
+            
+            for user in users_details:
+                users_tree.insert('', tk.END, values=(
+                    user['user_id'],
+                    user['username'],
+                    user['full_name'],
+                    user['trading_mode'],
+                    user['registration_date'][:10] if len(user['registration_date']) > 10 else user['registration_date'],
+                    user['last_activity'][:10] if len(user['last_activity']) > 10 else user['last_activity']
+                ))
+            
+            # Status label
+            status_label = tk.Label(
+                main_frame,
+                text=f"Total Users: {len(users_details)}",
+                font=("Arial", 12, "bold"),
+                fg='#00ff00',
+                bg='#2b2b2b'
+            )
+            status_label.pack(pady=5)
+            
+            # Buttons frame
+            buttons_frame = tk.Frame(main_frame, bg='#2b2b2b')
+            buttons_frame.pack(pady=10)
+            
+            # Refresh button
+            refresh_button = tk.Button(
+                buttons_frame,
+                text="🔄 Refresh",
+                font=("Arial", 10, "bold"),
+                bg='#4CAF50',
+                fg='white',
+                command=lambda: self.refresh_users_tree(users_tree, status_label)
+            )
+            refresh_button.pack(side=tk.LEFT, padx=5)
+            
+            # Export button
+            export_button = tk.Button(
+                buttons_frame,
+                text="📤 Export CSV",
+                font=("Arial", 10, "bold"),
+                bg='#2196F3',
+                fg='white',
+                command=lambda: self.export_users_data(users_details)
+            )
+            export_button.pack(side=tk.LEFT, padx=5)
+            
+            # Close button
+            close_button = tk.Button(
+                buttons_frame,
+                text="❌ Close",
+                font=("Arial", 10, "bold"),
+                bg='#f44336',
+                fg='white',
+                command=details_window.destroy
+            )
+            close_button.pack(side=tk.LEFT, padx=5)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to show users details: {str(e)}")
+    
+    def refresh_users_tree(self, tree, status_label):
+        """Refresh users tree with latest data"""
+        try:
+            # Clear existing items
+            for item in tree.get_children():
+                tree.delete(item)
+            
+            # Get fresh data
+            users_details = self.embedded_bot.get_users_details()
+            
+            # Populate tree
+            for user in users_details:
+                tree.insert('', tk.END, values=(
+                    user['user_id'],
+                    user['username'],
+                    user['full_name'],
+                    user['trading_mode'],
+                    user['registration_date'][:10] if len(user['registration_date']) > 10 else user['registration_date'],
+                    user['last_activity'][:10] if len(user['last_activity']) > 10 else user['last_activity']
+                ))
+            
+            # Update status
+            status_label.config(text=f"Total Users: {len(users_details)}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to refresh data: {str(e)}")
+    
+    def export_users_data(self, users_details):
+        """Export users data to CSV file"""
+        try:
+            import csv
+            from tkinter import filedialog
+            
+            # Ask for save location
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                title="Save Users Data"
+            )
+            
+            if filename:
+                with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['User ID', 'Username', 'Full Name', 'Trading Mode', 'Registration Date', 'Last Activity']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    
+                    writer.writeheader()
+                    for user in users_details:
+                        writer.writerow({
+                            'User ID': user['user_id'],
+                            'Username': user['username'],
+                            'Full Name': user['full_name'],
+                            'Trading Mode': user['trading_mode'],
+                            'Registration Date': user['registration_date'],
+                            'Last Activity': user['last_activity']
+                        })
+                
+                messagebox.showinfo("Success", f"Users data exported to: {filename}")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export data: {str(e)}")
     
     def show_login(self):
         """Show login interface"""
