@@ -3541,10 +3541,25 @@ class GeminiAnalyzer:
             # بناء الـ prompt الشامل (نفس ما في الوضع اليدوي)
             current_price = price_data.get('last', price_data.get('bid', 0))
             spread = price_data.get('spread', 0)
+            data_source = price_data.get('source', 'Unknown')
+            
+            # جلب البيانات التاريخية للتقاطعات (نفس ما في الوضع اليدوي)
+            crossover_patterns = crossover_tracker.analyze_crossover_patterns(symbol)
+            recent_crossovers = crossover_tracker.get_recent_crossovers(symbol, hours=48)
+            
+            # بناء سياق التقاطعات
+            crossover_history_context = self._build_crossover_context(symbol, recent_crossovers, crossover_patterns)
+            
+            # تحديد نوع الرمز وخصائصه (نفس ما في الوضع اليدوي)
+            symbol_type_context = self._build_symbol_context(symbol)
+            
+            # إضافة السياق الزمني والسوقي
+            market_context = self._build_market_context(timezone_str)
             
             # استخدام نفس التعليمات المفصلة من الوضع اليدوي
             comprehensive_prompt = self._build_comprehensive_analysis_prompt(
-                symbol, current_price, spread, indicators_text, trading_mode, capital, timezone_str
+                symbol, current_price, spread, indicators_text, trading_mode, capital, timezone_str,
+                crossover_history_context, symbol_type_context, market_context, data_source
             )
             
             # إرسال للـ AI
@@ -3562,7 +3577,9 @@ class GeminiAnalyzer:
             return None
 
     def _build_comprehensive_analysis_prompt(self, symbol: str, current_price: float, spread: float, 
-                                           indicators_text: str, trading_mode: str, capital: float, timezone_str: str) -> str:
+                                           indicators_text: str, trading_mode: str, capital: float, timezone_str: str,
+                                           crossover_context: str = "", symbol_context: str = "", 
+                                           market_context: str = "", data_source: str = "Unknown") -> str:
         """بناء prompt شامل بنفس تعليمات الوضع اليدوي"""
         
         # استخدام نفس التعليمات المفصلة من الوضع اليدوي
@@ -3573,6 +3590,7 @@ class GeminiAnalyzer:
         - الرمز: {symbol}
         - السعر الحالي: {current_price:,.5f}
         - السبريد: {spread} نقطة
+        - مصدر البيانات: {data_source}
         - نمط التداول: {trading_mode}
         - رأس المال: ${capital:,.0f}
         - المنطقة الزمنية: {timezone_str}
@@ -3580,16 +3598,23 @@ class GeminiAnalyzer:
         **المؤشرات الفنية:**
         {indicators_text}
 
+        {crossover_context}
+
+        {symbol_context}
+
+        {market_context}
+
         **التعليمات الشاملة (نفس الوضع اليدوي):**
         
         {self._get_comprehensive_instructions()}
 
         **⚠️ مطلوب منك:**
-        1. تحليل شامل ومفصل
-        2. توصية واضحة (شراء/بيع/انتظار)
-        3. نسبة نجاح محسوبة بدقة (0-100%)
-        4. مستويات دخول وأهداف ووقف خسارة
-        5. تبرير مفصل للقرار
+        1. تحليل شامل ومفصل يشمل جميع العوامل المذكورة أعلاه
+        2. توصية واضحة (شراء/بيع/انتظار) مع التبرير
+        3. نسبة نجاح محسوبة بدقة (0-100%) بناءً على قوة الإشارات
+        4. مستويات دخول وأهداف ووقف خسارة محسوبة بدقة
+        5. تحليل المخاطر وإدارة رأس المال
+        6. اعتبار جميع العوامل: التقاطعات، نوع الرمز، السياق السوقي
 
         **تذكر:** يجب أن تنهي تحليلك بـ:
         "نسبة نجاح الصفقة: X%"
@@ -3597,6 +3622,93 @@ class GeminiAnalyzer:
         """
         
         return prompt
+
+    def _build_crossover_context(self, symbol: str, recent_crossovers: list, crossover_patterns: dict) -> str:
+        """بناء سياق التقاطعات للتحليل الشامل"""
+        if not recent_crossovers:
+            return ""
+        
+        crossover_history_context = f"""
+        📊 سجل التقاطعات الحديثة للرمز {symbol} (آخر 48 ساعة):
+        """
+        
+        for i, crossover in enumerate(recent_crossovers[:5]):  # أحدث 5 تقاطعات
+            crossover_time = datetime.fromisoformat(crossover['timestamp']).strftime('%Y-%m-%d %H:%M')
+            crossover_history_context += f"""
+        - {crossover_time}: {crossover['type']} عند سعر {crossover['price_at_crossover']:.5f}"""
+        
+        crossover_history_context += f"""
+        
+        🔍 تحليل أنماط التقاطعات:
+        - عدد التقاطعات الحديثة: {crossover_patterns.get('recent_count', 0)}
+        - النمط السائد: {crossover_patterns.get('dominant_type', 'غير محدد')}
+        - قوة النمط: {crossover_patterns.get('pattern_strength', 0):.2f}
+        """
+        
+        return crossover_history_context
+
+    def _build_symbol_context(self, symbol: str) -> str:
+        """بناء سياق خاص بنوع الرمز"""
+        symbol_type_context = ""
+        
+        if symbol.endswith('USD'):
+            if symbol.startswith('EUR') or symbol.startswith('GBP'):
+                symbol_type_context = """
+                **سياق خاص بأزواج العملات الرئيسية:**
+                - هذا زوج عملات رئيسي بسيولة عالية وتقلبات معتدلة
+                - تأثر قوي بقرارات البنوك المركزية (Fed, ECB, BoE)
+                - ساعات التداول النشطة: London + New York overlap
+                - عوامل مؤثرة: معدلات الفائدة، التضخم، GDP، البطالة
+                - نسبة النجاح المتوقعة أعلى بسبب قابلية التنبؤ النسبية
+                """
+            elif symbol.startswith('XAU') or symbol.startswith('XAG'):
+                symbol_type_context = """
+                **سياق خاص بالمعادن النفيسة:**
+                - الذهب/الفضة أصول ملاذ آمن مع تقلبات متوسطة إلى عالية
+                - تأثر قوي بالأحداث الجيوسياسية والتضخم
+                - علاقة عكسية مع الدولار الأمريكي عادة
+                - عوامل مؤثرة: التضخم، أسعار الفائدة، الأزمات العالمية
+                - كن حذراً من التحركات المفاجئة خلال الأخبار المهمة
+                """
+            else:
+                symbol_type_context = """
+                **سياق خاص بأزواج العملات الثانوية:**
+                - تقلبات أعلى وسيولة أقل من الأزواج الرئيسية
+                - تأثر بعوامل محلية واقتصادية خاصة
+                - spread أعلى عادة - راعي هذا في حساب المخاطر
+                - كن أكثر حذراً في التوقعات
+                """
+        
+        return symbol_type_context
+
+    def _build_market_context(self, timezone_str: str) -> str:
+        """بناء السياق السوقي والزمني"""
+        current_time = datetime.now()
+        
+        market_context = f"""
+        **السياق السوقي والزمني:**
+        - الوقت الحالي: {current_time.strftime('%Y-%m-%d %H:%M:%S')} ({timezone_str})
+        - يوم الأسبوع: {current_time.strftime('%A')}
+        """
+        
+        # تحديد جلسة التداول النشطة
+        hour = current_time.hour
+        if 0 <= hour < 8:
+            market_context += "\n        - الجلسة النشطة: الأسواق الآسيوية (تقلبات معتدلة)"
+        elif 8 <= hour < 16:
+            market_context += "\n        - الجلسة النشطة: الأسواق الأوروبية (سيولة عالية)"
+        elif 16 <= hour < 24:
+            market_context += "\n        - الجلسة النشطة: الأسواق الأمريكية (تقلبات عالية)"
+        
+        # تحذيرات خاصة بالوقت
+        if current_time.weekday() == 4 and hour >= 20:  # الجمعة مساءً
+            market_context += "\n        ⚠️ تحذير: قرب إغلاق الأسواق الأسبوعي - تقلبات منخفضة متوقعة"
+        elif current_time.weekday() == 6:  # السبت
+            market_context += "\n        ⚠️ تحذير: الأسواق مغلقة (السبت) - بيانات محدودة"
+        elif current_time.weekday() == 0 and hour < 8:  # الاثنين فجراً
+            market_context += "\n        ⚠️ تحذير: بداية الأسبوع - احتمالية فجوات سعرية"
+        
+        return market_context
 
     def _get_comprehensive_instructions(self) -> str:
         """الحصول على نفس التعليمات المفصلة المستخدمة في الوضع اليدوي"""
@@ -3682,6 +3794,81 @@ class GeminiAnalyzer:
         حيث X هو الرقم الذي حسبته بناءً على المؤشرات الفنية المتاحة.
         
         **هذا إلزامي ولا يمكن تجاهله! بدون هاتين الجملتين لن يعمل النظام!**
+        """
+
+    def _format_technical_indicators(self, technical_data: Dict, symbol: str) -> str:
+        """تنسيق المؤشرات الفنية للعرض في التحليل الشامل"""
+        if not technical_data or not technical_data.get('indicators'):
+            return f"""
+            ⚠️ المؤشرات الفنية: غير متوفرة من MT5 - الاعتماد على السعر اللحظي فقط
+            - حالة الاتصال: MT5 غير متصل أو بيانات غير كافية
+            
+            🔴 تنبيه: التحليل محدود بسبب عدم توفر البيانات اللحظية الكاملة
+            """
+        
+        indicators = technical_data['indicators']
+        
+        return f"""
+        🎯 المؤشرات الفنية اللحظية المتقدمة (محسوبة من أحدث البيانات اللحظية M1 + السعر الحالي):
+        
+        ⏰ حالة البيانات اللحظية:
+        - نوع البيانات: {indicators.get('data_freshness', 'غير محدد')}
+        - آخر تحديث: {indicators.get('last_update', 'غير محدد')}
+        - Bid: {indicators.get('tick_info', {}).get('bid', 0):.5f}
+        - Ask: {indicators.get('tick_info', {}).get('ask', 0):.5f}
+        - Spread: {indicators.get('tick_info', {}).get('spread', 0):.5f}
+        - Volume: {indicators.get('tick_info', {}).get('volume', 0)}
+        
+        📈 المتوسطات المتحركة والتقاطعات:
+        - MA 9: {indicators.get('ma_9', 0):.5f}
+        - MA 10: {indicators.get('ma_10', 0):.5f}
+        - MA 20: {indicators.get('ma_20', 0):.5f}
+        - MA 21: {indicators.get('ma_21', 0):.5f}
+        - MA 50: {indicators.get('ma_50', 0):.5f}
+        - تقاطع MA9/MA21: {indicators.get('ma_9_21_crossover', 'لا يوجد')}
+        - تقاطع MA10/MA20: {indicators.get('ma_10_20_crossover', 'لا يوجد')}
+        - تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
+        
+        📊 مؤشرات الزخم:
+        - RSI: {indicators.get('rsi', 50):.2f} ({indicators.get('rsi_interpretation', 'غير محدد')})
+        - MACD: {indicators.get('macd', {}).get('macd', 0):.5f}
+        - MACD Signal: {indicators.get('macd', {}).get('signal', 0):.5f}
+        - MACD Histogram: {indicators.get('macd', {}).get('histogram', 0):.5f}
+        - تفسير MACD: {indicators.get('macd_interpretation', 'غير محدد')}
+        
+        🎢 Stochastic Oscillator المتقدم:
+        - %K: {indicators.get('stochastic', {}).get('k', 50):.2f}
+        - %D: {indicators.get('stochastic', {}).get('d', 50):.2f}
+        - تقاطع Stochastic: {indicators.get('stochastic', {}).get('crossover', 'لا يوجد')}
+        - منطقة التداول: {indicators.get('stochastic', {}).get('zone', 'غير محدد')}
+        - قوة الإشارة: {indicators.get('stochastic', {}).get('strength', 'غير محدد')}
+        - اتجاه Stochastic: {indicators.get('stochastic', {}).get('trend', 'غير محدد')}
+        - تفسير Stochastic: {indicators.get('stochastic_interpretation', 'غير محدد')}
+        
+        📊 تحليل حجم التداول المتقدم:
+        - الحجم الحالي: {indicators.get('current_volume', 0)}
+        - متوسط الحجم: {indicators.get('avg_volume', 0)}
+        - نسبة الحجم: {indicators.get('volume_ratio', 1):.2f}
+        - VMA 9: {indicators.get('volume_ma_9', 0):.0f}
+        - VMA 21: {indicators.get('volume_ma_21', 0):.0f}
+        - Volume ROC: {indicators.get('volume_roc', 0):.2f}%
+        - قوة الحجم: {indicators.get('volume_strength', 'غير محدد')}
+        - تفسير الحجم: {indicators.get('volume_interpretation', 'غير محدد')}
+        
+        📍 مستويات الدعم والمقاومة:
+        - مقاومة: {indicators.get('resistance', 0):.5f}
+        - دعم: {indicators.get('support', 0):.5f}
+        - Bollinger Upper: {indicators.get('bollinger', {}).get('upper', 0):.5f}
+        - Bollinger Middle: {indicators.get('bollinger', {}).get('middle', 0):.5f}
+        - Bollinger Lower: {indicators.get('bollinger', {}).get('lower', 0):.5f}
+        - تفسير Bollinger: {indicators.get('bollinger_interpretation', 'غير محدد')}
+        
+        🎯 ملخص التحليل المتقدم:
+        - الاتجاه العام: {indicators.get('overall_trend', 'غير محدد')}
+        - قوة الاتجاه: {indicators.get('trend_strength', 0.5):.2f}
+        - ملخص التقاطعات: {indicators.get('crossover_summary', 'لا توجد')}
+        - تغيير السعر %: {indicators.get('price_change_pct', 0):.2f}%
+        - السعر الحالي: {indicators.get('current_price', 0):.5f}
         """
 
     def analyze_market_data_with_retry(self, symbol: str, price_data: Dict, user_id: int = None, market_data: pd.DataFrame = None, max_retries: int = 3) -> Dict:
