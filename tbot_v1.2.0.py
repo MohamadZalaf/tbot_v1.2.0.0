@@ -3561,6 +3561,89 @@ class GeminiAnalyzer:
             logger.error(f"[AUTO_FULL_ANALYSIS_ERROR] خطأ في التحليل الشامل للرمز {symbol}: {e}")
             return None
 
+    def _format_technical_indicators(self, technical_data: Dict, symbol: str) -> str:
+        """تنسيق المؤشرات الفنية للعرض في التحليل الشامل"""
+        try:
+            if not technical_data or not technical_data.get('indicators'):
+                return f"""
+                ⚠️ المؤشرات الفنية: غير متوفرة من MT5 - الاعتماد على السعر اللحظي فقط
+                - حالة الاتصال: MT5 غير متصل أو بيانات غير كافية
+                🔴 تنبيه: التحليل محدود بسبب عدم توفر البيانات اللحظية الكاملة
+                """
+            
+            indicators = technical_data['indicators']
+            
+            # تنسيق شامل للمؤشرات الفنية
+            formatted_text = f"""
+            
+            🎯 المؤشرات الفنية اللحظية المتقدمة (محسوبة من أحدث البيانات اللحظية M1 + السعر الحالي):
+            
+            ⏰ حالة البيانات اللحظية:
+            - نوع البيانات: {indicators.get('data_freshness', 'غير محدد')}
+            - آخر تحديث: {indicators.get('last_update', 'غير محدد')}
+            - Bid: {indicators.get('tick_info', {}).get('bid', 0) or 0:.5f}
+            - Ask: {indicators.get('tick_info', {}).get('ask', 0) or 0:.5f}
+            - Spread: {indicators.get('tick_info', {}).get('spread', 0) or 0:.5f}
+            - Volume: {indicators.get('tick_info', {}).get('volume', 'غير متوفر')}
+            
+            📈 المتوسطات المتحركة والتقاطعات:
+            - MA 9: {indicators.get('ma_9', 0) or 0:.5f}
+            - MA 10: {indicators.get('ma_10', 0) or 0:.5f}
+            - MA 20: {indicators.get('ma_20', 0) or 0:.5f}
+            - MA 21: {indicators.get('ma_21', 0) or 0:.5f}
+            - MA 50: {indicators.get('ma_50', 0) or 0:.5f}
+            - تقاطع MA9/MA21: {indicators.get('ma_9_21_crossover', 'لا يوجد')}
+            - تقاطع MA10/MA20: {indicators.get('ma_10_20_crossover', 'لا يوجد')}
+            - تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
+            
+            📊 مؤشرات الزخم:
+            - RSI: {indicators.get('rsi', 0) or 0:.2f} ({indicators.get('rsi_interpretation', 'غير محدد')})
+            - MACD: {indicators.get('macd', {}).get('macd', 0) or 0:.5f}
+            - MACD Signal: {indicators.get('macd', {}).get('signal', 0) or 0:.5f}
+            - MACD Histogram: {indicators.get('macd', {}).get('histogram', 0) or 0:.5f}
+            - تفسير MACD: {indicators.get('macd_interpretation', 'غير محدد')}
+            
+            🎢 Stochastic Oscillator المتقدم:
+            - %K: {indicators.get('stochastic', {}).get('k', 0) or 0:.2f}
+            - %D: {indicators.get('stochastic', {}).get('d', 0) or 0:.2f}
+            - تقاطع Stochastic: {indicators.get('stochastic', {}).get('crossover', 'لا يوجد')}
+            - منطقة التداول: {indicators.get('stochastic', {}).get('zone', 'غير محدد')}
+            - قوة الإشارة: {indicators.get('stochastic', {}).get('strength', 'غير محدد')}
+            - اتجاه Stochastic: {indicators.get('stochastic', {}).get('trend', 'غير محدد')}
+            - تفسير Stochastic: {indicators.get('stochastic_interpretation', 'غير محدد')}
+            
+            📊 تحليل حجم التداول المتقدم:
+            - الحجم الحالي: {indicators.get('current_volume', 'غير متوفر')}
+            - متوسط الحجم: {indicators.get('avg_volume', 'غير متوفر')}
+            - نسبة الحجم: {indicators.get('volume_ratio', 0) or 0:.2f}
+            - VMA 9: {indicators.get('volume_ma_9', 0) or 0:.0f}
+            - VMA 21: {indicators.get('volume_ma_21', 0) or 0:.0f}
+            - Volume ROC: {indicators.get('volume_roc', 0) or 0:.2f}%
+            - قوة الحجم: {indicators.get('volume_strength', 'غير محدد')}
+            - تفسير الحجم: {indicators.get('volume_interpretation', 'غير محدد')}
+            
+            📍 مستويات الدعم والمقاومة:
+            - مقاومة: {indicators.get('resistance', 0) or 0:.5f}
+            - دعم: {indicators.get('support', 0) or 0:.5f}
+            - Bollinger Upper: {indicators.get('bollinger', {}).get('upper', 0) or 0:.5f}
+            - Bollinger Middle: {indicators.get('bollinger', {}).get('middle', 0) or 0:.5f}
+            - Bollinger Lower: {indicators.get('bollinger', {}).get('lower', 0) or 0:.5f}
+            - تفسير Bollinger: {indicators.get('bollinger_interpretation', 'غير محدد')}
+            
+            🎯 ملخص التحليل المتقدم:
+            - الاتجاه العام: {indicators.get('overall_trend', 'غير محدد')}
+            - قوة الاتجاه: {indicators.get('trend_strength', 0.5) or 0.5:.2f}
+            - ملخص التقاطعات: {indicators.get('crossover_summary', 'لا توجد')}
+            - تغيير السعر %: {indicators.get('price_change_pct', 0) or 0:.2f}%
+            - السعر الحالي: {indicators.get('current_price', 0) or 0:.5f}
+            """
+            
+            return formatted_text.strip()
+            
+        except Exception as e:
+            logger.error(f"[FORMAT_INDICATORS_ERROR] خطأ في تنسيق المؤشرات الفنية للرمز {symbol}: {e}")
+            return f"⚠️ خطأ في تنسيق المؤشرات الفنية: {e}"
+
     def _build_comprehensive_analysis_prompt(self, symbol: str, current_price: float, spread: float, 
                                            indicators_text: str, trading_mode: str, capital: float, timezone_str: str) -> str:
         """بناء prompt شامل بنفس تعليمات الوضع اليدوي"""
