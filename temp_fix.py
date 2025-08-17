@@ -3710,32 +3710,6 @@ class GeminiAnalyzer:
         
         return market_context
 
-    def _send_to_gemini(self, prompt: str) -> str:
-        """إرسال طلب إلى Gemini AI والحصول على الرد"""
-        try:
-            if not self.model:
-                logger.error("[AI_ERROR] نموذج Gemini غير متوفر")
-                return None
-            
-            # إرسال الطلب إلى Gemini
-            response = self.model.generate_content(prompt)
-            
-            if response and hasattr(response, 'text'):
-                response_text = response.text.strip()
-                if response_text:
-                    logger.debug(f"[AI_SUCCESS] تم الحصول على رد من Gemini ({len(response_text)} حرف)")
-                    return response_text
-                else:
-                    logger.warning("[AI_WARNING] رد فارغ من Gemini")
-                    return None
-            else:
-                logger.warning("[AI_WARNING] لا يوجد نص في رد Gemini")
-                return None
-                
-        except Exception as e:
-            logger.error(f"[AI_ERROR] خطأ في إرسال الطلب إلى Gemini: {e}")
-            return None
-
     def _get_comprehensive_instructions(self) -> str:
         """الحصول على نفس التعليمات المفصلة المستخدمة في الوضع اليدوي"""
         return """
@@ -6632,127 +6606,6 @@ class GeminiAnalyzer:
         with open(training_file, 'w', encoding='utf-8') as f:
             json.dump(all_training_data, f, ensure_ascii=False, indent=2, default=str)
 
-    def _extract_trading_levels(self, analysis_text: str, current_price: float) -> tuple:
-        """استخراج مستويات التداول (دخول، أهداف، وقف خسارة) من نص التحليل"""
-        try:
-            import re
-            
-            # البحث عن أسعار الدخول
-            entry_patterns = [
-                r'سعر\s+الدخول\s*:?\s*(\d+\.?\d*)',
-                r'نقطة\s+الدخول\s*:?\s*(\d+\.?\d*)',
-                r'entry\s*:?\s*(\d+\.?\d*)',
-                r'enter\s+at\s*:?\s*(\d+\.?\d*)'
-            ]
-            
-            # البحث عن الأهداف
-            target_patterns = [
-                r'الهدف\s+الأول\s*:?\s*(\d+\.?\d*)',
-                r'الهدف\s+الثاني\s*:?\s*(\d+\.?\d*)',
-                r'target\s*1\s*:?\s*(\d+\.?\d*)',
-                r'target\s*2\s*:?\s*(\d+\.?\d*)',
-                r'tp1\s*:?\s*(\d+\.?\d*)',
-                r'tp2\s*:?\s*(\d+\.?\d*)'
-            ]
-            
-            # البحث عن وقف الخسارة
-            stop_patterns = [
-                r'وقف\s+الخسارة\s*:?\s*(\d+\.?\d*)',
-                r'stop\s+loss\s*:?\s*(\d+\.?\d*)',
-                r'sl\s*:?\s*(\d+\.?\d*)'
-            ]
-            
-            # استخراج القيم
-            entry_price = current_price  # افتراضي
-            target1 = None
-            target2 = None
-            stop_loss = None
-            
-            # البحث عن سعر الدخول
-            for pattern in entry_patterns:
-                match = re.search(pattern, analysis_text, re.IGNORECASE)
-                if match:
-                    entry_price = float(match.group(1))
-                    break
-            
-            # البحث عن الأهداف
-            for pattern in target_patterns:
-                matches = re.findall(pattern, analysis_text, re.IGNORECASE)
-                if matches:
-                    if 'الأول' in pattern or 'target.*1' in pattern or 'tp1' in pattern:
-                        target1 = float(matches[0])
-                    elif 'الثاني' in pattern or 'target.*2' in pattern or 'tp2' in pattern:
-                        target2 = float(matches[0])
-            
-            # البحث عن وقف الخسارة
-            for pattern in stop_patterns:
-                match = re.search(pattern, analysis_text, re.IGNORECASE)
-                if match:
-                    stop_loss = float(match.group(1))
-                    break
-            
-            # حساب نسبة المخاطرة إلى المكافأة
-            risk_reward = None
-            if target1 and stop_loss and entry_price:
-                if target1 > entry_price:  # صفقة شراء
-                    profit = target1 - entry_price
-                    risk = entry_price - stop_loss
-                elif target1 < entry_price:  # صفقة بيع
-                    profit = entry_price - target1
-                    risk = stop_loss - entry_price
-                else:
-                    profit = risk = 0
-                
-                if risk > 0:
-                    risk_reward = profit / risk
-            
-            logger.debug(f"[LEVELS_EXTRACT] استخراج المستويات: دخول={entry_price}, هدف1={target1}, هدف2={target2}, وقف={stop_loss}, مخاطرة:مكافأة={risk_reward}")
-            return entry_price, target1, target2, stop_loss, risk_reward
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في استخراج مستويات التداول: {e}")
-            return current_price, None, None, None, None
-
-    def _extract_points_from_ai(self, analysis_text: str) -> tuple:
-        """استخراج النقاط من تحليل AI"""
-        try:
-            import re
-            
-            # البحث عن النقاط المحددة
-            points_patterns = [
-                r'الهدف\s+الأول\s*:?\s*\+?(\d+)\s*نقطة',
-                r'الهدف\s+الثاني\s*:?\s*\+?(\d+)\s*نقطة',
-                r'وقف\s+الخسارة\s*:?\s*-?(\d+)\s*نقطة',
-                r'target\s*1\s*:?\s*\+?(\d+)\s*points?',
-                r'target\s*2\s*:?\s*\+?(\d+)\s*points?',
-                r'stop\s*loss\s*:?\s*-?(\d+)\s*points?',
-                r'tp1\s*:?\s*\+?(\d+)\s*pips?',
-                r'tp2\s*:?\s*\+?(\d+)\s*pips?',
-                r'sl\s*:?\s*-?(\d+)\s*pips?'
-            ]
-            
-            target1_points = None
-            target2_points = None
-            stop_points = None
-            
-            for pattern in points_patterns:
-                matches = re.findall(pattern, analysis_text, re.IGNORECASE)
-                if matches:
-                    value = int(matches[0])
-                    if 'الأول' in pattern or 'target.*1' in pattern or 'tp1' in pattern:
-                        target1_points = value
-                    elif 'الثاني' in pattern or 'target.*2' in pattern or 'tp2' in pattern:
-                        target2_points = value
-                    elif 'وقف' in pattern or 'stop' in pattern or 'sl' in pattern:
-                        stop_points = value
-            
-            logger.debug(f"[POINTS_EXTRACT] استخراج النقاط: هدف1={target1_points}, هدف2={target2_points}, وقف={stop_points}")
-            return target1_points, target2_points, stop_points
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في استخراج النقاط: {e}")
-            return None, None, None
-
 # إنشاء مثيل محلل Gemini
 gemini_analyzer = GeminiAnalyzer()
 
@@ -7756,7 +7609,15 @@ def calculate_old_complex_success_rate():
         
         return round(final_score, 1)
         
-
+        
+    except Exception as e:
+        logger.error(f"خطأ في حساب نسبة النجاح الذكية المحسنة: {e}")
+        # في حالة الخطأ، استخدم تحليل AI إذا كان متوفراً
+        if analysis and analysis.get('confidence', 0) > 0:
+            return min(max(analysis.get('confidence', 50), 10), 90)
+        else:
+            # كحل أخير، استخدم تحليل فني بسيط
+            return calculate_basic_technical_success_rate(technical_data, action)
 def get_symbol_historical_performance(symbol: str, action: str) -> Dict:
     """جلب الأداء التاريخي للرمز من تقييمات المستخدمين"""
     try:
