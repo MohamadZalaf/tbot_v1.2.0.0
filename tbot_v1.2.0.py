@@ -3966,13 +3966,15 @@ class GeminiAnalyzer:
             6. **إدارة المخاطر المتقدمة:** اقترح حجم الصفقة (Lot Size) وحساب الخسارة المحتملة بالدولار
             6. **تحليل التباين:** لا تتجاهل التباين بين المؤشرات (مثلاً: تقاطع سلبي في MACD مع RSI صاعد)
             
-            7. **⚠️ CRITICAL - نسبة النجاح المحسوبة بناءً على تحليلك (0-100%):**
+            7.             **⚠️ CRITICAL - نسبة النجاح المحسوبة بناءً على تحليلك (0-100%):**
             - احسب نسبة النجاح الفعلية بناءً على قوة الإشارات المتاحة
             - اجمع نقاط جميع المؤشرات واحسب النسبة النهائية
             - النطاق الكامل: 0% إلى 100% - لا تتردد في استخدام النطاق كاملاً
             - يجب أن تكون النسبة انعكاساً حقيقياً لجودة الإشارات وليس رقماً عشوائياً
             - **اطرح من النسبة إذا كان الـ Spread عالياً:** spread > 3 نقاط (-5%)، spread > 5 نقاط (-10%)
             - **أضف للنسبة إذا كان الـ Spread منخفضاً:** spread < 1 نقطة (+5%)
+            - **تعلم من التقييمات السابقة:** إذا كان لديك تقييمات سلبية كثيرة لهذا الرمز، كن أكثر حذراً (-5 إلى -10%)
+            - **استفد من الخبرة المجتمعية:** إذا كان المجتمع راضي عن تحليلاتك لهذا النوع، يمكن زيادة الثقة (+5%)
             - اكتب بوضوح: "نسبة نجاح الصفقة: X%" حيث X هو الرقم المحسوب من تحليلك
             - إذا كانت الإشارات متضاربة جداً أو معدومة، اكتب نسبة منخفضة (5-35%)
             - إذا كانت جميع المؤشرات متفقة وقوية، اكتب نسبة عالية (75-95%)
@@ -4088,10 +4090,19 @@ class GeminiAnalyzer:
             recommendation = self._extract_recommendation(analysis_text)
             confidence = self._extract_confidence(analysis_text)
             
-            # التحقق من صحة نسبة النجاح - يجب أن تكون من AI فقط
-            if confidence is None or confidence < 0 or confidence > 100:
-                logger.warning(f"[AI_ANALYSIS] نسبة نجاح غير صحيحة من AI: {confidence}")
-                confidence = None  # إشارة للفشل
+            # التحقق المحسن من صحة نسبة النجاح
+            if confidence is None:
+                logger.warning(f"[AI_ANALYSIS] لم يتم العثور على نسبة نجاح في تحليل AI للرمز {symbol}")
+                # بدلاً من استخدام نسبة ثابتة، نستخدم تحليل فني كاحتياط
+                if technical_data and technical_data.get('indicators'):
+                    confidence = calculate_basic_technical_success_rate(technical_data, recommendation)
+                    logger.info(f"[FALLBACK_ANALYSIS] استخدام التحليل الفني الاحتياطي: {confidence}%")
+                else:
+                    logger.error(f"[ANALYSIS_FAILED] فشل كامل في تحليل الرمز {symbol} - لا توجد بيانات كافية")
+                    confidence = None
+            elif confidence < 0 or confidence > 100:
+                logger.warning(f"[AI_ANALYSIS] نسبة نجاح خارج النطاق من AI: {confidence}% - تصحيح")
+                confidence = max(0, min(100, confidence))  # تصحيح النطاق
             
             # استخراج قيم إضافية من رد AI: سعر الدخول/الأهداف/الوقف و R/R
             try:
@@ -4344,126 +4355,210 @@ class GeminiAnalyzer:
             return 'HOLD'
     
     def _extract_confidence(self, text: str) -> float:
-        """استخراج مستوى الثقة من نص التحليل - محسّن"""
+        """استخراج مستوى الثقة المحسن من نص التحليل (بدون نسب ثابتة)"""
         if not text:
-            return 58  # قيمة افتراضية ديناميكية
+            logger.warning("[CONFIDENCE_EXTRACT] نص فارغ - لا يمكن استخراج نسبة الثقة")
+            return None  # لا نسبة افتراضية ثابتة
             
-        # البحث عن نسبة النجاح المحددة من Gemini
+        # البحث عن نسبة النجاح المحددة من Gemini (محسن)
         success_rate = self._extract_success_rate_from_ai(text)
         if success_rate is not None:
+            logger.info(f"[CONFIDENCE_EXTRACT] ✅ تم استخراج نسبة الثقة بنجاح: {success_rate}%")
             return success_rate
         
-        # إذا لم نجد نسبة محددة، نحاول استخراج أي رقم مع علامة %
-        import re
+        # تحليل محسن للنص عند عدم وجود نسبة صريحة
+        logger.info("[CONFIDENCE_EXTRACT] لم توجد نسبة صريحة - بدء التحليل المحسن للنص")
         
-        # البحث عن أي رقم متبوع بعلامة %
-        percentage_matches = re.findall(r'(\d+(?:\.\d+)?)%', text)
-        if percentage_matches:
-            for match in reversed(percentage_matches):  # نبدأ من النهاية
-                try:
-                    confidence = float(match)
-                    if 40 <= confidence <= 95:  # نطاق معقول
-                        return confidence
-                except ValueError:
-                    continue
+        # استخدام التحليل الذكي المطور
+        inferred_rate = self._intelligent_rate_inference(text)
+        if inferred_rate is not None:
+            logger.info(f"[CONFIDENCE_EXTRACT] ✅ استنتاج نسبة الثقة من التحليل الذكي: {inferred_rate}%")
+            return inferred_rate
         
-        # إذا لم نجد أي شيء، نحسب قيمة ديناميكية بناءً على قوة التحليل
-        text_lower = text.lower()
-        
-        # تحليل قوة الإشارات في النص - محسن بنقاط أكثر دقة
-        strong_signals = ['قوي', 'strong', 'واضح', 'clear', 'مؤكد', 'confirmed', 'ممتاز', 'excellent', 'عالي', 'high']
-        weak_signals = ['ضعيف', 'weak', 'غير واضح', 'unclear', 'محتمل', 'possible', 'منخفض', 'low', 'مخاطر', 'risk']
-        positive_signals = ['صاعد', 'bullish', 'شراء', 'buy', 'إيجابي', 'positive', 'فرصة', 'opportunity']
-        negative_signals = ['هابط', 'bearish', 'بيع', 'sell', 'سلبي', 'negative', 'تحذير', 'warning']
-        
-        strong_count = sum(1 for signal in strong_signals if signal in text_lower)
-        weak_count = sum(1 for signal in weak_signals if signal in text_lower)
-        positive_count = sum(1 for signal in positive_signals if signal in text_lower)
-        negative_count = sum(1 for signal in negative_signals if signal in text_lower)
-        
-        # حساب النقاط الإجمالية
-        total_score = strong_count * 15 + positive_count * 10 - weak_count * 10 - negative_count * 5
-        
-        # تحويل النقاط إلى نسبة مئوية (40-85% نطاق واقعي)
-        base_rate = 62  # نقطة بداية متوسطة
-        final_rate = base_rate + total_score
-        
-        # تقييد النطاق
-        return max(35, min(88, final_rate))
+        # إذا فشل التحليل الذكي أيضاً، لا نعيد نسبة ثابتة
+        logger.warning("[CONFIDENCE_EXTRACT] ❌ فشل في استخراج أو استنتاج نسبة الثقة من النص")
+        return None  # إشارة للفشل الكامل
 
     def _extract_success_rate_from_ai(self, text: str) -> float:
-        """استخراج نسبة النجاح المحددة من الذكاء الاصطناعي - محسن لنطاق 0-100%"""
+        """استخراج نسبة النجاح المحسنة من الذكاء الاصطناعي - نطاق 0-100% مع تحسينات ذكية"""
         try:
             import re
             
-            # البحث عن الصيغة الجديدة [success_rate]=x أولاً (أولوية عالية)
+            # البحث عن الصيغة المحددة [success_rate]=x أولاً (أولوية قصوى)
             success_rate_pattern = r'\[success_rate\]\s*=\s*(\d+(?:\.\d+)?)'
             success_rate_match = re.search(success_rate_pattern, text, re.IGNORECASE)
             if success_rate_match:
                 success_rate_value = float(success_rate_match.group(1))
                 if 0 <= success_rate_value <= 100:
-                    logger.info(f"[SUCCESS_RATE_EXTRACT] تم استخراج نسبة النجاح من الكود: {success_rate_value}%")
+                    logger.info(f"[SUCCESS_RATE_EXTRACT] ✅ استخراج نسبة النجاح من الكود المحدد: {success_rate_value}%")
                     return success_rate_value
             
-            # البحث عن الأنماط التقليدية كبديل
-            patterns = [
-                r'نسبة نجاح الصفقة:?\s*(\d+(?:\.\d+)?)%',
-                r'نسبة النجاح:?\s*(\d+(?:\.\d+)?)%',
-                r'احتمالية النجاح:?\s*(\d+(?:\.\d+)?)%',
-                r'معدل النجاح:?\s*(\d+(?:\.\d+)?)%',
-                r'success rate:?\s*(\d+(?:\.\d+)?)%',
-                r'نسبة\s+نجاح\s+(?:الصفقة|التداول):?\s*(\d+(?:\.\d+)?)%',
-                # أنماط إضافية للتأكد من تغطية شاملة
-                r'النسبة:?\s*(\d+(?:\.\d+)?)%',
-                r'التوقع:?\s*(\d+(?:\.\d+)?)%',
-                r'نسبة\s*:\s*(\d+(?:\.\d+)?)%',
-                r'النجاح\s*:\s*(\d+(?:\.\d+)?)%',
-                r'دقة\s+(?:التحليل|التوقع):?\s*(\d+(?:\.\d+)?)%',
-                r'فرصة\s+(?:النجاح|الربح):?\s*(\d+(?:\.\d+)?)%'
+            # البحث عن الأنماط المحسنة والموسعة
+            enhanced_patterns = [
+                # أنماط عربية محسنة
+                r'نسبة\s+نجاح\s+الصفقة\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'نسبة\s+النجاح\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'احتمالية\s+النجاح\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'معدل\s+النجاح\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'نسبة\s+نجاح\s+(?:التداول|الصفقة)\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'دقة\s+(?:التحليل|التوقع|الإشارة)\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'فرصة\s+(?:النجاح|الربح|الإنجاز)\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'توقع\s+النجاح\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'معدل\s+الإنجاز\s*:?\s*(\d+(?:\.\d+)?)%',
+                
+                # أنماط إنجليزية محسنة
+                r'success\s+rate\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'win\s+rate\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'probability\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'confidence\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'accuracy\s*:?\s*(\d+(?:\.\d+)?)%',
+                
+                # أنماط مختصرة
+                r'النسبة\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'التوقع\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'النجاح\s*:?\s*(\d+(?:\.\d+)?)%',
+                r'الثقة\s*:?\s*(\d+(?:\.\d+)?)%'
             ]
             
-            # البحث في النص كاملاً أولاً
-            for pattern in patterns:
+            # البحث المحسن في النص مع ترتيب أولويات
+            found_rates = []
+            
+            for i, pattern in enumerate(enhanced_patterns):
                 matches = re.findall(pattern, text, re.IGNORECASE | re.UNICODE)
                 if matches:
-                    success_rate = float(matches[-1])  # أخذ آخر نتيجة (الأحدث)
-                    # توسيع النطاق المقبول إلى 0-100% كما طلب المستخدم
-                    if 0 <= success_rate <= 100:
-                        logger.info(f"[AI_SUCCESS_EXTRACT] تم استخراج نسبة نجاح من AI: {success_rate}%")
-                        return success_rate
+                    for match in matches:
+                        try:
+                            rate = float(match)
+                            if 0 <= rate <= 100:
+                                # إعطاء أولوية أعلى للأنماط الأكثر تخصصاً
+                                priority = len(enhanced_patterns) - i
+                                found_rates.append((rate, priority, pattern))
+                        except ValueError:
+                            continue
             
-            # البحث عن أرقام في نهاية النص (آخر 300 حرف) - نطاق أوسع
-            text_end = text[-300:].lower()
-            numbers_at_end = re.findall(r'(\d+(?:\.\d+)?)%', text_end)
+            # ترتيب النتائج حسب الأولوية واختيار الأفضل
+            if found_rates:
+                found_rates.sort(key=lambda x: x[1], reverse=True)
+                best_rate = found_rates[0][0]
+                logger.info(f"[AI_SUCCESS_EXTRACT] ✅ استخراج نسبة النجاح المحسنة: {best_rate}% (نمط: {found_rates[0][2]})")
+                return best_rate
             
-            for num_str in reversed(numbers_at_end):  # البدء من النهاية
-                try:
-                    num = float(num_str)
-                    # قبول نطاق أوسع 5-95% لنهاية النص
-                    if 5 <= num <= 95:
-                        logger.info(f"[AI_SUCCESS_EXTRACT] تم استخراج نسبة من نهاية النص: {num}%")
-                        return num
-                except ValueError:
-                    continue
+            # البحث الذكي في نهاية النص مع تحليل السياق
+            text_end = text[-400:].lower()  # زيادة نطاق البحث
             
-            # البحث في منتصف النص عن أي نسبة مئوية معقولة
+            # البحث عن نسب في السياق المناسب
+            contextual_patterns = [
+                r'(?:نسبة|معدل|احتمال|توقع|دقة).*?(\d+(?:\.\d+)?)%',
+                r'(\d+(?:\.\d+)?)%.*?(?:نجاح|ربح|إنجاز|دقة)',
+                r'(?:success|rate|probability|accuracy).*?(\d+(?:\.\d+)?)%'
+            ]
+            
+            for pattern in contextual_patterns:
+                matches = re.findall(pattern, text_end, re.IGNORECASE)
+                if matches:
+                    for match in reversed(matches):  # من النهاية للبداية
+                        try:
+                            rate = float(match)
+                            if 0 <= rate <= 100:
+                                logger.info(f"[AI_SUCCESS_EXTRACT] ✅ استخراج نسبة من السياق: {rate}%")
+                                return rate
+                        except ValueError:
+                            continue
+            
+            # البحث العام عن النسب المئوية مع فلترة ذكية
             all_percentages = re.findall(r'(\d+(?:\.\d+)?)%', text)
-            for percent_str in reversed(all_percentages):  # من النهاية للبداية
+            valid_percentages = []
+            
+            for percent_str in all_percentages:
                 try:
                     percent = float(percent_str)
-                    # قبول النطاق الكامل 0-100% في أي مكان
-                    if 0 <= percent <= 100:
-                        logger.info(f"[AI_SUCCESS_EXTRACT] تم استخراج نسبة عامة: {percent}%")
-                        return percent
+                    # فلترة النسب المنطقية للتداول
+                    if 5 <= percent <= 95:  # نطاق منطقي لنسب النجاح
+                        valid_percentages.append(percent)
                 except ValueError:
                     continue
             
-            # إذا لم نجد شيئاً محدداً، نعيد None لاستخدام الطريقة البديلة
-            logger.debug("[AI_SUCCESS_EXTRACT] لم يتم العثور على نسبة نجاح صريحة في النص")
-            return None
+            # اختيار النسبة الأكثر منطقية
+            if valid_percentages:
+                # تفضيل النسب في النطاق المتوسط (30-80%)
+                preferred = [p for p in valid_percentages if 30 <= p <= 80]
+                if preferred:
+                    best_percentage = preferred[-1]  # آخر نسبة في النطاق المفضل
+                    logger.info(f"[AI_SUCCESS_EXTRACT] ✅ استخراج نسبة مفلترة: {best_percentage}%")
+                    return best_percentage
+                else:
+                    # إذا لم توجد نسب في النطاق المفضل، خذ آخر نسبة صحيحة
+                    best_percentage = valid_percentages[-1]
+                    logger.info(f"[AI_SUCCESS_EXTRACT] ✅ استخراج نسبة عامة محسنة: {best_percentage}%")
+                    return best_percentage
+            
+            # كحل أخير، تحليل ذكي للنص لاستنتاج النسبة
+            return self._intelligent_rate_inference(text)
             
         except Exception as e:
             logger.warning(f"[WARNING] خطأ في استخراج نسبة النجاح من AI: {e}")
+            return None
+    
+    def _intelligent_rate_inference(self, text: str) -> float:
+        """استنتاج ذكي لنسبة النجاح من تحليل محتوى النص (بدون نسبة ثابتة)"""
+        try:
+            text_lower = text.lower()
+            
+            # تحليل الكلمات المفتاحية الإيجابية والسلبية
+            positive_keywords = [
+                'ممتاز', 'قوي', 'إيجابي', 'صاعد', 'مرتفع', 'جيد', 'واضح', 'مؤكد',
+                'excellent', 'strong', 'positive', 'bullish', 'high', 'good', 'clear', 'confirmed',
+                'فرصة', 'نجاح', 'ربح', 'اختراق', 'دعم', 'momentum', 'breakout', 'support'
+            ]
+            
+            negative_keywords = [
+                'ضعيف', 'سلبي', 'هابط', 'منخفض', 'سيء', 'غير واضح', 'مشكوك', 'محفوف بالمخاطر',
+                'weak', 'negative', 'bearish', 'low', 'bad', 'unclear', 'risky', 'dangerous',
+                'خسارة', 'فشل', 'انهيار', 'مقاومة', 'تراجع', 'loss', 'failure', 'resistance', 'decline'
+            ]
+            
+            neutral_keywords = [
+                'محايد', 'متوسط', 'طبيعي', 'مستقر', 'انتظار', 'مراقبة',
+                'neutral', 'average', 'normal', 'stable', 'wait', 'watch'
+            ]
+            
+            # حساب نقاط الإيجابية والسلبية
+            positive_score = sum(1 for keyword in positive_keywords if keyword in text_lower)
+            negative_score = sum(1 for keyword in negative_keywords if keyword in text_lower)
+            neutral_score = sum(1 for keyword in neutral_keywords if keyword in text_lower)
+            
+            # تحليل طول النص وتفصيله (النصوص المفصلة تشير لثقة أعلى)
+            text_length_factor = min(len(text) / 1000, 1.0)  # عامل طول النص
+            
+            # حساب النسبة الأساسية بناءً على التحليل
+            if positive_score > negative_score:
+                base_rate = 55 + (positive_score - negative_score) * 5
+                base_rate += text_length_factor * 10  # النصوص المفصلة تعطي ثقة أعلى
+            elif negative_score > positive_score:
+                base_rate = 45 - (negative_score - positive_score) * 5
+                base_rate -= text_length_factor * 5  # النصوص المفصلة السلبية تقلل الثقة أكثر
+            else:
+                base_rate = 50 + neutral_score * 2  # الحياد مع بعض الاستقرار
+            
+            # تطبيق عوامل إضافية
+            # وجود أرقام ومؤشرات فنية يزيد الثقة
+            technical_indicators = ['rsi', 'macd', 'sma', 'ema', 'bollinger', 'atr', 'stochastic']
+            technical_count = sum(1 for indicator in technical_indicators if indicator in text_lower)
+            base_rate += technical_count * 2
+            
+            # وجود مستويات سعرية محددة يزيد الثقة
+            price_levels = len(re.findall(r'\d+\.\d+', text))
+            base_rate += min(price_levels * 1.5, 8)  # حد أقصى 8 نقاط
+            
+            # تحديد النطاق النهائي
+            final_rate = max(15, min(85, base_rate))
+            
+            logger.info(f"[INTELLIGENT_INFERENCE] استنتاج ذكي: إيجابي={positive_score}, سلبي={negative_score}, محايد={neutral_score}, النسبة={final_rate:.1f}%")
+            return round(final_rate, 1)
+            
+        except Exception as e:
+            logger.error(f"خطأ في الاستنتاج الذكي: {e}")
+            # كحل أخير، لا نعيد نسبة ثابتة بل نعيد None للإشارة للفشل
             return None
     
     def get_symbol_news(self, symbol: str) -> str:
@@ -6816,42 +6911,62 @@ def calculate_dynamic_success_rate_v2(analysis: Dict, alert_type: str) -> float:
     return calculate_dynamic_success_rate(analysis, alert_type)
 
 def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
-    """حساب نسبة النجاح الذكية بناءً على تحليل شامل للعوامل المختلفة - ديناميكية 0-100% محسنة"""
+    """حساب نسبة النجاح الذكية المحسنة مع دمج AI والعوامل الجديدة - نطاق 0-100%"""
     try:
-        # البدء بنسبة أساسية متوازنة تعكس الواقع
-        base_score = 50.0  # نقطة بداية محايدة لحساب أكثر دقة
+        # استخدام AI كمصدر أساسي للتحليل (كما في الوضع اليدوي)
+        ai_analysis_score = 0
+        ai_confidence = analysis.get('confidence', 0)
         
-        # العوامل المؤثرة على نسبة النجاح
+        # إذا كان لدينا تحليل AI موثوق، نعطيه وزن أكبر (60%)
+        if ai_confidence > 0:
+            if ai_confidence > 80:
+                ai_analysis_score = 60
+            elif ai_confidence > 60:
+                ai_analysis_score = 50
+            elif ai_confidence > 40:
+                ai_analysis_score = 35
+            elif ai_confidence > 20:
+                ai_analysis_score = 25
+            else:
+                ai_analysis_score = 10
+        
+        # البدء بنسبة أساسية محسنة
+        base_score = 30.0 if ai_confidence == 0 else 20.0  # تقليل القاعدة لإفساح المجال للعوامل
+        
+        # العوامل المؤثرة على نسبة النجاح (المحسنة)
         confidence_factors = []
         
-        # 1. تحليل المؤشرات الفنية (40% من النتيجة)
+        # 1. تحليل AI الأساسي (60% من النتيجة - الوزن الأكبر)
+        confidence_factors.append(("تحليل الذكاء الاصطناعي", ai_analysis_score, 60))
+        
+        # 2. تحليل المؤشرات الفنية (25% من النتيجة - مخفض)
         technical_score = 0
         if technical_data and technical_data.get('indicators'):
             indicators = technical_data['indicators']
             
-            # RSI Analysis (15% - زيادة الوزن للحصول على دقة أفضل)
+            # RSI Analysis (10% - مخفض)
             rsi = indicators.get('rsi', 50)
             if rsi:
                 if action == 'BUY':
                     if 30 <= rsi <= 50:  # منطقة جيدة للشراء
-                        technical_score += 15
+                        technical_score += 10
                     elif 20 <= rsi < 30:  # ذروة بيع - فرصة شراء ممتازة
-                        technical_score += 20
+                        technical_score += 12
                     elif rsi > 70:  # ذروة شراء - خطر
-                        technical_score -= 10
+                        technical_score -= 6
                     elif 50 < rsi < 60:  # منطقة مقبولة
-                        technical_score += 8
+                        technical_score += 5
                 elif action == 'SELL':
                     if 50 <= rsi <= 70:  # منطقة جيدة للبيع
-                        technical_score += 15
+                        technical_score += 10
                     elif 70 < rsi <= 80:  # ذروة شراء - فرصة بيع ممتازة
-                        technical_score += 20
+                        technical_score += 12
                     elif rsi < 30:  # ذروة بيع - خطر
-                        technical_score -= 10
+                        technical_score -= 6
                     elif 40 < rsi < 50:  # منطقة مقبولة
-                        technical_score += 8
+                        technical_score += 5
             
-            # MACD Analysis (15% - زيادة الوزن)
+            # MACD Analysis (10% - مخفض)
             macd_data = indicators.get('macd', {})
             if macd_data.get('macd') is not None and macd_data.get('signal') is not None:
                 macd_value = macd_data['macd']
@@ -6859,19 +6974,19 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
                 histogram = macd_data.get('histogram', 0)
                 
                 if action == 'BUY' and macd_value > macd_signal:
-                    technical_score += 15  # إشارة شراء قوية
+                    technical_score += 10  # إشارة شراء قوية
                     if histogram > 0:  # قوة إضافية من الهيستوجرام
-                        technical_score += 5
+                        technical_score += 3
                 elif action == 'SELL' and macd_value < macd_signal:
-                    technical_score += 15  # إشارة بيع قوية
+                    technical_score += 10  # إشارة بيع قوية
                     if histogram < 0:  # قوة إضافية من الهيستوجرام
-                        technical_score += 5
+                        technical_score += 3
                 elif action == 'BUY' and macd_value < macd_signal:
-                    technical_score -= 8   # إشارة متضاربة
+                    technical_score -= 5   # إشارة متضاربة
                 elif action == 'SELL' and macd_value > macd_signal:
-                    technical_score -= 8   # إشارة متضاربة
+                    technical_score -= 5   # إشارة متضاربة
             
-            # Moving Averages Analysis (10%)
+            # Moving Averages Analysis (5% - مخفض)
             ma10 = indicators.get('ma_10', 0)
             ma20 = indicators.get('ma_20', 0)
             ma50 = indicators.get('ma_50', 0)
@@ -6880,120 +6995,119 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
             if ma10 and ma20 and current_price:
                 if action == 'BUY':
                     if current_price > ma10 > ma20:  # ترتيب صاعد
-                        technical_score += 10
-                    elif current_price > ma10:  # فوق المتوسط قصير المدى
                         technical_score += 5
+                    elif current_price > ma10:  # فوق المتوسط قصير المدى
+                        technical_score += 3
                 elif action == 'SELL':
                     if current_price < ma10 < ma20:  # ترتيب هابط
-                        technical_score += 10
+                        technical_score += 5
                     elif current_price < ma10:  # تحت المتوسط قصير المدى
-                        technical_score += 5
+                        technical_score += 3
+        
+        confidence_factors.append(("التحليل الفني", technical_score, 25))
+        
+        # 3. تحليل الأخبار الاقتصادية (3% - جديد)
+        news_score = 0
+        try:
+            # جلب الأخبار المتعلقة بالرمز
+            news_analysis = gemini_analyzer.get_symbol_news(symbol) if hasattr(gemini_analyzer, 'get_symbol_news') else ""
+            if news_analysis and len(news_analysis) > 50:  # أخبار مؤثرة متوفرة
+                # تحليل تأثير الأخبار على الاتجاه
+                if any(word in news_analysis.lower() for word in ['إيجابي', 'صاعد', 'نمو', 'ارتفاع']):
+                    if action == 'BUY':
+                        news_score = 3
+                    elif action == 'SELL':
+                        news_score = -1
+                elif any(word in news_analysis.lower() for word in ['سلبي', 'هابط', 'انخفاض', 'تراجع']):
+                    if action == 'SELL':
+                        news_score = 3
+                    elif action == 'BUY':
+                        news_score = -1
+                else:
+                    news_score = 1  # أخبار محايدة
+            else:
+                news_score = 0  # لا توجد أخبار مؤثرة
+        except Exception as e:
+            logger.debug(f"[NEWS_ANALYSIS] خطأ في تحليل الأخبار: {e}")
+            news_score = 0
             
-            # Support/Resistance Analysis (10%)
-            support = indicators.get('support')
-            resistance = indicators.get('resistance')
-            if support and resistance and current_price:
-                price_position = (current_price - support) / (resistance - support)
+        confidence_factors.append(("تحليل الأخبار", news_score, 3))
+        
+        # 4. تحليل المشاعر العامة (2% - جديد)
+        sentiment_score = 0
+        try:
+            # تحليل المشاعر من خلال AI أو بيانات السوق
+            if technical_data and technical_data.get('indicators'):
+                volume_ratio = technical_data['indicators'].get('volume_ratio', 1.0)
+                price_change = technical_data.get('price_change_pct', 0)
                 
-                if action == 'BUY':
-                    if price_position <= 0.3:  # قريب من الدعم
-                        technical_score += 10
-                    elif price_position <= 0.5:  # في المنتصف
-                        technical_score += 5
-                elif action == 'SELL':
-                    if price_position >= 0.7:  # قريب من المقاومة
-                        technical_score += 10
-                    elif price_position >= 0.5:  # في المنتصف
-                        technical_score += 5
+                # تقدير المشاعر من حجم التداول وحركة السعر
+                if volume_ratio > 1.5 and price_change > 1:  # حماس إيجابي
+                    sentiment_score = 2 if action == 'BUY' else -1
+                elif volume_ratio > 1.5 and price_change < -1:  # خوف/هلع
+                    sentiment_score = 2 if action == 'SELL' else -1
+                elif volume_ratio < 0.5:  # عدم اهتمام
+                    sentiment_score = -1
+                else:
+                    sentiment_score = 0  # مشاعر محايدة
+        except Exception as e:
+            logger.debug(f"[SENTIMENT_ANALYSIS] خطأ في تحليل المشاعر: {e}")
+            sentiment_score = 0
+            
+        confidence_factors.append(("تحليل المشاعر", sentiment_score, 2))
         
-        confidence_factors.append(("التحليل الفني", technical_score, 40))
+        # 5. التحليل التاريخي (5% - جديد)
+        historical_score = 0
+        try:
+            # استخدام بيانات التقييمات التاريخية للمستخدمين
+            if user_id:
+                historical_performance = get_symbol_historical_performance(symbol, action)
+                if historical_performance:
+                    success_rate = historical_performance.get('success_rate', 0.5)
+                    total_trades = historical_performance.get('total_trades', 0)
+                    
+                    if total_trades >= 10:  # بيانات كافية
+                        if success_rate > 0.7:
+                            historical_score = 5
+                        elif success_rate > 0.6:
+                            historical_score = 3
+                        elif success_rate > 0.4:
+                            historical_score = 1
+                        else:
+                            historical_score = -2
+                    elif total_trades >= 5:  # بيانات محدودة
+                        historical_score = int((success_rate - 0.5) * 4)  # تحويل لنطاق -2 إلى 2
+                    else:
+                        historical_score = 0  # بيانات غير كافية
+        except Exception as e:
+            logger.debug(f"[HISTORICAL_ANALYSIS] خطأ في التحليل التاريخي: {e}")
+            historical_score = 0
+            
+        confidence_factors.append(("التحليل التاريخي", historical_score, 5))
         
-        # 2. تحليل حجم التداول والتقلبات (20% من النتيجة - زيادة الأهمية)
+        # 6. تحليل حجم التداول والتقلبات (5% - مخفض)
         volume_score = 0
-        atr_score = 0
         if technical_data and technical_data.get('indicators'):
-            # تحليل الحجم المحسن
             volume_ratio = technical_data['indicators'].get('volume_ratio', 1.0)
-            volume_strength = technical_data['indicators'].get('volume_strength', 'متوسط')
             
             if volume_ratio > 2.0:  # حجم عالي جداً
-                volume_score = 18
+                volume_score = 5
             elif volume_ratio > 1.5:  # حجم عالي
-                volume_score = 15
+                volume_score = 4
             elif volume_ratio > 1.2:  # حجم جيد
-                volume_score = 12
+                volume_score = 3
             elif volume_ratio < 0.3:  # حجم منخفض جداً - خطر كبير
-                volume_score = -8
+                volume_score = -3
             elif volume_ratio < 0.5:  # حجم منخفض - خطر
-                volume_score = -5
+                volume_score = -2
             else:
-                volume_score = 8  # حجم طبيعي
-            
-            # تحليل ATR للتقلبات
-            atr = technical_data['indicators'].get('atr', 0)
-            atr_interpretation = technical_data['indicators'].get('atr_interpretation', '')
-            
-            if 'تقلبات منخفضة' in atr_interpretation:
-                atr_score = 5  # استقرار إيجابي
-            elif 'تقلبات طبيعية' in atr_interpretation:
-                atr_score = 3  # وضع طبيعي
-            elif 'تقلبات عالية' in atr_interpretation:
-                atr_score = -3  # مخاطر عالية
-            else:
-                atr_score = 0
+                volume_score = 2  # حجم طبيعي
 
-        total_volume_atr_score = volume_score + atr_score
-        confidence_factors.append(("حجم التداول والتقلبات", total_volume_atr_score, 20))
+        confidence_factors.append(("حجم التداول", volume_score, 5))
         
-        # 3. قوة الإشارة من تحليل الذكاء الاصطناعي (25% من النتيجة)
-        ai_score = 0
-        ai_confidence = analysis.get('confidence', 0)
-        if ai_confidence > 80:
-            ai_score = 25
-        elif ai_confidence > 60:
-            ai_score = 20
-        elif ai_confidence > 40:
-            ai_score = 15
-        elif ai_confidence > 20:
-            ai_score = 10
-        else:
-            ai_score = 0
+
         
-        confidence_factors.append(("الذكاء الاصطناعي", ai_score, 25))
-        
-        # 4. تحليل اتجاه السوق العام (15% من النتيجة - دمج التقلبات هنا)
-        trend_score = 0
-        volatility_adjustment = 0
-        
-        if technical_data and technical_data.get('indicators'):
-            overall_trend = technical_data['indicators'].get('overall_trend', '')
-            if action == 'BUY' and 'صاعد' in overall_trend:
-                trend_score = 10
-            elif action == 'SELL' and 'هابط' in overall_trend:
-                trend_score = 10
-            elif action in ['BUY', 'SELL'] and 'محايد' in overall_trend:
-                trend_score = 5
-            elif action != 'HOLD':  # إشارة ضد الاتجاه
-                trend_score = -5
-            
-            # دمج عامل التقلبات مع الاتجاه
-            bollinger = technical_data['indicators'].get('bollinger', {})
-            if bollinger.get('upper') and bollinger.get('lower'):
-                band_width = bollinger['upper'] - bollinger['lower']
-                # تقدير التقلبات من عرض البولنجر باندز
-                if band_width > 0:
-                    # تقلبات معتدلة تعطي ثقة أعلى
-                    volatility_adjustment = 5
-                else:
-                    # تقلبات عالية أو منخفضة جداً تقلل الثقة
-                    volatility_adjustment = 0
-            else:
-                volatility_adjustment = 3  # قيمة افتراضية
-        
-        total_trend_score = trend_score + volatility_adjustment
-        confidence_factors.append(("الاتجاه العام", total_trend_score, 15))
-        
-        # حساب النتيجة النهائية
+        # حساب النتيجة النهائية مع النظام المحسن
         total_weighted_score = 0
         total_weight = 0
         
@@ -7005,44 +7119,408 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
         if total_weight != 100:
             logger.warning(f"مجموع الأوزان غير صحيح: {total_weight}%")
         
-        # النتيجة النهائية مع تحسينات لرفع الدقة
+        # النتيجة النهائية مع دمج تدريب المستخدمين
         final_score = base_score + total_weighted_score
         
-        # تطبيق تحسينات إضافية بناءً على رأس المال
+        # تطبيق تحسينات machine learning من تقييمات المستخدمين
         if user_id:
+            ml_adjustment = get_ml_adjustment_for_user(user_id, symbol, action)
+            final_score += ml_adjustment
+            
+            # تحسينات إضافية بناءً على رأس المال
             capital = get_user_capital(user_id)
             if capital >= 10000:  # حسابات كبيرة - دقة أعلى
-                final_score += 3
-            elif capital >= 5000:  # حسابات متوسطة
                 final_score += 2
+            elif capital >= 5000:  # حسابات متوسطة
+                final_score += 1
             elif capital < 1000:  # حسابات صغيرة - حذر أكبر
-                final_score -= 2
+                final_score -= 1
         
-        # تطبيق نطاق ديناميكي محسن 0-100% كما طلب المستخدم
-        final_score = max(5, min(98, final_score))  # نطاق واسع: 5% - 98% لتغطية أفضل
+        # تطبيق النطاق الكامل 0-100% كما طُلب
+        final_score = max(0, min(100, final_score))
         
-        # تطبيق عوامل تصحيحية ديناميكية بناءً على نوع الصفقة
+        # تطبيق عوامل تصحيحية ديناميكية محسنة
         if action == 'HOLD':
-            final_score = max(final_score - 20, 10)  # تقليل أكبر للانتظار (10% كحد أدنى)
+            final_score = max(final_score - 15, 5)  # تقليل للانتظار
         elif action in ['BUY', 'SELL']:
-            # تعديل ديناميكي للإشارات الواضحة
-            if final_score > 80:  # إشارات قوية جداً
-                final_score = min(final_score + 5, 95)  # رفع محدود للإشارات الممتازة
-            elif final_score > 60:  # إشارات جيدة
-                final_score = min(final_score + 10, 85)  # رفع متوسط
-            elif final_score < 30:  # إشارات ضعيفة
-                final_score = max(final_score - 5, 5)  # تقليل للإشارات الضعيفة
+            # تعديل ديناميكي للإشارات
+            if final_score > 85:  # إشارات قوية جداً
+                final_score = min(final_score + 3, 98)
+            elif final_score < 20:  # إشارات ضعيفة
+                final_score = max(final_score - 3, 2)
         
-        # سجل تفاصيل الحساب للمراجعة
-        logger.info(f"[AI_SUCCESS] {symbol} - {action}: {final_score:.1f}% | العوامل: {confidence_factors}")
+        # سجل تفاصيل الحساب المحسن
+        logger.info(f"[ENHANCED_AI_SUCCESS] {symbol} - {action}: {final_score:.1f}% | العوامل الجديدة: AI({ai_analysis_score}%), أخبار({news_score}%), مشاعر({sentiment_score}%), تاريخي({historical_score}%)")
         
         return round(final_score, 1)
         
     except Exception as e:
-        logger.error(f"خطأ في حساب نسبة النجاح الذكية: {e}")
-        # في حالة الخطأ، استخدم قيمة افتراضية ديناميكية
-        import random
-        return round(random.uniform(45, 65), 1)
+        logger.error(f"خطأ في حساب نسبة النجاح الذكية المحسنة: {e}")
+        # في حالة الخطأ، استخدم تحليل AI إذا كان متوفراً
+        if analysis and analysis.get('confidence', 0) > 0:
+            return min(max(analysis.get('confidence', 50), 10), 90)
+        else:
+            # كحل أخير، استخدم تحليل فني بسيط
+            return calculate_basic_technical_success_rate(technical_data, action)
+
+def get_symbol_historical_performance(symbol: str, action: str) -> Dict:
+    """جلب الأداء التاريخي للرمز من تقييمات المستخدمين"""
+    try:
+        # قراءة بيانات التقييمات التاريخية
+        historical_file = 'trading_data/historical_performance.json'
+        if os.path.exists(historical_file):
+            with open(historical_file, 'r', encoding='utf-8') as f:
+                historical_data = json.load(f)
+                
+            symbol_data = historical_data.get(symbol, {})
+            action_data = symbol_data.get(action, {})
+            
+            if action_data:
+                return {
+                    'success_rate': action_data.get('success_rate', 0.5),
+                    'total_trades': action_data.get('total_trades', 0),
+                    'last_update': action_data.get('last_update', '')
+                }
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"خطأ في جلب الأداء التاريخي للرمز {symbol}: {e}")
+        return None
+
+def get_ml_adjustment_for_user(user_id: int, symbol: str, action: str) -> float:
+    """حساب تعديل machine learning بناءً على تقييمات المستخدم والمجتمع"""
+    try:
+        # جلب تقييمات المستخدم الشخصية
+        user_feedback = get_user_feedback_history(user_id, symbol, action)
+        
+        # جلب تقييمات المجتمع العامة
+        community_feedback = get_community_feedback_average(symbol, action)
+        
+        adjustment = 0.0
+        
+        # تطبيق تعديل بناءً على تقييمات المستخدم الشخصية (وزن 60%)
+        if user_feedback and user_feedback.get('total_feedbacks', 0) >= 5:
+            user_success_rate = user_feedback.get('positive_rate', 0.5)
+            if user_success_rate > 0.7:
+                adjustment += 3.0  # المستخدم لديه تقييمات إيجابية عالية
+            elif user_success_rate > 0.6:
+                adjustment += 1.5
+            elif user_success_rate < 0.4:
+                adjustment -= 1.5  # المستخدم لديه تقييمات سلبية
+            elif user_success_rate < 0.3:
+                adjustment -= 3.0
+        
+        # تطبيق تعديل بناءً على تقييمات المجتمع (وزن 40%)
+        if community_feedback and community_feedback.get('total_feedbacks', 0) >= 20:
+            community_success_rate = community_feedback.get('positive_rate', 0.5)
+            if community_success_rate > 0.75:
+                adjustment += 2.0  # المجتمع راضي عن هذا النوع من التحليل
+            elif community_success_rate > 0.65:
+                adjustment += 1.0
+            elif community_success_rate < 0.35:
+                adjustment -= 1.0  # المجتمع غير راضي
+            elif community_success_rate < 0.25:
+                adjustment -= 2.0
+        
+        # تحديد الحد الأقصى للتعديل
+        adjustment = max(-5.0, min(5.0, adjustment))
+        
+        logger.debug(f"[ML_ADJUSTMENT] المستخدم {user_id}, الرمز {symbol}, الإجراء {action}: تعديل {adjustment}")
+        return adjustment
+        
+    except Exception as e:
+        logger.error(f"خطأ في حساب تعديل ML للمستخدم {user_id}: {e}")
+        return 0.0
+
+def get_user_feedback_history(user_id: int, symbol: str, action: str) -> Dict:
+    """جلب تاريخ تقييمات المستخدم لرمز وإجراء معين"""
+    try:
+        feedback_file = f'trading_data/user_feedback_{user_id}.json'
+        if os.path.exists(feedback_file):
+            with open(feedback_file, 'r', encoding='utf-8') as f:
+                user_data = json.load(f)
+                
+            symbol_data = user_data.get(symbol, {})
+            action_data = symbol_data.get(action, {})
+            
+            return action_data
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"خطأ في جلب تاريخ تقييمات المستخدم {user_id}: {e}")
+        return None
+
+def get_community_feedback_average(symbol: str, action: str) -> Dict:
+    """حساب متوسط تقييمات المجتمع لرمز وإجراء معين"""
+    try:
+        community_file = 'trading_data/community_feedback.json'
+        if os.path.exists(community_file):
+            with open(community_file, 'r', encoding='utf-8') as f:
+                community_data = json.load(f)
+                
+            symbol_data = community_data.get(symbol, {})
+            action_data = symbol_data.get(action, {})
+            
+            return action_data
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"خطأ في جلب تقييمات المجتمع للرمز {symbol}: {e}")
+        return None
+
+def calculate_basic_technical_success_rate(technical_data: Dict, action: str) -> float:
+    """حساب نسبة نجاح أساسية من التحليل الفني فقط (كحل احتياطي)"""
+    try:
+        if not technical_data or not technical_data.get('indicators'):
+            return 35.0  # نسبة منخفضة عند عدم توفر بيانات
+            
+        indicators = technical_data['indicators']
+        score = 40.0  # نقطة البداية
+        
+        # RSI
+        rsi = indicators.get('rsi', 50)
+        if action == 'BUY' and 30 <= rsi <= 50:
+            score += 15
+        elif action == 'SELL' and 50 <= rsi <= 70:
+            score += 15
+        elif (action == 'BUY' and rsi > 70) or (action == 'SELL' and rsi < 30):
+            score -= 10
+            
+        # MACD
+        macd_data = indicators.get('macd', {})
+        if macd_data.get('macd') is not None and macd_data.get('signal') is not None:
+            macd_value = macd_data['macd']
+            macd_signal = macd_data['signal']
+            
+            if (action == 'BUY' and macd_value > macd_signal) or (action == 'SELL' and macd_value < macd_signal):
+                score += 10
+            else:
+                score -= 5
+                
+        return max(15.0, min(75.0, score))
+        
+    except Exception as e:
+        logger.error(f"خطأ في حساب النسبة الفنية الأساسية: {e}")
+        return 40.0
+
+# ===== نظام التعلم الآلي المحسن =====
+def update_feedback_data(user_id: int, symbol: str, feedback_type: str, analysis_details: Dict = None):
+    """تحديث بيانات التقييم المحسن للتعلم الآلي مع دمج AI"""
+    try:
+        # إنشاء مجلد البيانات إذا لم يكن موجوداً
+        os.makedirs('trading_data', exist_ok=True)
+        
+        # تحديث بيانات المستخدم الشخصية
+        user_feedback_file = f'trading_data/user_feedback_{user_id}.json'
+        user_data = {}
+        
+        if os.path.exists(user_feedback_file):
+            with open(user_feedback_file, 'r', encoding='utf-8') as f:
+                user_data = json.load(f)
+        
+        # استخراج تفاصيل التحليل للتعلم الآلي
+        action = analysis_details.get('action', 'UNKNOWN') if analysis_details else 'UNKNOWN'
+        confidence = analysis_details.get('confidence', 0) if analysis_details else 0
+        
+        # تحديث بيانات المستخدم
+        if symbol not in user_data:
+            user_data[symbol] = {}
+        
+        if action not in user_data[symbol]:
+            user_data[symbol][action] = {
+                'total_feedbacks': 0,
+                'positive_feedbacks': 0,
+                'negative_feedbacks': 0,
+                'positive_rate': 0.5,
+                'confidence_sum': 0,
+                'avg_confidence': 0,
+                'last_update': ''
+            }
+        
+        # إضافة التقييم الجديد
+        action_data = user_data[symbol][action]
+        action_data['total_feedbacks'] += 1
+        action_data['confidence_sum'] += confidence
+        
+        if feedback_type == 'positive':
+            action_data['positive_feedbacks'] += 1
+        else:
+            action_data['negative_feedbacks'] += 1
+            
+        # حساب المعدلات
+        action_data['positive_rate'] = action_data['positive_feedbacks'] / action_data['total_feedbacks']
+        action_data['avg_confidence'] = action_data['confidence_sum'] / action_data['total_feedbacks']
+        action_data['last_update'] = datetime.now().isoformat()
+        
+        # حفظ بيانات المستخدم
+        with open(user_feedback_file, 'w', encoding='utf-8') as f:
+            json.dump(user_data, f, ensure_ascii=False, indent=2)
+        
+        # تحديث بيانات المجتمع العامة
+        community_file = 'trading_data/community_feedback.json'
+        community_data = {}
+        
+        if os.path.exists(community_file):
+            with open(community_file, 'r', encoding='utf-8') as f:
+                community_data = json.load(f)
+        
+        if symbol not in community_data:
+            community_data[symbol] = {}
+        
+        if action not in community_data[symbol]:
+            community_data[symbol][action] = {
+                'total_feedbacks': 0,
+                'positive_feedbacks': 0,
+                'negative_feedbacks': 0,
+                'positive_rate': 0.5,
+                'confidence_sum': 0,
+                'avg_confidence': 0,
+                'contributing_users': [],
+                'last_update': ''
+            }
+        
+        # تحديث بيانات المجتمع
+        community_action_data = community_data[symbol][action]
+        community_action_data['total_feedbacks'] += 1
+        community_action_data['confidence_sum'] += confidence
+        
+        if feedback_type == 'positive':
+            community_action_data['positive_feedbacks'] += 1
+        else:
+            community_action_data['negative_feedbacks'] += 1
+        
+        # إضافة المستخدم لقائمة المساهمين
+        if user_id not in community_action_data['contributing_users']:
+            community_action_data['contributing_users'].append(user_id)
+        
+        # حساب المعدلات
+        community_action_data['positive_rate'] = community_action_data['positive_feedbacks'] / community_action_data['total_feedbacks']
+        community_action_data['avg_confidence'] = community_action_data['confidence_sum'] / community_action_data['total_feedbacks']
+        community_action_data['last_update'] = datetime.now().isoformat()
+        
+        # حفظ بيانات المجتمع
+        with open(community_file, 'w', encoding='utf-8') as f:
+            json.dump(community_data, f, ensure_ascii=False, indent=2)
+        
+        # تحديث الأداء التاريخي للرمز
+        update_historical_performance(symbol, action, feedback_type, confidence)
+        
+        # تدريب AI بالتقييمات الجديدة
+        train_ai_with_feedback(symbol, action, feedback_type, confidence, analysis_details)
+        
+        logger.info(f"[ENHANCED_FEEDBACK] تم تحديث تقييم محسن للمستخدم {user_id}, الرمز {symbol}, الإجراء {action}: {feedback_type} (ثقة: {confidence}%)")
+        
+    except Exception as e:
+        logger.error(f"[FEEDBACK_ERROR] خطأ في تحديث بيانات التقييم المحسن: {e}")
+
+def update_historical_performance(symbol: str, action: str, feedback_type: str, confidence: float):
+    """تحديث الأداء التاريخي للرمز لاستخدامه في التحليلات المستقبلية"""
+    try:
+        historical_file = 'trading_data/historical_performance.json'
+        historical_data = {}
+        
+        if os.path.exists(historical_file):
+            with open(historical_file, 'r', encoding='utf-8') as f:
+                historical_data = json.load(f)
+        
+        if symbol not in historical_data:
+            historical_data[symbol] = {}
+        
+        if action not in historical_data[symbol]:
+            historical_data[symbol][action] = {
+                'total_trades': 0,
+                'successful_trades': 0,
+                'success_rate': 0.5,
+                'confidence_sum': 0,
+                'avg_confidence': 0,
+                'last_update': ''
+            }
+        
+        # تحديث البيانات
+        action_data = historical_data[symbol][action]
+        action_data['total_trades'] += 1
+        action_data['confidence_sum'] += confidence
+        
+        if feedback_type == 'positive':
+            action_data['successful_trades'] += 1
+        
+        # حساب المعدلات
+        action_data['success_rate'] = action_data['successful_trades'] / action_data['total_trades']
+        action_data['avg_confidence'] = action_data['confidence_sum'] / action_data['total_trades']
+        action_data['last_update'] = datetime.now().isoformat()
+        
+        # حفظ البيانات
+        with open(historical_file, 'w', encoding='utf-8') as f:
+            json.dump(historical_data, f, ensure_ascii=False, indent=2)
+            
+        logger.debug(f"[HISTORICAL_UPDATE] تحديث الأداء التاريخي: {symbol} {action} - معدل النجاح: {action_data['success_rate']:.2%}")
+        
+    except Exception as e:
+        logger.error(f"[HISTORICAL_ERROR] خطأ في تحديث الأداء التاريخي: {e}")
+
+def train_ai_with_feedback(symbol: str, action: str, feedback_type: str, confidence: float, analysis_details: Dict):
+    """تدريب AI بالتقييمات الجديدة لتحسين التحليلات المستقبلية"""
+    try:
+        training_file = 'trading_data/ai_training_data.json'
+        training_data = {}
+        
+        if os.path.exists(training_file):
+            with open(training_file, 'r', encoding='utf-8') as f:
+                training_data = json.load(f)
+        
+        # إنشاء مفتاح فريد للتدريب
+        training_key = f"{symbol}_{action}_{int(confidence//10)*10}"  # تجميع بفئات 10%
+        
+        if training_key not in training_data:
+            training_data[training_key] = {
+                'symbol': symbol,
+                'action': action,
+                'confidence_range': f"{int(confidence//10)*10}-{int(confidence//10)*10+9}%",
+                'positive_feedbacks': 0,
+                'negative_feedbacks': 0,
+                'total_feedbacks': 0,
+                'success_rate': 0.5,
+                'analysis_samples': [],
+                'last_update': ''
+            }
+        
+        # تحديث بيانات التدريب
+        training_entry = training_data[training_key]
+        training_entry['total_feedbacks'] += 1
+        
+        if feedback_type == 'positive':
+            training_entry['positive_feedbacks'] += 1
+        else:
+            training_entry['negative_feedbacks'] += 1
+        
+        training_entry['success_rate'] = training_entry['positive_feedbacks'] / training_entry['total_feedbacks']
+        training_entry['last_update'] = datetime.now().isoformat()
+        
+        # إضافة عينة من التحليل للتدريب (احتفاظ بآخر 10 عينات فقط)
+        if analysis_details:
+            sample = {
+                'confidence': confidence,
+                'feedback': feedback_type,
+                'timestamp': datetime.now().isoformat(),
+                'reasoning': analysis_details.get('reasoning', [])[:3]  # أول 3 أسباب فقط
+            }
+            training_entry['analysis_samples'].append(sample)
+            
+            # الاحتفاظ بآخر 10 عينات فقط
+            if len(training_entry['analysis_samples']) > 10:
+                training_entry['analysis_samples'] = training_entry['analysis_samples'][-10:]
+        
+        # حفظ بيانات التدريب
+        with open(training_file, 'w', encoding='utf-8') as f:
+            json.dump(training_data, f, ensure_ascii=False, indent=2)
+        
+        logger.debug(f"[AI_TRAINING] تم تدريب AI: {training_key} - معدل النجاح: {training_entry['success_rate']:.2%}")
+        
+    except Exception as e:
+        logger.error(f"[AI_TRAINING_ERROR] خطأ في تدريب AI: {e}")
 
 # ===== وظائف إرسال التنبيهات المحسنة =====
 def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis: Dict = None):
@@ -7344,8 +7822,20 @@ def handle_feedback(call):
             trade_id = '_'.join(parts[2:])
             is_direct_analysis = False
         
-        # حفظ التقييم
-        success = TradeDataManager.save_user_feedback(trade_id, feedback_type)
+        # حفظ التقييم بالنظام المحسن
+        if is_direct_analysis:
+            # للتحليل المباشر، نحتاج معلومات إضافية
+            analysis_details = {
+                'action': 'ANALYSIS',  # يمكن تحسينه لاحقاً لاستخراج الإجراء الفعلي
+                'confidence': 0,  # يمكن تحسينه لاحقاً لاستخراج الثقة الفعلية
+                'timestamp': datetime.now().isoformat(),
+                'type': 'manual_analysis'
+            }
+            update_feedback_data(int(user_id), symbol, feedback_type, analysis_details)
+            success = True
+        else:
+            # للصفقات العادية، استخدام النظام القديم مؤقتاً
+            success = TradeDataManager.save_user_feedback(trade_id, feedback_type)
         
         if success:
             # رسالة شكر للمستخدم
