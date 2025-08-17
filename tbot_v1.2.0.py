@@ -3498,7 +3498,8 @@ class GeminiAnalyzer:
                     'symbol': symbol,
                     'timestamp': datetime.now(),
                     'price_data': price_data,
-                    'technical_data': technical_data
+                    'technical_data': technical_data,
+                    'comprehensive_format': True  # علامة للاستخدام مع الدالة الجديدة
                 }
                 
                 # استخراج قيم إضافية من التحليل
@@ -3560,6 +3561,377 @@ class GeminiAnalyzer:
         except Exception as e:
             logger.error(f"[AUTO_FULL_ANALYSIS_ERROR] خطأ في التحليل الشامل للرمز {symbol}: {e}")
             return None
+
+    def format_comprehensive_auto_analysis(self, symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
+        """تنسيق التحليل الشامل للمراقبة الآلية - يحتوي على نفس عناصر التحليل اليدوي"""
+        try:
+            # نفس العناصر من التحليل اليدوي
+            trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
+            capital = get_user_capital(user_id) if user_id else 1000
+            
+            # استخدام نفس منطق الوقت من التحليل اليدوي
+            if user_id:
+                formatted_time = format_time_for_user(user_id)
+            else:
+                formatted_time = f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (التوقيت المحلي)"
+            
+            # البيانات الأساسية
+            current_price = price_data.get('last', price_data.get('bid', 0))
+            bid = price_data.get('bid', 0)
+            ask = price_data.get('ask', 0)
+            spread = price_data.get('spread', 0)
+            
+            # التحقق من صحة البيانات
+            if current_price <= 0:
+                current_price = max(bid, ask) if max(bid, ask) > 0 else None
+            if not current_price:
+                logger.warning(f"[WARNING] لا توجد بيانات أسعار صحيحة للرمز {symbol}")
+                return "❌ **لا توجد بيانات أسعار صحيحة**\n\nفشل في الحصول على أسعار صالحة للرمز."
+            
+            # بيانات التحليل
+            action = analysis.get('action', 'HOLD')
+            confidence = analysis.get('confidence', 50)
+            
+            # جلب المؤشرات الفنية الحقيقية
+            technical_data = None
+            try:
+                technical_data = mt5_manager.calculate_technical_indicators(symbol)
+                logger.info(f"[INFO] تم جلب المؤشرات الفنية للرمز {symbol}")
+            except Exception as e:
+                logger.warning(f"[WARNING] فشل في جلب المؤشرات الفنية للرمز {symbol}: {e}")
+            
+            # نسبة النجاح من الذكاء الاصطناعي - حساب ديناميكي
+            try:
+                ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
+                logger.info(f"[INFO] نسبة النجاح المحسوبة للرمز {symbol}: {ai_success_rate:.1f}%")
+            except Exception as e:
+                logger.warning(f"[WARNING] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
+                ai_success_rate = confidence if confidence else 50
+            
+            # تصنيف نسبة النجاح
+            if ai_success_rate >= 80:
+                success_rate_source = "عالية - ثقة قوية"
+            elif ai_success_rate >= 70:
+                success_rate_source = "جيدة - ثقة مقبولة"
+            elif ai_success_rate >= 60:
+                success_rate_source = "متوسطة - حذر مطلوب"
+            elif ai_success_rate >= 40:
+                success_rate_source = "منخفضة - مخاطرة عالية"
+            else:
+                success_rate_source = "ضعيفة - تجنب التداول"
+            
+            # المؤشرات الفنية
+            indicators = technical_data.get('indicators', {}) if technical_data else {}
+            
+            # حساب الأهداف ووقف الخسارة (نفس منطق التحليل اليدوي)
+            entry_price = analysis.get('entry_price') or current_price
+            target1 = analysis.get('target1')
+            target2 = analysis.get('target2')
+            stop_loss = analysis.get('stop_loss')
+            
+            # إذا لم تكن متوفرة من AI، احسبها من المؤشرات الفنية
+            if not all([target1, target2, stop_loss]):
+                resistance = indicators.get('resistance')
+                support = indicators.get('support')
+                
+                if resistance and support and resistance > support:
+                    if action == 'BUY':
+                        if resistance > current_price:
+                            target1 = target1 or min(resistance * 0.99, current_price * 1.02)
+                            target2 = target2 or min(resistance * 1.01, current_price * 1.04)
+                        else:
+                            target1 = target1 or current_price * 1.015
+                            target2 = target2 or current_price * 1.03
+                        stop_loss = stop_loss or max(support * 1.01, current_price * 0.985)
+                    elif action == 'SELL':
+                        if support < current_price:
+                            target1 = target1 or max(support * 1.01, current_price * 0.98)
+                            target2 = target2 or max(support * 0.99, current_price * 0.96)
+                        else:
+                            target1 = target1 or current_price * 0.985
+                            target2 = target2 or current_price * 0.97
+                        stop_loss = stop_loss or min(resistance * 0.99, current_price * 1.015)
+                else:
+                    # استخدام ATR أو نسبة مئوية
+                    atr = indicators.get('atr') if indicators else None
+                    if atr and atr > 0:
+                        if action == 'BUY':
+                            target1 = target1 or current_price + (atr * 1.5)
+                            target2 = target2 or current_price + (atr * 2.5)
+                            stop_loss = stop_loss or current_price - (atr * 1.0)
+                        elif action == 'SELL':
+                            target1 = target1 or current_price - (atr * 1.5)
+                            target2 = target2 or current_price - (atr * 2.5)
+                            stop_loss = stop_loss or current_price + (atr * 1.0)
+                    else:
+                        # حساب نسبة مئوية بسيط
+                        percentage_move = 0.02
+                        if action == 'BUY':
+                            target1 = target1 or current_price * (1 + percentage_move)
+                            target2 = target2 or current_price * (1 + percentage_move * 2)
+                            stop_loss = stop_loss or current_price * (1 - percentage_move * 0.5)
+                        elif action == 'SELL':
+                            target1 = target1 or current_price * (1 - percentage_move)
+                            target2 = target2 or current_price * (1 - percentage_move * 2)
+                            stop_loss = stop_loss or current_price * (1 + percentage_move * 0.5)
+            
+            # حساب النقاط (نفس منطق التحليل اليدوي)
+            def get_asset_type_and_pip_size(symbol):
+                symbol = symbol.upper()
+                if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
+                    if any(symbol.endswith(yen) for yen in ['JPY']):
+                        return 'forex_jpy', 0.01
+                    else:
+                        return 'forex_major', 0.0001
+                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+                    return 'metals', 0.01
+                elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
+                    return 'crypto_btc' if 'BTC' in symbol else 'crypto_alt', 1.0 if 'BTC' in symbol else 0.01
+                else:
+                    return 'unknown', 0.0001
+            
+            asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+            
+            points1 = 0
+            points2 = 0
+            stop_points = 0
+            
+            try:
+                if target1 and entry_price and target1 != entry_price and pip_size > 0:
+                    points1 = abs(target1 - entry_price) / pip_size
+                if target2 and entry_price and target2 != entry_price and pip_size > 0:
+                    points2 = abs(target2 - entry_price) / pip_size
+                if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
+                    stop_points = abs(entry_price - stop_loss) / pip_size
+            except Exception as e:
+                logger.warning(f"[WARNING] خطأ في حساب النقاط للرمز {symbol}: {e}")
+            
+            # حساب نسبة المخاطرة/المكافأة
+            risk_reward_ratio = points1 / stop_points if stop_points > 0 and points1 > 0 else 1.0
+            
+            # حساب التغيير اليومي
+            price_change_pct = indicators.get('price_change_pct', 0)
+            if abs(price_change_pct) < 0.01:
+                daily_change = "0.00%"
+            elif price_change_pct != 0:
+                daily_change = f"{price_change_pct:+.2f}%"
+            else:
+                daily_change = "--"
+            
+            # بناء الرسالة الشاملة (نفس تنسيق التحليل اليدوي)
+            message = "🚀 تحليل شامل متقدم (آلي)\n\n"
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += f"💱 {symbol} | {symbol_info['name']} {symbol_info['emoji']}\n"
+            message += f"📡 مصدر البيانات: 🔗 MetaTrader5 (لحظي - بيانات حقيقية)\n"
+            message += f"💰 السعر الحالي: {current_price:,.5f}\n"
+            
+            if spread > 0:
+                message += f"📊 أسعار التداول:\n"
+                message += f"   🟢 شراء (Bid): {bid:,.5f}\n"
+                message += f"   🔴 بيع (Ask): {ask:,.5f}\n"
+                message += f"   📏 الفرق (Spread): {spread:.5f}\n"
+            
+            message += f"➡️ التغيير اليومي: {daily_change}\n"
+            message += f"⏰ وقت التحليل: {formatted_time}\n\n"
+            
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += "⚡ إشارة التداول الرئيسية\n\n"
+            
+            if action == 'BUY':
+                message += f"🟢 نوع الصفقة: شراء (BUY)\n"
+            elif action == 'SELL':
+                message += f"🔴 نوع الصفقة: بيع (SELL)\n"
+            else:
+                message += f"🟡 نوع الصفقة: انتظار (HOLD)\n"
+            
+            message += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
+            message += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
+            message += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
+            message += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
+            message += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
+            message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
+            
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += "🔧 التحليل الفني المتقدم\n\n"
+            message += "📈 المؤشرات الفنية:\n"
+            
+            if indicators:
+                # RSI
+                rsi = indicators.get('rsi')
+                if rsi and rsi > 0:
+                    rsi_status = indicators.get('rsi_interpretation', 'محايد')
+                    message += f"• RSI: {rsi:.1f} ({rsi_status})\n"
+                else:
+                    message += f"• RSI: --\n"
+                
+                # MACD
+                macd_data = indicators.get('macd', {})
+                if macd_data and macd_data.get('macd') is not None:
+                    macd_value = macd_data.get('macd', 0)
+                    macd_status = indicators.get('macd_interpretation', 'محايد')
+                    message += f"• MACD: {macd_value:.4f} ({macd_status})\n"
+                else:
+                    message += f"• MACD: --\n"
+                
+                # المتوسطات المتحركة
+                for ma_period in [9, 10, 20, 21, 50]:
+                    ma_value = indicators.get(f'ma_{ma_period}')
+                    if ma_value and ma_value > 0:
+                        message += f"• MA{ma_period}: {ma_value:.5f}\n"
+                    else:
+                        message += f"• MA{ma_period}: --\n"
+                
+                # Stochastic
+                stochastic = indicators.get('stochastic', {})
+                if stochastic and stochastic.get('k') is not None:
+                    k_value = stochastic.get('k', 0)
+                    d_value = stochastic.get('d', 0)
+                    stoch_status = indicators.get('stochastic_interpretation', 'محايد')
+                    message += f"• Stochastic %K: {k_value:.1f}, %D: {d_value:.1f} ({stoch_status})\n"
+                else:
+                    message += f"• Stochastic: --\n"
+                
+                # ATR
+                atr = indicators.get('atr')
+                if atr and atr > 0:
+                    message += f"• ATR: {atr:.5f} (التقلبات)\n"
+                else:
+                    message += f"• ATR: --\n"
+                
+                # حجم التداول
+                volume_ratio = indicators.get('volume_ratio')
+                if volume_ratio:
+                    message += f"• نسبة الحجم: {volume_ratio:.2f}x\n"
+                else:
+                    message += f"• الحجم: --\n"
+            
+            message += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += "📋 توصيات إدارة المخاطر\n\n"
+            
+            if trading_mode == "scalping":
+                message += "• للسكالبينغ: 0.01 لوت (مخاطرة منخفضة)\n"
+            else:
+                message += "• للمدى الطويل: 0.005 لوت (مخاطرة محافظة)\n"
+            
+            # مستويات مهمة
+            if indicators:
+                resistance = indicators.get('resistance')
+                support = indicators.get('support')
+                if resistance and support:
+                    message += f"\n📊 مستويات مهمة:\n"
+                    message += f"• مقاومة: {resistance:.5f}\n"
+                    message += f"• دعم: {support:.5f}\n"
+            
+            message += "\n⚠️ تحذيرات هامة:\n"
+            message += "• راقب الأحجام عند نقاط الدخول\n"
+            message += "• فعّل وقف الخسارة فور الدخول\n"
+            
+            if indicators.get('overall_trend'):
+                trend = indicators['overall_trend']
+                message += f"• الاتجاه العام: {trend}\n"
+            
+            message += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += "📊 إحصائيات النظام\n"
+            message += f"🎯 دقة النظام: {ai_success_rate:.1f}% ({success_rate_source})\n"
+            message += f"⚡ مصدر البيانات: MetaTrader5 + Gemini AI Analysis\n"
+            message += f"🤖 نوع التحليل: آلي شامل | {trading_mode}\n\n"
+            
+            # الأخبار الاقتصادية
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += "📰 تحديث إخباري:\n"
+            news = self.get_symbol_news(symbol)
+            message += f"{news}\n\n"
+            
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━"
+            
+            return message
+            
+        except Exception as e:
+            logger.error(f"خطأ في تنسيق التحليل الشامل الآلي: {e}")
+            return "❌ خطأ في إنشاء التحليل الشامل الآلي"
+
+    def _format_technical_indicators(self, technical_data: Dict, symbol: str) -> str:
+        """تنسيق المؤشرات الفنية للعرض في التحليل الشامل"""
+        try:
+            if not technical_data or not technical_data.get('indicators'):
+                return f"""
+                ⚠️ المؤشرات الفنية: غير متوفرة من MT5 - الاعتماد على السعر اللحظي فقط
+                - حالة الاتصال: MT5 غير متصل أو بيانات غير كافية
+                🔴 تنبيه: التحليل محدود بسبب عدم توفر البيانات اللحظية الكاملة
+                """
+            
+            indicators = technical_data['indicators']
+            
+            # تنسيق شامل للمؤشرات الفنية
+            formatted_text = f"""
+            
+            🎯 المؤشرات الفنية اللحظية المتقدمة (محسوبة من أحدث البيانات اللحظية M1 + السعر الحالي):
+            
+            ⏰ حالة البيانات اللحظية:
+            - نوع البيانات: {indicators.get('data_freshness', 'غير محدد')}
+            - آخر تحديث: {indicators.get('last_update', 'غير محدد')}
+            - Bid: {indicators.get('tick_info', {}).get('bid', 0) or 0:.5f}
+            - Ask: {indicators.get('tick_info', {}).get('ask', 0) or 0:.5f}
+            - Spread: {indicators.get('tick_info', {}).get('spread', 0) or 0:.5f}
+            - Volume: {indicators.get('tick_info', {}).get('volume', 'غير متوفر')}
+            
+            📈 المتوسطات المتحركة والتقاطعات:
+            - MA 9: {indicators.get('ma_9', 0) or 0:.5f}
+            - MA 10: {indicators.get('ma_10', 0) or 0:.5f}
+            - MA 20: {indicators.get('ma_20', 0) or 0:.5f}
+            - MA 21: {indicators.get('ma_21', 0) or 0:.5f}
+            - MA 50: {indicators.get('ma_50', 0) or 0:.5f}
+            - تقاطع MA9/MA21: {indicators.get('ma_9_21_crossover', 'لا يوجد')}
+            - تقاطع MA10/MA20: {indicators.get('ma_10_20_crossover', 'لا يوجد')}
+            - تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
+            
+            📊 مؤشرات الزخم:
+            - RSI: {indicators.get('rsi', 0) or 0:.2f} ({indicators.get('rsi_interpretation', 'غير محدد')})
+            - MACD: {indicators.get('macd', {}).get('macd', 0) or 0:.5f}
+            - MACD Signal: {indicators.get('macd', {}).get('signal', 0) or 0:.5f}
+            - MACD Histogram: {indicators.get('macd', {}).get('histogram', 0) or 0:.5f}
+            - تفسير MACD: {indicators.get('macd_interpretation', 'غير محدد')}
+            
+            🎢 Stochastic Oscillator المتقدم:
+            - %K: {indicators.get('stochastic', {}).get('k', 0) or 0:.2f}
+            - %D: {indicators.get('stochastic', {}).get('d', 0) or 0:.2f}
+            - تقاطع Stochastic: {indicators.get('stochastic', {}).get('crossover', 'لا يوجد')}
+            - منطقة التداول: {indicators.get('stochastic', {}).get('zone', 'غير محدد')}
+            - قوة الإشارة: {indicators.get('stochastic', {}).get('strength', 'غير محدد')}
+            - اتجاه Stochastic: {indicators.get('stochastic', {}).get('trend', 'غير محدد')}
+            - تفسير Stochastic: {indicators.get('stochastic_interpretation', 'غير محدد')}
+            
+            📊 تحليل حجم التداول المتقدم:
+            - الحجم الحالي: {indicators.get('current_volume', 'غير متوفر')}
+            - متوسط الحجم: {indicators.get('avg_volume', 'غير متوفر')}
+            - نسبة الحجم: {indicators.get('volume_ratio', 0) or 0:.2f}
+            - VMA 9: {indicators.get('volume_ma_9', 0) or 0:.0f}
+            - VMA 21: {indicators.get('volume_ma_21', 0) or 0:.0f}
+            - Volume ROC: {indicators.get('volume_roc', 0) or 0:.2f}%
+            - قوة الحجم: {indicators.get('volume_strength', 'غير محدد')}
+            - تفسير الحجم: {indicators.get('volume_interpretation', 'غير محدد')}
+            
+            📍 مستويات الدعم والمقاومة:
+            - مقاومة: {indicators.get('resistance', 0) or 0:.5f}
+            - دعم: {indicators.get('support', 0) or 0:.5f}
+            - Bollinger Upper: {indicators.get('bollinger', {}).get('upper', 0) or 0:.5f}
+            - Bollinger Middle: {indicators.get('bollinger', {}).get('middle', 0) or 0:.5f}
+            - Bollinger Lower: {indicators.get('bollinger', {}).get('lower', 0) or 0:.5f}
+            - تفسير Bollinger: {indicators.get('bollinger_interpretation', 'غير محدد')}
+            
+            🎯 ملخص التحليل المتقدم:
+            - الاتجاه العام: {indicators.get('overall_trend', 'غير محدد')}
+            - قوة الاتجاه: {indicators.get('trend_strength', 0.5) or 0.5:.2f}
+            - ملخص التقاطعات: {indicators.get('crossover_summary', 'لا توجد')}
+            - تغيير السعر %: {indicators.get('price_change_pct', 0) or 0:.2f}%
+            - السعر الحالي: {indicators.get('current_price', 0) or 0:.5f}
+            """
+            
+            return formatted_text.strip()
+            
+        except Exception as e:
+            logger.error(f"[FORMAT_INDICATORS_ERROR] خطأ في تنسيق المؤشرات الفنية للرمز {symbol}: {e}")
+            return f"⚠️ خطأ في تنسيق المؤشرات الفنية: {e}"
 
     def _build_comprehensive_analysis_prompt(self, symbol: str, current_price: float, spread: float, 
                                            indicators_text: str, trading_mode: str, capital: float, timezone_str: str) -> str:
@@ -7207,229 +7579,9 @@ def calculate_simplified_technical_rate(technical_data: Dict, action: str) -> fl
     return max(20.0, min(80.0, base_score))
 
 # دالة قديمة محذوفة - تم الاستبدال بالنظام المبسط
-def calculate_old_complex_success_rate():
-        technical_score = 0
-        if technical_data and technical_data.get('indicators'):
-            indicators = technical_data['indicators']
-            
-            # RSI Analysis (10% - مخفض)
-            rsi = indicators.get('rsi', 50)
-            if rsi:
-                if action == 'BUY':
-                    if 30 <= rsi <= 50:  # منطقة جيدة للشراء
-                        technical_score += 10
-                    elif 20 <= rsi < 30:  # ذروة بيع - فرصة شراء ممتازة
-                        technical_score += 12
-                    elif rsi > 70:  # ذروة شراء - خطر
-                        technical_score -= 6
-                    elif 50 < rsi < 60:  # منطقة مقبولة
-                        technical_score += 5
-                elif action == 'SELL':
-                    if 50 <= rsi <= 70:  # منطقة جيدة للبيع
-                        technical_score += 10
-                    elif 70 < rsi <= 80:  # ذروة شراء - فرصة بيع ممتازة
-                        technical_score += 12
-                    elif rsi < 30:  # ذروة بيع - خطر
-                        technical_score -= 6
-                    elif 40 < rsi < 50:  # منطقة مقبولة
-                        technical_score += 5
-            
-            # MACD Analysis (10% - مخفض)
-            macd_data = indicators.get('macd', {})
-            if macd_data.get('macd') is not None and macd_data.get('signal') is not None:
-                macd_value = macd_data['macd']
-                macd_signal = macd_data['signal']
-                histogram = macd_data.get('histogram', 0)
-                
-                if action == 'BUY' and macd_value > macd_signal:
-                    technical_score += 10  # إشارة شراء قوية
-                    if histogram > 0:  # قوة إضافية من الهيستوجرام
-                        technical_score += 3
-                elif action == 'SELL' and macd_value < macd_signal:
-                    technical_score += 10  # إشارة بيع قوية
-                    if histogram < 0:  # قوة إضافية من الهيستوجرام
-                        technical_score += 3
-                elif action == 'BUY' and macd_value < macd_signal:
-                    technical_score -= 5   # إشارة متضاربة
-                elif action == 'SELL' and macd_value > macd_signal:
-                    technical_score -= 5   # إشارة متضاربة
-            
-            # Moving Averages Analysis (5% - مخفض)
-            ma10 = indicators.get('ma_10', 0)
-            ma20 = indicators.get('ma_20', 0)
-            ma50 = indicators.get('ma_50', 0)
-            current_price = technical_data.get('price', 0)
-            
-            if ma10 and ma20 and current_price:
-                if action == 'BUY':
-                    if current_price > ma10 > ma20:  # ترتيب صاعد
-                        technical_score += 5
-                    elif current_price > ma10:  # فوق المتوسط قصير المدى
-                        technical_score += 3
-                elif action == 'SELL':
-                    if current_price < ma10 < ma20:  # ترتيب هابط
-                        technical_score += 5
-                    elif current_price < ma10:  # تحت المتوسط قصير المدى
-                        technical_score += 3
-        
-        confidence_factors.append(("التحليل الفني", technical_score, 25))
-        
-        # 3. تحليل الأخبار الاقتصادية (3% - جديد)
-        news_score = 0
-        try:
-            # جلب الأخبار المتعلقة بالرمز
-            news_analysis = gemini_analyzer.get_symbol_news(symbol) if hasattr(gemini_analyzer, 'get_symbol_news') else ""
-            if news_analysis and len(news_analysis) > 50:  # أخبار مؤثرة متوفرة
-                # تحليل تأثير الأخبار على الاتجاه
-                if any(word in news_analysis.lower() for word in ['إيجابي', 'صاعد', 'نمو', 'ارتفاع']):
-                    if action == 'BUY':
-                        news_score = 3
-                    elif action == 'SELL':
-                        news_score = -1
-                elif any(word in news_analysis.lower() for word in ['سلبي', 'هابط', 'انخفاض', 'تراجع']):
-                    if action == 'SELL':
-                        news_score = 3
-                    elif action == 'BUY':
-                        news_score = -1
-                else:
-                    news_score = 1  # أخبار محايدة
-            else:
-                news_score = 0  # لا توجد أخبار مؤثرة
-        except Exception as e:
-            logger.debug(f"[NEWS_ANALYSIS] خطأ في تحليل الأخبار: {e}")
-            news_score = 0
-            
-        confidence_factors.append(("تحليل الأخبار", news_score, 3))
-        
-        # 4. تحليل المشاعر العامة (2% - جديد)
-        sentiment_score = 0
-        try:
-            # تحليل المشاعر من خلال AI أو بيانات السوق
-            if technical_data and technical_data.get('indicators'):
-                volume_ratio = technical_data['indicators'].get('volume_ratio', 1.0)
-                price_change = technical_data.get('price_change_pct', 0)
-                
-                # تقدير المشاعر من حجم التداول وحركة السعر
-                if volume_ratio > 1.5 and price_change > 1:  # حماس إيجابي
-                    sentiment_score = 2 if action == 'BUY' else -1
-                elif volume_ratio > 1.5 and price_change < -1:  # خوف/هلع
-                    sentiment_score = 2 if action == 'SELL' else -1
-                elif volume_ratio < 0.5:  # عدم اهتمام
-                    sentiment_score = -1
-                else:
-                    sentiment_score = 0  # مشاعر محايدة
-        except Exception as e:
-            logger.debug(f"[SENTIMENT_ANALYSIS] خطأ في تحليل المشاعر: {e}")
-            sentiment_score = 0
-            
-        confidence_factors.append(("تحليل المشاعر", sentiment_score, 2))
-        
-        # 5. التحليل التاريخي (5% - جديد)
-        historical_score = 0
-        try:
-            # استخدام بيانات التقييمات التاريخية للمستخدمين
-            if user_id:
-                historical_performance = get_symbol_historical_performance(symbol, action)
-                if historical_performance:
-                    success_rate = historical_performance.get('success_rate', 0.5)
-                    total_trades = historical_performance.get('total_trades', 0)
-                    
-                    if total_trades >= 10:  # بيانات كافية
-                        if success_rate > 0.7:
-                            historical_score = 5
-                        elif success_rate > 0.6:
-                            historical_score = 3
-                        elif success_rate > 0.4:
-                            historical_score = 1
-                        else:
-                            historical_score = -2
-                    elif total_trades >= 5:  # بيانات محدودة
-                        historical_score = int((success_rate - 0.5) * 4)  # تحويل لنطاق -2 إلى 2
-                    else:
-                        historical_score = 0  # بيانات غير كافية
-        except Exception as e:
-            logger.debug(f"[HISTORICAL_ANALYSIS] خطأ في التحليل التاريخي: {e}")
-            historical_score = 0
-            
-        confidence_factors.append(("التحليل التاريخي", historical_score, 5))
-        
-        # 6. تحليل حجم التداول والتقلبات (5% - مخفض)
-        volume_score = 0
-        if technical_data and technical_data.get('indicators'):
-            volume_ratio = technical_data['indicators'].get('volume_ratio', 1.0)
-            
-            if volume_ratio > 2.0:  # حجم عالي جداً
-                volume_score = 5
-            elif volume_ratio > 1.5:  # حجم عالي
-                volume_score = 4
-            elif volume_ratio > 1.2:  # حجم جيد
-                volume_score = 3
-            elif volume_ratio < 0.3:  # حجم منخفض جداً - خطر كبير
-                volume_score = -3
-            elif volume_ratio < 0.5:  # حجم منخفض - خطر
-                volume_score = -2
-            else:
-                volume_score = 2  # حجم طبيعي
 
-        confidence_factors.append(("حجم التداول", volume_score, 5))
-        
-
-        
-        # حساب النتيجة النهائية مع النظام المحسن
-        total_weighted_score = 0
-        total_weight = 0
-        
-        for factor_name, score, weight in confidence_factors:
-            total_weighted_score += (score * weight / 100)
-            total_weight += weight
-        
-        # التأكد من أن المجموع الوزني 100%
-        if total_weight != 100:
-            logger.warning(f"مجموع الأوزان غير صحيح: {total_weight}%")
-        
-        # النتيجة النهائية مع دمج تدريب المستخدمين
-        final_score = base_score + total_weighted_score
-        
-        # تطبيق تحسينات machine learning من تقييمات المستخدمين
-        if user_id:
-            ml_adjustment = get_ml_adjustment_for_user(user_id, symbol, action)
-            final_score += ml_adjustment
-            
-            # تحسينات إضافية بناءً على رأس المال
-            capital = get_user_capital(user_id)
-            if capital >= 10000:  # حسابات كبيرة - دقة أعلى
-                final_score += 2
-            elif capital >= 5000:  # حسابات متوسطة
-                final_score += 1
-            elif capital < 1000:  # حسابات صغيرة - حذر أكبر
-                final_score -= 1
-        
-        # تطبيق النطاق الكامل 0-100% كما طُلب
-        final_score = max(0, min(100, final_score))
-        
-        # تطبيق عوامل تصحيحية ديناميكية محسنة
-        if action == 'HOLD':
-            final_score = max(final_score - 15, 5)  # تقليل للانتظار
-        elif action in ['BUY', 'SELL']:
-            # تعديل ديناميكي للإشارات
-            if final_score > 85:  # إشارات قوية جداً
-                final_score = min(final_score + 3, 98)
-            elif final_score < 20:  # إشارات ضعيفة
-                final_score = max(final_score - 3, 2)
-        
-        # سجل تفاصيل الحساب المحسن
-        logger.info(f"[ENHANCED_AI_SUCCESS] {symbol} - {action}: {final_score:.1f}% | العوامل الجديدة: AI({ai_analysis_score}%), أخبار({news_score}%), مشاعر({sentiment_score}%), تاريخي({historical_score}%)")
-        
-        return round(final_score, 1)
-        
-    except Exception as e:
-        logger.error(f"خطأ في حساب نسبة النجاح الذكية المحسنة: {e}")
-        # في حالة الخطأ، استخدم تحليل AI إذا كان متوفراً
-        if analysis and analysis.get('confidence', 0) > 0:
-            return min(max(analysis.get('confidence', 50), 10), 90)
-        else:
-            # كحل أخير، استخدم تحليل فني بسيط
-            return calculate_basic_technical_success_rate(technical_data, action)
+# دالة قديمة محذوفة - تم الاستبدال بالنظام المبسط
+# def calculate_old_complex_success_rate(): - تم حذفها نهائياً لحل مشكلة التداخل
 
 def get_symbol_historical_performance(symbol: str, action: str) -> Dict:
     """جلب الأداء التاريخي للرمز من تقييمات المستخدمين"""
@@ -7946,9 +8098,15 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         
         # استخدام نفس دالة التنسيق المستخدمة في التحليل اليدوي
         try:
-            message = gemini_analyzer.format_comprehensive_analysis_v120(
-                symbol, symbol_info, price_data, fresh_analysis, user_id
-            )
+            # إذا كان التحليل يحتوي على علامة التنسيق الشامل، استخدم الدالة الجديدة
+            if fresh_analysis.get('comprehensive_format'):
+                message = gemini_analyzer.format_comprehensive_auto_analysis(
+                    symbol, symbol_info, price_data, fresh_analysis, user_id
+                )
+            else:
+                message = gemini_analyzer.format_comprehensive_analysis_v120(
+                    symbol, symbol_info, price_data, fresh_analysis, user_id
+                )
         except Exception as format_error:
             logger.error(f"[ERROR] فشل في تنسيق رسالة الإشعار للرمز {symbol}: {format_error}")
             # رجوع للرسالة البسيطة في حالة الخطأ
@@ -9069,9 +9227,15 @@ def handle_single_symbol_analysis(call):
             }
         
         # استخدام التحليل الشامل المتقدم الجديد
-        message_text = gemini_analyzer.format_comprehensive_analysis_v120(
-            symbol, symbol_info, price_data, analysis, user_id
-        )
+        # إذا كان التحليل يحتوي على علامة التنسيق الشامل، استخدم الدالة الجديدة
+        if analysis.get('comprehensive_format'):
+            message_text = gemini_analyzer.format_comprehensive_auto_analysis(
+                symbol, symbol_info, price_data, analysis, user_id
+            )
+        else:
+            message_text = gemini_analyzer.format_comprehensive_analysis_v120(
+                symbol, symbol_info, price_data, analysis, user_id
+            )
         
         # أزرار التحكم
         markup = types.InlineKeyboardMarkup(row_width=2)
