@@ -7609,14 +7609,6 @@ def calculate_old_complex_success_rate():
         
         return round(final_score, 1)
         
-    except Exception as e:
-        logger.error(f"خطأ في حساب نسبة النجاح الذكية المحسنة: {e}")
-        # في حالة الخطأ، استخدم تحليل AI إذا كان متوفراً
-        if analysis and analysis.get('confidence', 0) > 0:
-            return min(max(analysis.get('confidence', 50), 10), 90)
-        else:
-            # كحل أخير، استخدم تحليل فني بسيط
-            return calculate_basic_technical_success_rate(technical_data, action)
 
 def get_symbol_historical_performance(symbol: str, action: str) -> Dict:
     """جلب الأداء التاريخي للرمز من تقييمات المستخدمين"""
