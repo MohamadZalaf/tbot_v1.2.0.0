@@ -6911,35 +6911,93 @@ def calculate_dynamic_success_rate_v2(analysis: Dict, alert_type: str) -> float:
     return calculate_dynamic_success_rate(analysis, alert_type)
 
 def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
-    """حساب نسبة النجاح الذكية المحسنة مع دمج AI والعوامل الجديدة - نطاق 0-100%"""
+    """حساب نسبة النجاح المبسط - نفس مبدأ الوضع اليدوي (الاعتماد على AI أولاً)"""
     try:
-        # استخدام AI كمصدر أساسي للتحليل (كما في الوضع اليدوي)
-        ai_analysis_score = 0
+        # الخطوة 1: محاولة الحصول على نسبة النجاح من AI مباشرة (مثل الوضع اليدوي)
         ai_confidence = analysis.get('confidence', 0)
         
-        # إذا كان لدينا تحليل AI موثوق، نعطيه وزن أكبر (60%)
-        if ai_confidence > 0:
-            if ai_confidence > 80:
-                ai_analysis_score = 60
-            elif ai_confidence > 60:
-                ai_analysis_score = 50
-            elif ai_confidence > 40:
-                ai_analysis_score = 35
-            elif ai_confidence > 20:
-                ai_analysis_score = 25
-            else:
-                ai_analysis_score = 10
+        if ai_confidence and ai_confidence > 0:
+            # تطبيق تحسينات machine learning من تقييمات المستخدمين
+            if user_id:
+                ml_adjustment = get_ml_adjustment_for_user(user_id, symbol, action)
+                ai_confidence += ml_adjustment
+                
+                # تحسينات إضافية بناءً على رأس المال
+                capital = get_user_capital(user_id)
+                if capital >= 10000:
+                    ai_confidence += 2
+                elif capital >= 5000:
+                    ai_confidence += 1
+                elif capital < 1000:
+                    ai_confidence -= 1
+            
+            # تطبيق النطاق الكامل 0-100%
+            final_score = max(0, min(100, ai_confidence))
+            
+            # تطبيق عوامل تصحيحية بسيطة
+            if action == 'HOLD':
+                final_score = max(final_score - 15, 5)
+            elif final_score > 85:
+                final_score = min(final_score + 3, 98)
+            elif final_score < 20:
+                final_score = max(final_score - 3, 2)
+            
+            logger.info(f"[SIMPLIFIED_AUTO_SUCCESS] {symbol} - {action}: {final_score:.1f}% (AI: {ai_confidence}%)")
+            return round(final_score, 1)
         
-        # البدء بنسبة أساسية محسنة
-        base_score = 30.0 if ai_confidence == 0 else 20.0  # تقليل القاعدة لإفساح المجال للعوامل
+        # الخطوة 2: إذا لم نحصل على نسبة من AI، استخدم التحليل الفني كاحتياط (مثل الوضع اليدوي)
+        logger.warning(f"[AUTO_FALLBACK] لا توجد نسبة من AI للرمز {symbol} - استخدام التحليل الفني الاحتياطي")
+        if technical_data and technical_data.get('indicators'):
+            fallback_rate = calculate_basic_technical_success_rate(technical_data, action)
+            logger.info(f"[AUTO_FALLBACK_SUCCESS] {symbol} - {action}: {fallback_rate:.1f}% (تحليل فني احتياطي)")
+            return fallback_rate
         
-        # العوامل المؤثرة على نسبة النجاح (المحسنة)
-        confidence_factors = []
+        # الخطوة 3: فشل كامل - لا نسبة ثابتة (مثل الوضع اليدوي)
+        logger.error(f"[AUTO_ANALYSIS_FAILED] فشل كامل في تحليل الرمز {symbol} - لا توجد بيانات كافية")
+        return None
         
-        # 1. تحليل AI الأساسي (60% من النتيجة - الوزن الأكبر)
-        confidence_factors.append(("تحليل الذكاء الاصطناعي", ai_analysis_score, 60))
+    except Exception as e:
+        logger.error(f"خطأ في حساب نسبة النجاح المبسط: {e}")
+        # في حالة الخطأ، استخدم تحليل AI إذا كان متوفراً
+        if analysis and analysis.get('confidence', 0) > 0:
+            return min(max(analysis.get('confidence', 50), 10), 90)
+        else:
+            # كحل أخير، استخدم تحليل فني بسيط
+            return calculate_basic_technical_success_rate(technical_data, action) if technical_data else None
+
+# دالة مساعدة لحساب نسبة نجاح بسيطة من المؤشرات الفنية (نفس ما في اليدوي)
+def calculate_simplified_technical_rate(technical_data: Dict, action: str) -> float:
+    """حساب نسبة نجاح بسيطة من التحليل الفني (مشابه للوضع اليدوي)"""
+    if not technical_data or not technical_data.get('indicators'):
+        return None
         
-        # 2. تحليل المؤشرات الفنية (25% من النتيجة - مخفض)
+    indicators = technical_data['indicators']
+    base_score = 50.0
+    
+    # تحليل RSI بسيط
+    rsi = indicators.get('rsi', 50)
+    if action == 'BUY' and 30 <= rsi <= 50:
+        base_score += 10
+    elif action == 'SELL' and 50 <= rsi <= 70:
+        base_score += 10
+    elif (action == 'BUY' and rsi > 70) or (action == 'SELL' and rsi < 30):
+        base_score -= 10
+        
+    # تحليل MACD بسيط
+    macd_data = indicators.get('macd', {})
+    if macd_data.get('macd') is not None and macd_data.get('signal') is not None:
+        macd_value = macd_data['macd']
+        macd_signal = macd_data['signal']
+        
+        if (action == 'BUY' and macd_value > macd_signal) or (action == 'SELL' and macd_value < macd_signal):
+            base_score += 8
+        else:
+            base_score -= 5
+            
+    return max(20.0, min(80.0, base_score))
+
+# دالة قديمة محذوفة - تم الاستبدال بالنظام المبسط
+def calculate_old_complex_success_rate():
         technical_score = 0
         if technical_data and technical_data.get('indicators'):
             indicators = technical_data['indicators']
