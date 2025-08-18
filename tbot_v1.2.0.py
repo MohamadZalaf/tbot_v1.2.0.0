@@ -1228,11 +1228,11 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                     stop_points = 15.0 if stop_loss else 0
         
         # حساب نسبة المخاطرة/المكافأة
-        if not risk_reward_ratio:
-            if stop_points > 0 and points1 > 0:
-                risk_reward_ratio = points1 / stop_points
-            else:
-                risk_reward_ratio = None
+        risk_reward_ratio = None
+        if stop_points > 0 and points1 > 0:
+            risk_reward_ratio = points1 / stop_points
+        else:
+            risk_reward_ratio = None
 
         # هيكل رسالة مطابق للنموذج المطلوب
         header = f"🚨 إشعار تداول آلي {symbol_info['emoji']}\n\n"
@@ -1270,14 +1270,24 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         # معلومات الصفقة مع الأهداف ووقف الخسارة
         body += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
         
-        # إضافة أهداف ووقف خسارة عشوائية بين 5-10 نقاط
-        target1_points = random.randint(5, 10)
-        target2_points = random.randint(5, 10)
-        stop_points = random.randint(5, 10)
+        # استخدام النقاط المحسوبة بدلاً من العشوائية مع التحقق من الاتجاه
+        if action == 'SELL':
+            # في البيع: الهدف الأول يجب أن يكون أكبر من الثاني
+            if points1 > 0 and points2 > 0 and points1 < points2:
+                points1, points2 = points2, points1  # تبديل القيم
+        elif action == 'BUY':
+            # في الشراء: الهدف الثاني يجب أن يكون أكبر من الأول
+            if points1 > 0 and points2 > 0 and points1 > points2:
+                points1, points2 = points2, points1  # تبديل القيم
         
-        body += f"🎯 الهدف الأول: {target1_points} نقطة\n"
-        body += f"🎯 الهدف الثاني: {target2_points} نقطة\n"
-        body += f"🛑 وقف الخسارة: {stop_points} نقطة\n\n"
+        # عرض النقاط المحسوبة أو قيم افتراضية منطقية
+        display_points1 = int(points1) if points1 > 0 else (30 if trading_mode == 'longterm' else 15)
+        display_points2 = int(points2) if points2 > 0 else (50 if trading_mode == 'longterm' else 25)
+        display_stop = int(stop_points) if stop_points > 0 else (20 if trading_mode == 'longterm' else 10)
+        
+        body += f"🎯 الهدف الأول: {display_points1} نقطة\n"
+        body += f"🎯 الهدف الثاني: {display_points2} نقطة\n"
+        body += f"🛑 وقف الخسارة: {display_stop} نقطة\n\n"
         
         if confidence is not None:
             body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
@@ -5319,14 +5329,24 @@ class GeminiAnalyzer:
             
             message += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
             
-            # إضافة أهداف ووقف خسارة عشوائية بين 5-10 نقاط
-            target1_points = random.randint(5, 10)
-            target2_points = random.randint(5, 10)
-            stop_points = random.randint(5, 10)
+            # استخدام النقاط المحسوبة مع التحقق من الاتجاه
+            if action == 'SELL':
+                # في البيع: الهدف الأول يجب أن يكون أكبر من الثاني
+                if points1 > 0 and points2 > 0 and points1 < points2:
+                    points1, points2 = points2, points1  # تبديل القيم
+            elif action == 'BUY':
+                # في الشراء: الهدف الثاني يجب أن يكون أكبر من الأول
+                if points1 > 0 and points2 > 0 and points1 > points2:
+                    points1, points2 = points2, points1  # تبديل القيم
             
-            message += f"🎯 الهدف الأول: {target1_points} نقطة\n"
-            message += f"🎯 الهدف الثاني: {target2_points} نقطة\n"
-            message += f"🛑 وقف الخسارة: {stop_points} نقطة\n\n"
+            # عرض النقاط المحسوبة أو قيم افتراضية منطقية
+            display_points1 = int(points1) if points1 > 0 else (35 if trading_mode == 'longterm' else 20)
+            display_points2 = int(points2) if points2 > 0 else (60 if trading_mode == 'longterm' else 35)
+            display_stop = int(stop_points) if stop_points > 0 else (25 if trading_mode == 'longterm' else 15)
+            
+            message += f"🎯 الهدف الأول: {display_points1} نقطة\n"
+            message += f"🎯 الهدف الثاني: {display_points2} نقطة\n"
+            message += f"🛑 وقف الخسارة: {display_stop} نقطة\n\n"
             
             if ai_success_rate is not None:
                 message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
