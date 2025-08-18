@@ -1030,10 +1030,14 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             logger.warning(f"[WARNING] فشل في جلب المؤشرات الفنية للرمز {symbol}: {e}")
             indicators = {}
         
-        # حساب نسبة النجاح الديناميكية باستخدام AI دائماً (حتى لو لم تعرض المؤشرات)
+        # حساب نسبة النجاح من Gemini AI مباشرة (الدالة الأصلية)
         try:
-            # التأكد من أن AI يدرس المؤشرات دائماً ويحسب النسبة
-            ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
+            # استخدام الدالة الأصلية من Gemini لحساب نسبة النجاح
+            ai_success_rate = analysis.get('confidence', 0) if analysis and analysis.get('confidence') else None
+            
+            # إذا لم تكن متوفرة من AI، احسبها باستخدام الدالة الاحتياطية
+            if not ai_success_rate or ai_success_rate <= 0:
+                ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
             
             # التأكد من أن النسبة ضمن النطاق المطلوب 0-100%
             if ai_success_rate is None or ai_success_rate < 0:
@@ -5032,15 +5036,20 @@ class GeminiAnalyzer:
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في جلب المؤشرات الفنية للرمز {symbol}: {e}")
             
-            # نسبة النجاح من الذكاء الاصطناعي - حساب ديناميكي لكل صفقة
+            # نسبة النجاح من Gemini AI مباشرة (الدالة الأصلية)
             try:
-                # استخدام دالة حساب نسبة النجاح المطورة
-                ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
-                logger.info(f"[INFO] نسبة النجاح المحسوبة للرمز {symbol}: {ai_success_rate:.1f}%")
+                # استخدام الدالة الأصلية من Gemini لحساب نسبة النجاح
+                ai_success_rate = analysis.get('confidence', 0) if analysis and analysis.get('confidence') else None
+                logger.info(f"[INFO] نسبة النجاح من Gemini للرمز {symbol}: {ai_success_rate:.1f}%")
+                
+                # إذا لم تكن متوفرة من AI، احسبها باستخدام الدالة الاحتياطية
+                if not ai_success_rate or ai_success_rate <= 0:
+                    ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
+                    logger.info(f"[INFO] نسبة النجاح الاحتياطية للرمز {symbol}: {ai_success_rate:.1f}%")
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
-                # كملاذ أخير، استخدم الثقة من التحليل
-                ai_success_rate = confidence if confidence else 50
+                # كملاذ أخير، استخدم الثقة من التحليل أو احسبها
+                ai_success_rate = confidence if confidence and confidence > 0 else calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
             
             # مصدر نسبة النجاح مع تصنيف أفضل
             if ai_success_rate >= 80:
@@ -7780,9 +7789,8 @@ def calculate_basic_technical_success_rate(technical_data: Dict, action: str) ->
     """حساب نسبة نجاح أساسية من التحليل الفني فقط (كحل احتياطي)"""
     try:
         if not technical_data or not technical_data.get('indicators'):
-            # إنشاء نسبة عشوائية واقعية بدلاً من الثابتة
-            import random
-            return round(random.uniform(55.0, 85.0), 1)  # نسبة متغيرة واقعية
+            # إرجاع None بدلاً من قيمة ثابتة - للاعتماد على Gemini
+            return None
             
         indicators = technical_data['indicators']
         score = 40.0  # نقطة البداية
