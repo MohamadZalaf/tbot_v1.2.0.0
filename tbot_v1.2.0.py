@@ -48,6 +48,7 @@ import time
 import ta
 from PIL import Image, ImageDraw, ImageFont
 import warnings
+import re
 
 # استيراد الإعدادات من ملف config.py
 try:
@@ -1259,7 +1260,10 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         
         # معلومات الصفقة - تم حذف الأهداف ووقف الخسارة والنقاط
         body += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-        body += f"✅ نسبة نجاح الصفقة: {confidence:.0f if confidence is not None else '--'}%\n\n"
+        if confidence is not None:
+            body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
+        else:
+            body += f"✅ نسبة نجاح الصفقة: ---%\n\n"
         
         # الأخبار الاقتصادية - مطابق للتحليل اليدوي
         body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -4318,7 +4322,6 @@ class GeminiAnalyzer:
             
             # استخراج قيم إضافية من رد AI: سعر الدخول/الأهداف/الوقف و R/R
             try:
-                import re
                 def _find_number(patterns):
                     for p in patterns:
                         m = re.search(p, analysis_text, re.IGNORECASE | re.UNICODE)
@@ -4594,7 +4597,6 @@ class GeminiAnalyzer:
     def _extract_success_rate_from_ai(self, text: str) -> float:
         """استخراج نسبة النجاح المحسنة من الذكاء الاصطناعي - نطاق 0-100% مع تحسينات ذكية"""
         try:
-            import re
             
             # البحث عن الصيغة المحددة [success_rate]=x أولاً (أولوية قصوى)
             success_rate_pattern = r'\[success_rate\]\s*=\s*(\d+(?:\.\d+)?)'
@@ -5302,7 +5304,10 @@ class GeminiAnalyzer:
                 message += f"🟡 نوع الصفقة: انتظار (HOLD)\n"
             
             message += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-            message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f if ai_success_rate is not None else '--'}%\n\n"
+            if ai_success_rate is not None:
+                message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
+            else:
+                message += f"✅ نسبة نجاح الصفقة: ---%\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             message += "🔧 التحليل الفني المتقدم\n\n"
@@ -5883,7 +5888,6 @@ class GeminiAnalyzer:
             info['direction'] = 'انعكاس'
         
         # استخراج نسبة الثقة
-        import re
         confidence_match = re.search(r'(\d+)%', description)
         if confidence_match:
             info['confidence'] = int(confidence_match.group(1))
@@ -5973,7 +5977,6 @@ class GeminiAnalyzer:
     
     def _parse_image_analysis_response(self, analysis_text: str) -> Dict:
         """استخراج المعلومات المهيكلة من نص تحليل الصورة"""
-        import re
         
         extracted = {}
         
@@ -6161,7 +6164,6 @@ class GeminiAnalyzer:
     
     def _parse_document_analysis_response(self, analysis_text: str) -> Dict:
         """استخراج المعلومات المهيكلة من نص تحليل المستند"""
-        import re
         
         extracted = {}
         
@@ -6402,7 +6404,6 @@ class GeminiAnalyzer:
     def _extract_trading_levels(self, analysis_text: str, current_price: float) -> tuple:
         """استخراج مستويات التداول (دخول، أهداف، وقف خسارة) من نص التحليل"""
         try:
-            import re
             
             # البحث عن أسعار الدخول
             entry_patterns = [
@@ -6483,7 +6484,6 @@ class GeminiAnalyzer:
     def _extract_points_from_ai(self, analysis_text: str) -> tuple:
         """استخراج النقاط من تحليل AI"""
         try:
-            import re
             
             # البحث عن النقاط المحددة
             points_patterns = [
@@ -7048,7 +7048,6 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
             negative_count = sum(1 for word in negative_indicators if word in text_to_analyze)
             
             # البحث عن نسبة مئوية مباشرة في النص
-            import re
             percentage_matches = re.findall(r'(\d+(?:\.\d+)?)\s*%', text_to_analyze)
             extracted_percentage = None
             
@@ -12151,8 +12150,19 @@ if __name__ == "__main__":
                 error_str = str(api_error).lower()
                 logger.error(f"[ERROR] خطأ Telegram API (محاولة {retry_count}/{max_retries}): {api_error}")
                 
+                # معالجة خاصة لخطأ 409 - تضارب البوتات
+                if "409" in error_str and "conflict" in error_str:
+                    logger.warning("[WARNING] تم اكتشاف تضارب مع بوت آخر - محاولة إيقاف البوت الآخر...")
+                    try:
+                        # محاولة إيقاف أي polling موجود
+                        bot.stop_polling()
+                        time.sleep(5)  # انتظار 5 ثوان
+                        logger.info("[INFO] تم إيقاف polling السابق - إعادة المحاولة...")
+                    except Exception as stop_error:
+                        logger.warning(f"[WARNING] فشل في إيقاف polling السابق: {stop_error}")
+                    wait_time = 10  # انتظار قصير لخطأ 409
                 # معالجة خاصة لأخطاء الشبكة والاتصال
-                if "connection" in error_str or "timeout" in error_str or "network" in error_str:
+                elif "connection" in error_str or "timeout" in error_str or "network" in error_str:
                     wait_time = min(retry_count * 10, 120)  # انتظار أطول لأخطاء الشبكة
                 else:
                     wait_time = min(retry_count * 5, 60)
