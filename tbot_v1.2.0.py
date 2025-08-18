@@ -2324,27 +2324,15 @@ class MT5Manager:
     
 
 
-    def get_live_price(self, symbol: str, force_fresh: bool = False) -> Optional[Dict]:
-        """جلب السعر اللحظي الحقيقي - MT5 هو المصدر الأساسي الأولي مع نظام كاش"""
+    def get_live_price(self, symbol: str, force_fresh: bool = True) -> Optional[Dict]:
+        """جلب السعر اللحظي الحقيقي - MT5 مباشرة بدون كاش للبيانات اللحظية"""
         
         if not symbol or symbol in ['notification', 'null', '', None]:
             logger.warning(f"[WARNING] رمز غير صالح في get_live_price: {symbol}")
             return None
         
-        # إذا كان طلب بيانات لحظية مباشرة (للتحليل اليدوي)، تجاهل الكاش
-        if not force_fresh:
-            # التحقق من الكاش أولاً للاستدعاءات العادية فقط
-            cached_data = get_cached_price_data(symbol)
-            if cached_data:
-                logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
-                return cached_data
-            
-            # التحقق من معدل الاستدعاءات للاستدعاءات العادية فقط
-            if not can_make_api_call(symbol):
-                logger.debug(f"[RATE_LIMIT] تجاهل الاستدعاء لـ {symbol} - تحديد معدل الاستدعاءات")
-                return None
-        else:
-            logger.info(f"[FRESH_DATA] طلب بيانات لحظية مباشرة للرمز {symbol} - تجاهل الكاش")
+        # البيانات اللحظية دائماً مباشرة من MT5 بدون كاش
+        logger.debug(f"[LIVE_DATA] جلب بيانات لحظية مباشرة للرمز {symbol} - بدون كاش")
         
         # تسجيل وقت الاستدعاء
         record_api_call(symbol)
@@ -2488,10 +2476,12 @@ class MT5Manager:
                     'is_fresh': time_diff.total_seconds() <= 900,
                     'is_manual_analysis': force_fresh  # علامة للبيانات اللحظية المباشرة
                 }
-                    # حفظ في الكاش (حتى البيانات اللحظية المباشرة يمكن استخدامها لفترة قصيرة)
-                    if force_fresh:
-                        logger.info(f"[FRESH_DATA] تم الحصول على بيانات لحظية مباشرة للرمز {symbol} في الوقت {tick_time}")
-                    cache_price_data(symbol, data)
+                    # حفظ في الكاش فقط للتحليل التاريخي، ليس للبيانات اللحظية
+                    if not force_fresh:
+                        cache_price_data(symbol, data)
+                        logger.debug(f"[CACHE] حفظ البيانات في الكاش للتحليل التاريخي للرمز {symbol}")
+                    else:
+                        logger.info(f"[LIVE_DATA] تم الحصول على بيانات لحظية مباشرة للرمز {symbol} في الوقت {tick_time} - بدون كاش")
                     return data
                 else:
                     logger.warning(f"[WARNING] لا توجد بيانات صحيحة من MT5 لـ {symbol}")
