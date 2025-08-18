@@ -3481,6 +3481,9 @@ class GeminiAnalyzer:
             # جلب المؤشرات الفنية الكاملة
             technical_data = mt5_manager.calculate_technical_indicators(symbol)
             
+            # تحليل شامل في الخلفية لجميع البيانات (كما طلب المستخدم)
+            background_analysis = self._perform_enhanced_background_analysis(symbol, price_data, technical_data, user_id)
+            
             # استخدام نفس دالة التحليل الشامل المستخدمة في الوضع اليدوي
             analysis_text = self._analyze_with_full_manual_instructions(symbol, price_data, technical_data, user_id)
             
@@ -3489,17 +3492,26 @@ class GeminiAnalyzer:
                 recommendation = self._extract_recommendation(analysis_text)
                 confidence = self._extract_confidence(analysis_text)
                 
-                # إنشاء كائن التحليل الكامل
+                # تحسين نسبة الثقة بناءً على التحليل الخلفي
+                enhanced_confidence = confidence
+                if background_analysis and background_analysis.get('enhanced_confidence'):
+                    # دمج نسبة الثقة الأصلية مع التحليل الخلفي المحسن
+                    background_confidence = background_analysis.get('enhanced_confidence', 50)
+                    enhanced_confidence = (confidence * 0.7 + background_confidence * 0.3) if confidence else background_confidence
+                    logger.info(f"[ENHANCED_CONFIDENCE] {symbol}: الأصلية={confidence}%, المحسنة={enhanced_confidence:.1f}%")
+                
+                # إنشاء كائن التحليل الكامل مع التحسينات الخلفية
                 analysis_result = {
                     'action': recommendation or 'HOLD',
-                    'confidence': confidence if confidence is not None else 50,
+                    'confidence': enhanced_confidence if enhanced_confidence is not None else 50,
                     'reasoning': [analysis_text[:200] + "..."] if len(analysis_text) > 200 else [analysis_text],
                     'ai_analysis': analysis_text,
-                    'source': 'Gemini AI (تحليل شامل آلي)',
+                    'source': 'Gemini AI (تحليل شامل آلي محسن)',
                     'symbol': symbol,
                     'timestamp': datetime.now(),
                     'price_data': price_data,
-                    'technical_data': technical_data
+                    'technical_data': technical_data,
+                    'background_analysis': background_analysis  # إضافة التحليل الخلفي
                 }
                 
                 # استخراج قيم إضافية من التحليل
@@ -3671,6 +3683,24 @@ class GeminiAnalyzer:
         """
         
         return formatted_text
+    
+    def _send_to_gemini(self, prompt: str) -> str:
+        """إرسال prompt إلى Gemini وإرجاع النتيجة"""
+        try:
+            if not self.model:
+                logger.error("[GEMINI_ERROR] نموذج Gemini غير متاح")
+                return None
+                
+            response = self.model.generate_content(prompt)
+            if response and response.text:
+                return response.text.strip()
+            else:
+                logger.warning("[GEMINI_WARNING] رد فارغ من Gemini")
+                return None
+                
+        except Exception as e:
+            logger.error(f"[GEMINI_ERROR] خطأ في إرسال إلى Gemini: {e}")
+            return None
     
     def _get_comprehensive_instructions(self) -> str:
         """الحصول على نفس التعليمات المفصلة المستخدمة في الوضع اليدوي"""
@@ -6496,6 +6526,198 @@ class GeminiAnalyzer:
         
         with open(training_file, 'w', encoding='utf-8') as f:
             json.dump(all_training_data, f, ensure_ascii=False, indent=2, default=str)
+
+    def _perform_enhanced_background_analysis(self, symbol: str, price_data: Dict, technical_data: Dict, user_id: int) -> Dict:
+        """تحليل شامل في الخلفية لجميع البيانات المذكورة في رسالة التحليل اليدوي"""
+        try:
+            # الحصول على بيانات المستخدم (نفس ما في التحليل اليدوي)
+            trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
+            capital = get_user_capital(user_id) if user_id else 1000
+            timezone_str = get_user_timezone(user_id) if user_id else 'UTC'
+            
+            # البيانات الأساسية (نفس ما في التحليل اليدوي)
+            current_price = price_data.get('last', price_data.get('bid', 0))
+            bid = price_data.get('bid', 0)
+            ask = price_data.get('ask', 0)
+            spread = price_data.get('spread', 0)
+            
+            # المؤشرات الفنية (نفس ما في التحليل اليدوي)
+            indicators = technical_data.get('indicators', {}) if technical_data else {}
+            
+            # تجميع جميع البيانات للتحليل الخلفي
+            background_prompt = self._build_enhanced_background_prompt(
+                symbol, current_price, bid, ask, spread, indicators, 
+                trading_mode, capital, timezone_str
+            )
+            
+            # تحليل خلفي عبر AI لجميع هذه البيانات
+            ai_background_analysis = self._send_to_gemini(background_prompt)
+            
+            if ai_background_analysis:
+                # استخراج النتائج من التحليل الخلفي
+                background_results = {
+                    'enhanced_confidence': self._extract_enhanced_confidence(ai_background_analysis),
+                    'risk_assessment': self._extract_risk_assessment(ai_background_analysis),
+                    'market_sentiment': self._extract_market_sentiment(ai_background_analysis),
+                    'technical_strength': self._extract_technical_strength(ai_background_analysis),
+                    'volume_analysis': self._extract_volume_analysis(ai_background_analysis),
+                    'support_resistance_quality': self._extract_support_resistance_quality(ai_background_analysis)
+                }
+                
+                logger.info(f"[ENHANCED_BACKGROUND] تحليل خلفي محسن للرمز {symbol} مكتمل")
+                return background_results
+            
+        except Exception as e:
+            logger.error(f"[ENHANCED_BACKGROUND_ERROR] خطأ في التحليل الخلفي المحسن للرمز {symbol}: {e}")
+        
+        return {}
+    
+    def _build_enhanced_background_prompt(self, symbol: str, current_price: float, bid: float, ask: float, 
+                                        spread: float, indicators: Dict, trading_mode: str, capital: float, timezone_str: str) -> str:
+        """بناء prompt للتحليل الخلفي المحسن باستخدام جميع البيانات من التحليل اليدوي"""
+        
+        # جمع جميع المؤشرات المذكورة في التحليل اليدوي
+        rsi = indicators.get('rsi', 50)
+        rsi_interpretation = indicators.get('rsi_interpretation', 'محايد')
+        
+        macd_data = indicators.get('macd', {})
+        macd_value = macd_data.get('macd', 0)
+        macd_signal = macd_data.get('signal', 0)
+        macd_histogram = macd_data.get('histogram', 0)
+        macd_interpretation = indicators.get('macd_interpretation', 'محايد')
+        
+        ma9 = indicators.get('ma_9', 0)
+        ma21 = indicators.get('ma_21', 0)
+        ma_9_21_crossover = indicators.get('ma_9_21_crossover', 'لا يوجد')
+        
+        stochastic = indicators.get('stochastic', {})
+        stoch_k = stochastic.get('k', 50)
+        stoch_d = stochastic.get('d', 50)
+        stoch_interpretation = indicators.get('stochastic_interpretation', 'محايد')
+        
+        atr = indicators.get('atr', 0)
+        support = indicators.get('support', 0)
+        resistance = indicators.get('resistance', 0)
+        
+        # تحليل الحجم (نفس ما في التحليل اليدوي)
+        current_volume = indicators.get('current_volume', 0)
+        avg_volume = indicators.get('avg_volume', 0)
+        volume_ratio = indicators.get('volume_ratio', 1.0)
+        volume_interpretation = indicators.get('volume_interpretation', 'طبيعي')
+        
+        prompt = f"""
+        أنت محلل مالي خبير. قم بتحليل شامل في الخلفية للرمز {symbol} باستخدام جميع البيانات التالية:
+
+        **بيانات السوق الأساسية:**
+        - الرمز: {symbol}
+        - السعر الحالي: {current_price:,.5f}
+        - سعر الشراء (Bid): {bid:,.5f}
+        - سعر البيع (Ask): {ask:,.5f}
+        - الفرق (Spread): {spread:.5f}
+        - نمط التداول: {trading_mode}
+        - رأس المال: ${capital:,.0f}
+        - المنطقة الزمنية: {timezone_str}
+
+        **المؤشرات الفنية الكاملة:**
+        - RSI: {rsi:.2f} ({rsi_interpretation})
+        - MACD: {macd_value:.5f} | Signal: {macd_signal:.5f} | Histogram: {macd_histogram:.5f} ({macd_interpretation})
+        - MA9: {ma9:.5f} | MA21: {ma21:.5f} | تقاطع MA9/MA21: {ma_9_21_crossover}
+        - Stochastic %K: {stoch_k:.2f} | %D: {stoch_d:.2f} ({stoch_interpretation})
+        - ATR: {atr:.5f}
+        - الدعم: {support:.5f} | المقاومة: {resistance:.5f}
+
+        **تحليل الحجم:**
+        - الحجم الحالي: {current_volume:,.0f}
+        - متوسط الحجم: {avg_volume:,.0f}
+        - نسبة الحجم: {volume_ratio:.2f}x
+        - تفسير الحجم: {volume_interpretation}
+
+        **المطلوب منك:**
+        قم بتحليل شامل في الخلفية لجميع هذه البيانات واعطني:
+
+        1. **نسبة ثقة محسنة** (0-100%): بناءً على تحليل شامل لجميع المؤشرات
+        2. **تقييم المخاطر** (منخفض/متوسط/عالي): بناءً على التقلبات والمؤشرات
+        3. **مشاعر السوق** (صاعد/هابط/محايد): بناءً على الحجم والمؤشرات
+        4. **قوة التحليل الفني** (ضعيف/متوسط/قوي): بناءً على تطابق المؤشرات
+        5. **تحليل الحجم** (ضعيف/عادي/قوي): بناءً على نسبة الحجم
+        6. **جودة مستويات الدعم والمقاومة** (ضعيف/متوسط/قوي): بناءً على ATR والتقلبات
+
+        **تنسيق الإجابة:**
+        enhanced_confidence: X%
+        risk_assessment: [منخفض/متوسط/عالي]
+        market_sentiment: [صاعد/هابط/محايد]
+        technical_strength: [ضعيف/متوسط/قوي]
+        volume_analysis: [ضعيف/عادي/قوي]
+        support_resistance_quality: [ضعيف/متوسط/قوي]
+        """
+        
+        return prompt
+    
+    def _extract_enhanced_confidence(self, analysis_text: str) -> float:
+        """استخراج نسبة الثقة المحسنة من التحليل الخلفي"""
+        try:
+            import re
+            match = re.search(r'enhanced_confidence:\s*(\d+(?:\.\d+)?)%?', analysis_text, re.IGNORECASE)
+            if match:
+                return float(match.group(1))
+        except:
+            pass
+        return 50.0
+    
+    def _extract_risk_assessment(self, analysis_text: str) -> str:
+        """استخراج تقييم المخاطر من التحليل الخلفي"""
+        try:
+            import re
+            match = re.search(r'risk_assessment:\s*([^\n]+)', analysis_text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        except:
+            pass
+        return "متوسط"
+    
+    def _extract_market_sentiment(self, analysis_text: str) -> str:
+        """استخراج مشاعر السوق من التحليل الخلفي"""
+        try:
+            import re
+            match = re.search(r'market_sentiment:\s*([^\n]+)', analysis_text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        except:
+            pass
+        return "محايد"
+    
+    def _extract_technical_strength(self, analysis_text: str) -> str:
+        """استخراج قوة التحليل الفني من التحليل الخلفي"""
+        try:
+            import re
+            match = re.search(r'technical_strength:\s*([^\n]+)', analysis_text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        except:
+            pass
+        return "متوسط"
+    
+    def _extract_volume_analysis(self, analysis_text: str) -> str:
+        """استخراج تحليل الحجم من التحليل الخلفي"""
+        try:
+            import re
+            match = re.search(r'volume_analysis:\s*([^\n]+)', analysis_text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        except:
+            pass
+        return "عادي"
+    
+    def _extract_support_resistance_quality(self, analysis_text: str) -> str:
+        """استخراج جودة مستويات الدعم والمقاومة من التحليل الخلفي"""
+        try:
+            import re
+            match = re.search(r'support_resistance_quality:\s*([^\n]+)', analysis_text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        except:
+            pass
+        return "متوسط"
 
 # إنشاء مثيل محلل Gemini
 gemini_analyzer = GeminiAnalyzer()
