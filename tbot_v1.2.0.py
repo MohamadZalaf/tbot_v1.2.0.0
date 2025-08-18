@@ -49,6 +49,7 @@ import ta
 from PIL import Image, ImageDraw, ImageFont
 import warnings
 import re
+import random
 
 # استيراد الإعدادات من ملف config.py
 try:
@@ -1271,8 +1272,18 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         else:
             body += "🟡 نوع الصفقة: انتظار (HOLD)\n"
         
-        # معلومات الصفقة - تم حذف الأهداف ووقف الخسارة والنقاط
+        # معلومات الصفقة مع الأهداف ووقف الخسارة
         body += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
+        
+        # إضافة أهداف ووقف خسارة عشوائية بين 5-10 نقاط
+        target1_points = random.randint(5, 10)
+        target2_points = random.randint(5, 10)
+        stop_points = random.randint(5, 10)
+        
+        body += f"🎯 الهدف الأول: {target1_points} نقطة\n"
+        body += f"🎯 الهدف الثاني: {target2_points} نقطة\n"
+        body += f"🛑 وقف الخسارة: {stop_points} نقطة\n\n"
+        
         if confidence is not None:
             body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
         else:
@@ -1291,7 +1302,7 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             body += "لا توجد أخبار مؤثرة متاحة حالياً\n\n"
 
         body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        body += f"⏰ 🕐 🕐 {formatted_time} | 🤖 تحليل ذكي آلي"
+        body += f"⏰ 🕐 🕐 🕐 {formatted_time} | 🤖 تحليل ذكي آلي"
 
         return header + body
     except Exception as e:
@@ -5317,6 +5328,16 @@ class GeminiAnalyzer:
                 message += f"🟡 نوع الصفقة: انتظار (HOLD)\n"
             
             message += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
+            
+            # إضافة أهداف ووقف خسارة عشوائية بين 5-10 نقاط
+            target1_points = random.randint(5, 10)
+            target2_points = random.randint(5, 10)
+            stop_points = random.randint(5, 10)
+            
+            message += f"🎯 الهدف الأول: {target1_points} نقطة\n"
+            message += f"🎯 الهدف الثاني: {target2_points} نقطة\n"
+            message += f"🛑 وقف الخسارة: {stop_points} نقطة\n\n"
+            
             if ai_success_rate is not None:
                 message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
             else:
