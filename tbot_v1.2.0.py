@@ -1234,11 +1234,11 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             else:
                 risk_reward_ratio = None
 
-        # هيكل رسالة مطابق للتحليل اليدوي
+        # هيكل رسالة مطابق للنموذج المطلوب
         header = f"🚨 إشعار تداول آلي {symbol_info['emoji']}\n\n"
         body = "🚀 إشارة تداول ذكية\n\n"
         body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        body += f"💱 {symbol} | {symbol_info['name']} {symbol_info['emoji']}\n"
+        body += f"💱 {symbol} | {symbol_info['name']} {symbol_info['emoji']} {symbol_info['emoji']}\n"
         body += f"📡 مصدر البيانات: 🔗 MetaTrader5 (لحظي - بيانات حقيقية)\n"
         
         if current_price and current_price > 0:
@@ -1248,12 +1248,7 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             ask = price_data.get('ask', 0)
             spread = price_data.get('spread', 0)
             if spread > 0 and bid > 0 and ask > 0:
-                spread_points = price_data.get('spread_points', 0)
-                body += f"📊 شراء: {bid:,.5f} | بيع: {ask:,.5f}"
-                if spread_points > 0:
-                    body += f" | فرق: {spread:.5f} ({spread_points:.1f} نقطة)\n"
-                else:
-                    body += f" | فرق: {spread:.5f}\n"
+                body += f"📊 شراء: {bid:,.5f} | بيع: {ask:,.5f} | فرق: {spread:.5f}\n"
         else:
             body += f"⚠️ السعر اللحظي: يرجى التأكد من اتصال MT5\n"
         
@@ -5293,21 +5288,16 @@ class GeminiAnalyzer:
                 message += "⚠️ **تحذير مهم:** البيانات أو التحليل محدود - لا تتداول بناءً على هذه المعلومات!\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            message += f"💱 {symbol} | {symbol_info['name']} {symbol_info['emoji']}\n"
+            message += f"💱 {symbol} | {symbol_info['name']} {symbol_info['emoji']} {symbol_info['emoji']}\n"
             message += f"📡 مصدر البيانات: 🔗 MetaTrader5 (لحظي - بيانات حقيقية)\n"
             message += f"🌍 مصدر التوقيت: خادم MT5 - محول لمنطقتك الزمنية\n"
             message += f"💰 السعر الحالي: {current_price:,.5f}\n"
-            # إضافة معلومات spread مفصلة
+            # إضافة معلومات spread مفصلة (مطابقة للنموذج)
             if spread > 0:
-                spread_points = price_data.get('spread_points', 0)
                 message += f"📊 أسعار التداول:\n"
                 message += f"   🟢 شراء (Bid): {bid:,.5f}\n"
                 message += f"   🔴 بيع (Ask): {ask:,.5f}\n"
-                message += f"   📏 الفرق (Spread): {spread:.5f}"
-                if spread_points > 0:
-                    message += f" ({spread_points:.1f} نقطة)\n"
-                else:
-                    message += "\n"
+                message += f"   📏 الفرق (Spread): {spread:.5f}\n"
             message += f"➡️ التغيير اليومي: {daily_change}\n"
             # استخدام التوقيت المصحح حسب المنطقة الزمنية للمستخدم
             if user_id:
