@@ -1024,62 +1024,22 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             # التأكد من أن AI يدرس المؤشرات دائماً ويحسب النسبة
             ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
             
-            # التأكد من أن النسبة ضمن النطاق المطلوب 0-100%
-            if ai_success_rate is None or ai_success_rate < 0:
-                ai_success_rate = 15  # حد أدنى
-            elif ai_success_rate > 100:
-                ai_success_rate = 95  # حد أقصى
-            
-            confidence = ai_success_rate
-            logger.info(f"[AI_SUCCESS] تم حساب نسبة النجاح للرمز {symbol}: {confidence:.1f}%")
+            # التأكد من أن النسبة من AI صحيحة أو عرض --
+            if ai_success_rate == "--" or ai_success_rate is None:
+                confidence = "--"
+                logger.warning(f"[AI_SUCCESS] لم يتم الحصول على نسبة نجاح من AI للرمز {symbol}")
+            elif isinstance(ai_success_rate, (int, float)) and 0 <= ai_success_rate <= 100:
+                confidence = ai_success_rate
+                logger.info(f"[AI_SUCCESS] تم حساب نسبة النجاح للرمز {symbol}: {confidence:.1f}%")
+            else:
+                confidence = "--"
+                logger.warning(f"[AI_SUCCESS] نسبة نجاح غير صحيحة من AI للرمز {symbol}: {ai_success_rate}")
             
         except Exception as e:
             logger.error(f"[ERROR] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
-            # في حالة الفشل، حساب نسبة بديلة بناءً على المؤشرات المتوفرة
-            backup_score = 50  # نقطة البداية
-            
-            try:
-                # حساب بديل بناءً على المؤشرات الأساسية
-                if indicators:
-                    rsi = indicators.get('rsi', 50)
-                    macd = indicators.get('macd', {})
-                    volume_ratio = indicators.get('volume_ratio', 1.0)
-                    
-                    # تعديل النسبة بناءً على RSI
-                    if action == 'BUY':
-                        if rsi < 30:  # ذروة بيع - فرصة شراء
-                            backup_score += 20
-                        elif rsi > 70:  # ذروة شراء - خطر
-                            backup_score -= 15
-                    elif action == 'SELL':
-                        if rsi > 70:  # ذروة شراء - فرصة بيع
-                            backup_score += 20
-                        elif rsi < 30:  # ذروة بيع - خطر
-                            backup_score -= 15
-                    
-                    # تعديل بناءً على MACD
-                    if macd.get('macd') is not None:
-                        macd_value = macd['macd']
-                        if (action == 'BUY' and macd_value > 0) or (action == 'SELL' and macd_value < 0):
-                            backup_score += 10
-                        else:
-                            backup_score -= 5
-                    
-                    # تعديل بناءً على الحجم
-                    if volume_ratio > 1.5:
-                        backup_score += 10
-                    elif volume_ratio < 0.5:
-                        backup_score -= 10
-                    
-                    # ضمان النطاق 15-90%
-                    backup_score = max(15, min(90, backup_score))
-                
-                confidence = backup_score
-                logger.info(f"[BACKUP_SUCCESS] استخدام نسبة احتياطية للرمز {symbol}: {confidence:.1f}%")
-                
-            except Exception as backup_error:
-                logger.error(f"[ERROR] فشل في الحساب الاحتياطي للرمز {symbol}: {backup_error}")
-                confidence = 50  # نسبة افتراضية آمنة
+            # لا نسب احتياطية - عرض -- للمستخدم
+            confidence = "--"
+            logger.warning(f"[AUTO_FAILED] عرض -- للمستخدم - فشل في حساب نسبة النجاح")
         
         # حساب التغير اليومي الصحيح
         price_change_pct = indicators.get('price_change_pct', 0)
@@ -1445,7 +1405,10 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             body += f"🎯 الهدف الثاني: ({points2:.0f} نقطة)\n"
         body += f"🛑 وقف الخسارة: ({stop_points:.0f} نقطة)\n"
         body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
-        body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
+        if isinstance(confidence, (int, float)):
+            body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
+        else:
+            body += f"✅ نسبة نجاح الصفقة: {confidence}\n\n"
         
         # الأخبار الاقتصادية - مطابق للتحليل اليدوي
         body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -5016,7 +4979,7 @@ class GeminiAnalyzer:
             if not action or not confidence:
                 has_warning = True
                 action = action or 'HOLD'
-                confidence = confidence or 50
+                confidence = confidence or "--"  # لا نسبة افتراضية
             
             # جلب المؤشرات الفنية الحقيقية قبل حساب نسبة النجاح
             technical_data = None
@@ -5030,14 +4993,20 @@ class GeminiAnalyzer:
             try:
                 # استخدام دالة حساب نسبة النجاح المطورة
                 ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
-                logger.info(f"[INFO] نسبة النجاح المحسوبة للرمز {symbol}: {ai_success_rate:.1f}%")
+                if isinstance(ai_success_rate, (int, float)):
+                    logger.info(f"[INFO] نسبة النجاح المحسوبة للرمز {symbol}: {ai_success_rate:.1f}%")
+                else:
+                    logger.info(f"[INFO] نسبة النجاح للرمز {symbol}: {ai_success_rate}")
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
-                # كملاذ أخير، استخدم الثقة من التحليل
-                ai_success_rate = confidence if confidence else 50
+                # كملاذ أخير، عرض -- عند فشل AI
+                ai_success_rate = "--"
+                logger.warning(f"[AI_FALLBACK] فشل AI في حساب نسبة النجاح للرمز {symbol}")
             
             # مصدر نسبة النجاح مع تصنيف أفضل
-            if ai_success_rate >= 80:
+            if ai_success_rate == "--":
+                success_rate_source = "غير متوفر - فشل AI في الحساب"
+            elif ai_success_rate >= 80:
                 success_rate_source = "عالية - ثقة قوية"
             elif ai_success_rate >= 70:
                 success_rate_source = "جيدة - ثقة مقبولة"
@@ -5444,7 +5413,10 @@ class GeminiAnalyzer:
             message += f"🎯 الهدف الثاني: ({points2:.0f} نقطة)\n"
             message += f"🛑 وقف الخسارة: ({stop_points:.0f} نقطة)\n"
             message += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
-            message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
+            if isinstance(ai_success_rate, (int, float)):
+                message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
+            else:
+                message += f"✅ نسبة نجاح الصفقة: {ai_success_rate}\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             message += "🔧 التحليل الفني المتقدم\n\n"
@@ -8033,7 +8005,7 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
 ⚡ إشارة التداول الرئيسية
 
 {action_emoji} نوع الصفقة: {action}
-✅ نسبة نجاح الصفقة: {success_rate:.0f}%
+✅ نسبة نجاح الصفقة: {success_rate if isinstance(success_rate, str) else f"{success_rate:.0f}%"}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 🤖 **بوت التداول v1.2.0 - إشعار ذكي**"""
