@@ -1043,7 +1043,7 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                 if indicators:
                     rsi = indicators.get('rsi', 50)
                     macd = indicators.get('macd', {})
-                    volume_ratio = indicators.get('volume_ratio', 1.0)
+                    volume_ratio = indicators.get('volume_ratio') or None
                     
                     # تعديل النسبة بناءً على RSI
                     if action == 'BUY':
@@ -1079,27 +1079,35 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                 
             except Exception as backup_error:
                 logger.error(f"[ERROR] فشل في الحساب الاحتياطي للرمز {symbol}: {backup_error}")
-                confidence = 50  # نسبة افتراضية آمنة
+                confidence = None  # لا قيمة افتراضية
         
-        # حساب التغير اليومي الصحيح
-        price_change_pct = indicators.get('price_change_pct', 0)
-        if price_change_pct == -100 or price_change_pct < -99:
+        # حساب التغير اليومي الصحيح - بدون قيم افتراضية
+        price_change_pct = indicators.get('price_change_pct')
+        if price_change_pct is None or price_change_pct == -100 or price_change_pct < -99:
             try:
                 daily_rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, 2)
                 if daily_rates is not None and len(daily_rates) >= 2:
                     yesterday_close = daily_rates[-2]['close']
                     if yesterday_close > 0:
                         price_change_pct = ((current_price - yesterday_close) / yesterday_close) * 100
-            except:
-                price_change_pct = 0
+                        logger.debug(f"[DAILY_CHANGE] {symbol}: تم حساب التغيير اليومي {price_change_pct:.2f}%")
+                    else:
+                        price_change_pct = None
+                        logger.warning(f"[DAILY_CHANGE] {symbol}: قيمة إغلاق الأمس غير صحيحة")
+                else:
+                    price_change_pct = None
+                    logger.warning(f"[DAILY_CHANGE] {symbol}: فشل في جلب البيانات اليومية")
+            except Exception as e:
+                logger.warning(f"[DAILY_CHANGE] {symbol}: خطأ في الحساب - {e}")
+                price_change_pct = None
         
-        # تنسيق التغير اليومي
-        if abs(price_change_pct) < 0.01:
-            daily_change = "0.00%"
-        elif price_change_pct != 0:
-            daily_change = f"{price_change_pct:+.2f}%"
-        else:
+        # تنسيق التغير اليومي - استخدام -- عند عدم التوفر
+        if price_change_pct is None:
             daily_change = "--"
+        elif abs(price_change_pct) < 0.01:
+            daily_change = "0.00%"
+        else:
+            daily_change = f"{price_change_pct:+.2f}%"
 
         # استخدام نفس منطق حساب الأهداف من التحليل اليدوي
         trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
@@ -2666,7 +2674,7 @@ class MT5Manager:
                     
                 except Exception as e:
                     logger.error(f"[ERROR] خطأ في حساب RSI لـ {symbol}: {e}")
-                    indicators['rsi'] = 50  # قيمة افتراضية محايدة
+                    indicators['rsi'] = None  # لا قيمة افتراضية
                     indicators['rsi_interpretation'] = 'خطأ في الحساب'
             
             # MACD - مع معالجة أخطاء محسنة
@@ -2745,14 +2753,14 @@ class MT5Manager:
                                 if len(valid_volumes) > 0:
                                     indicators['current_volume'] = valid_volumes.mean()
                                 else:
-                                    indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+                                    indicators['current_volume'] = None  # لا قيمة افتراضية
                         else:
                             # محاولة حساب من البيانات المتاحة
                             valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
                             if len(valid_volumes) > 0:
                                 indicators['current_volume'] = valid_volumes.iloc[-1]
                             else:
-                                indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+                                indicators['current_volume'] = None  # لا قيمة افتراضية
                 else:
                     logger.warning(f"[WARNING] عمود الحجم غير متوفر لـ {symbol}")
                     # محاولة استخدام بيانات الحجم من المصادر الأخرى
@@ -2761,7 +2769,7 @@ class MT5Manager:
                         indicators['current_volume'] = current_tick['volume']
                         logger.info(f"[INFO] تم استخدام حجم التداول من البيانات اللحظية لـ {symbol}")
                     else:
-                        indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+                        indicators['current_volume'] = None  # لا قيمة افتراضية
                     
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في جلب الحجم الحالي لـ {symbol}: {e}")
@@ -2772,9 +2780,9 @@ class MT5Manager:
                         indicators['current_volume'] = current_tick['volume']
                         logger.info(f"[INFO] تم استخدام حجم التداول من البيانات اللحظية كملاذ أخير لـ {symbol}")
                     else:
-                        indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+                        indicators['current_volume'] = None  # لا قيمة افتراضية
                 except:
-                    indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+                    indicators['current_volume'] = None  # لا قيمة افتراضية
             
             # حساب متوسط الحجم ونسبة الحجم - محسن
             try:
@@ -2784,25 +2792,25 @@ class MT5Manager:
                     if len(valid_volumes) >= 10:  # نحتاج على الأقل 10 نقاط صحيحة
                         indicators['avg_volume'] = valid_volumes.rolling(window=min(20, len(valid_volumes))).mean().iloc[-1]
                     else:
-                        indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                        indicators['avg_volume'] = indicators.get('current_volume') or None
                 elif len(df) >= 5:
                     # للبيانات المحدودة، استخدم ما متاح
                     valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
                     if len(valid_volumes) > 0:
                         indicators['avg_volume'] = valid_volumes.mean()
                     else:
-                        indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                        indicators['avg_volume'] = indicators.get('current_volume') or None
                 else:
                     # بيانات قليلة جداً
-                    indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                    indicators['avg_volume'] = indicators.get('current_volume') or None
                 
                 # التأكد من صحة متوسط الحجم
                 if pd.isna(indicators['avg_volume']) or indicators['avg_volume'] <= 0:
-                    indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                    indicators['avg_volume'] = indicators.get('current_volume') or None
                 
                 # حساب نسبة الحجم
-                current_vol = indicators.get('current_volume', 1000)
-                avg_vol = indicators.get('avg_volume', 1000)
+                current_vol = indicators.get('current_volume') or None
+                avg_vol = indicators.get('avg_volume') or None
                 
                 if avg_vol > 0:
                     indicators['volume_ratio'] = current_vol / avg_vol
@@ -2812,7 +2820,7 @@ class MT5Manager:
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في حساب متوسط الحجم لـ {symbol}: {e}")
                 # قيم افتراضية آمنة
-                indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                indicators['avg_volume'] = indicators.get('current_volume') or None
                 indicators['volume_ratio'] = 1.0
                 
             # حساب مؤشرات الحجم الإضافية - محسن
@@ -2822,28 +2830,28 @@ class MT5Manager:
                 if len(valid_volumes) >= 5:
                     indicators['volume_trend_5'] = valid_volumes.tail(5).mean()
                 else:
-                    indicators['volume_trend_5'] = indicators.get('current_volume', 1000)
+                    indicators['volume_trend_5'] = indicators.get('current_volume') or None
                 
                 if len(valid_volumes) >= 10:
                     indicators['volume_trend_10'] = valid_volumes.tail(10).mean()
                 else:
-                    indicators['volume_trend_10'] = indicators.get('current_volume', 1000)
+                    indicators['volume_trend_10'] = indicators.get('current_volume') or None
                 
                 # Volume Moving Average (VMA) - محسن
                 if len(valid_volumes) >= 9:
                     indicators['volume_ma_9'] = valid_volumes.rolling(window=9).mean().iloc[-1]
                 else:
-                    indicators['volume_ma_9'] = indicators.get('avg_volume', 1000)
+                    indicators['volume_ma_9'] = indicators.get('avg_volume') or None
                 
                 if len(valid_volumes) >= 21:
                     indicators['volume_ma_21'] = valid_volumes.rolling(window=21).mean().iloc[-1]
                 else:
-                    indicators['volume_ma_21'] = indicators.get('avg_volume', 1000)
+                    indicators['volume_ma_21'] = indicators.get('avg_volume') or None
                 
                 # Volume Rate of Change - محسن
                 if len(valid_volumes) >= 10:
                     vol_10_ago = valid_volumes.iloc[-10] if len(valid_volumes) >= 10 else valid_volumes.iloc[0]
-                    current_vol = indicators.get('current_volume', 1000)
+                    current_vol = indicators.get('current_volume') or None
                     if vol_10_ago > 0:
                         indicators['volume_roc'] = ((current_vol - vol_10_ago) / vol_10_ago) * 100
                     else:
@@ -2854,7 +2862,7 @@ class MT5Manager:
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في حساب مؤشرات الحجم الإضافية لـ {symbol}: {e}")
                 # قيم افتراضية آمنة
-                current_vol = indicators.get('current_volume', 1000)
+                current_vol = indicators.get('current_volume') or None
                 indicators['volume_trend_5'] = current_vol
                 indicators['volume_trend_10'] = current_vol
                 indicators['volume_ma_9'] = current_vol
@@ -2864,10 +2872,10 @@ class MT5Manager:
             # تفسير حجم التداول المتقدم - يتم حسابه دائماً
             try:
                 volume_signals = []
-                volume_ratio = indicators.get('volume_ratio', 1.0)
+                volume_ratio = indicators.get('volume_ratio') or None
                 
                 # تصنيف نسبة الحجم
-                if volume_ratio > 2.0:
+                if volume_ratio is not None and volume_ratio > 2.0:
                     volume_signals.append('حجم عالي جداً - اهتمام قوي')
                 elif volume_ratio >= 1.5:  # تغيير من > إلى >= لتطابق 1.5 تماماً
                     volume_signals.append('حجم عالي - نشاط متزايد')
@@ -3082,23 +3090,14 @@ class MT5Manager:
                         indicators['price_change_pct'] = daily_change_pct
                     else:
                         # في حالة قيم غير صحيحة، استخدم حساب بديل
-                        indicators['price_change_pct'] = ((df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2] * 100) if len(df) >= 2 else 0
+                        indicators['price_change_pct'] = None  # لا قيمة افتراضية عند فشل جلب البيانات اليومية
                 else:
-                    # في حالة فشل جلب البيانات اليومية، استخدم مقارنة مع الشمعة السابقة
-                    if len(df) >= 2:
-                        indicators['price_change_pct'] = ((df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2] * 100)
-                    else:
-                        indicators['price_change_pct'] = 0
+                    # في حالة فشل جلب البيانات اليومية، لا نضع قيمة افتراضية
+                    indicators['price_change_pct'] = None
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في حساب التغير اليومي لـ {symbol}: {e}")
-                # استخدام حساب بديل آمن
-                try:
-                    if len(df) >= 2 and df['close'].iloc[-2] > 0:
-                        indicators['price_change_pct'] = ((df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2] * 100)
-                    else:
-                        indicators['price_change_pct'] = 0
-                except:
-                    indicators['price_change_pct'] = 0
+                # لا نضع قيمة افتراضية عند الفشل
+                indicators['price_change_pct'] = None
             
             # ===== كشف التقاطعات للمتوسطات المتحركة =====
             ma_crossovers = []
@@ -5452,7 +5451,7 @@ class GeminiAnalyzer:
             # تنسيق عرض التغير اليومي
             if abs(price_change_pct) < 0.01:  # إذا كان التغير صغير جداً
                 daily_change = "0.00%"
-            elif price_change_pct != 0:
+            elif price_change_pct is not None and price_change_pct != 0:
                 daily_change = f"{price_change_pct:+.2f}%"
             else:
                 daily_change = "--"
@@ -5598,7 +5597,7 @@ class GeminiAnalyzer:
                         message += f"• تحليل الحجم: {volume_interpretation}\n"
                     
                     # إضافة تقييم بصري للحجم
-                    if volume_ratio > 2.0:
+                    if volume_ratio is not None and volume_ratio > 2.0:
                         message += f"• مستوى النشاط: 🔥 استثنائي - اهتمام كبير جداً\n"
                     elif volume_ratio > 1.5:
                         message += f"• مستوى النشاط: ⚡ عالي - نشاط متزايد\n"
@@ -7682,7 +7681,7 @@ def calculate_old_complex_success_rate():
         if technical_data and technical_data.get('indicators'):
             volume_ratio = technical_data['indicators'].get('volume_ratio', 1.0)
             
-            if volume_ratio > 2.0:  # حجم عالي جداً
+            if volume_ratio is not None and volume_ratio > 2.0:  # حجم عالي جداً
                 volume_score = 5
             elif volume_ratio > 1.5:  # حجم عالي
                 volume_score = 4
