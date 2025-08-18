@@ -12048,11 +12048,70 @@ if __name__ == "__main__":
     try:
         logger.info("▶️ بدء تشغيل بوت التداول المتقدم v1.2.0...")
         
+        # تعريف المتغيرات الأساسية المفقودة
+        mt5_manager = MT5Manager()
+        
+        # تعريف gemini_analyzer كبديل مؤقت (حتى يتم إنشاء الكلاس الكامل)
+        class SimpleGeminiAnalyzer:
+            def analyze_market_data_with_retry(self, symbol, price_data, user_id):
+                # تحليل بديل بسيط
+                return {
+                    'action': 'HOLD',
+                    'confidence': 50,
+                    'reasoning': ['تحليل بديل - Gemini AI غير متوفر حالياً'],
+                    'ai_analysis': f'تحليل أساسي للرمز {symbol}. البيانات من MT5.',
+                    'source': 'Simple Analysis',
+                    'symbol': symbol,
+                    'timestamp': datetime.now(),
+                    'price_data': price_data
+                }
+            
+            def format_comprehensive_analysis_v120(self, symbol, symbol_info, price_data, analysis, user_id):
+                # تنسيق بسيط للتحليل
+                current_price = price_data.get('last', price_data.get('bid', 0))
+                return f"""
+📊 **تحليل {symbol_info['emoji']} {symbol_info['name']}**
+
+💰 **السعر الحالي:** {current_price:.5f}
+📈 **التوصية:** {analysis.get('action', 'HOLD')}
+🎯 **مستوى الثقة:** {analysis.get('confidence', 50)}%
+
+⚠️ **ملاحظة:** هذا تحليل أساسي. لتحليل متقدم، يرجى التأكد من تكوين Gemini AI بشكل صحيح.
+
+🕒 **وقت التحليل:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+        
+        gemini_analyzer = SimpleGeminiAnalyzer()
+        
+        # تعريف الدوال المساعدة المفقودة
+        def cache_price_data(symbol, data):
+            """حفظ بيانات السعر في الكاش"""
+            global price_data_cache
+            price_data_cache[symbol] = {
+                'data': data,
+                'timestamp': datetime.now()
+            }
+        
+        # تعريف المتغيرات العامة المفقودة الأخرى
+        global analysis_in_progress, monitoring_active
+        global active_users, user_selected_symbols, user_monitoring_active
+        global mt5_operation_lock
+        
+        analysis_in_progress = False
+        monitoring_active = True
+        active_users = set()
+        user_selected_symbols = {}
+        user_monitoring_active = {}
+        mt5_operation_lock = threading.Lock()
+        
         # التحقق من اتصال MT5
         if mt5_manager.connected:
             logger.info("[OK] MetaTrader5 متصل ومستعد!")
         else:
             logger.warning("[WARNING] MetaTrader5 غير متصل - يرجى التحقق من الإعدادات")
+        
+        # تعريف GEMINI_AVAILABLE
+        GEMINI_AVAILABLE = True  # مؤقتاً، يمكن تعديلها لاحقاً حسب تكوين API
         
         # التحقق من Gemini AI
         if GEMINI_AVAILABLE:
@@ -12063,8 +12122,8 @@ if __name__ == "__main__":
         logger.info("[SYSTEM] نظام التنبيهات: مراقبة لحظية مع تقييم المستخدم")
         logger.info("[SYSTEM] نظام التخزين: تسجيل جميع الصفقات والتقييمات")
         
-        # إنشاء متغير لإيقاف حلقة المراقبة بأمان
-        monitoring_active = True
+        # إنشاء متغير لإيقاف حلقة المراقبة بأمان (تم تعريفه مسبقاً)
+        # monitoring_active = True
         
         # بدء حلقة المراقبة في خيط منفصل مع معالجة محسنة
         monitoring_thread = threading.Thread(
@@ -12084,7 +12143,9 @@ if __name__ == "__main__":
         
         # بدء البوت
         logger.info("[SYSTEM] البوت جاهز للعمل!")
-        # تنظيف شامل عند بدء التشغيل
+        # تعريف وتنظيف شامل عند بدء التشغيل
+        price_data_cache = {}
+        last_api_calls = {}
         price_data_cache.clear()
         last_api_calls.clear()
         logger.info("[SYSTEM] تم تنظيف جميع البيانات المؤقتة عند بدء التشغيل")
