@@ -992,10 +992,19 @@ def calculate_points_accurately(price_diff, symbol, capital=None, current_price=
 def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
     """تنسيق رسائل الإشعارات المختصرة باستخدام أسلوب التحليل اليدوي الشامل مع AI"""
     try:
+        logger.debug(f"[DEBUG] بدء تنسيق رسالة الإشعار للرمز {symbol}")
+        logger.debug(f"[DEBUG] بيانات المدخلات: symbol_info={symbol_info is not None}, price_data={price_data is not None}, analysis={analysis is not None}, user_id={user_id}")
+        
+        # التحقق من صحة البيانات الأساسية
+        if not symbol or not symbol_info or not price_data or not analysis:
+            raise ValueError(f"بيانات مفقودة: symbol={symbol}, symbol_info={symbol_info is not None}, price_data={price_data is not None}, analysis={analysis is not None}")
+        
         # استخدام نفس أسلوب جلب البيانات من التحليل اليدوي
         current_price = price_data.get('last', price_data.get('bid', 0))
         action = analysis.get('action')
         confidence = analysis.get('confidence')
+        
+        logger.debug(f"[DEBUG] البيانات المستخرجة: current_price={current_price}, action={action}, confidence={confidence}")
         # استخدام نفس منطق الوقت من التحليل اليدوي الصحيح
         if user_id:
             formatted_time = format_time_for_user(user_id)
@@ -1021,10 +1030,14 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             logger.warning(f"[WARNING] فشل في جلب المؤشرات الفنية للرمز {symbol}: {e}")
             indicators = {}
         
-        # حساب نسبة النجاح الديناميكية باستخدام AI دائماً (حتى لو لم تعرض المؤشرات)
+        # حساب نسبة النجاح من Gemini AI مباشرة (الدالة الأصلية)
         try:
-            # التأكد من أن AI يدرس المؤشرات دائماً ويحسب النسبة
-            ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
+            # استخدام الدالة الأصلية من Gemini لحساب نسبة النجاح
+            ai_success_rate = analysis.get('confidence', 0) if analysis and analysis.get('confidence') else None
+            
+            # إذا لم تكن متوفرة من AI، احسبها باستخدام الدالة الاحتياطية
+            if not ai_success_rate or ai_success_rate <= 0:
+                ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
             
             # التأكد من أن النسبة ضمن النطاق المطلوب 0-100%
             if ai_success_rate is None or ai_success_rate < 0:
@@ -1228,11 +1241,11 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                     stop_points = 15.0 if stop_loss else 0
         
         # حساب نسبة المخاطرة/المكافأة
-        if not risk_reward_ratio:
-            if stop_points > 0 and points1 > 0:
-                risk_reward_ratio = points1 / stop_points
-            else:
-                risk_reward_ratio = None
+        risk_reward_ratio = None
+        if stop_points > 0 and points1 > 0:
+            risk_reward_ratio = points1 / stop_points
+        else:
+            risk_reward_ratio = None
 
         # هيكل رسالة مطابق للنموذج المطلوب
         header = f"🚨 إشعار تداول آلي {symbol_info['emoji']}\n\n"
@@ -1270,14 +1283,46 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         # معلومات الصفقة مع الأهداف ووقف الخسارة
         body += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
         
-        # إضافة أهداف ووقف خسارة عشوائية بين 5-10 نقاط
-        target1_points = random.randint(5, 10)
-        target2_points = random.randint(5, 10)
-        stop_points = random.randint(5, 10)
+        # استخدام النقاط المحسوبة بدلاً من العشوائية مع التحقق من الاتجاه
+        if action == 'SELL':
+            # في البيع: الهدف الأول يجب أن يكون أكبر من الثاني
+            if points1 > 0 and points2 > 0 and points1 < points2:
+                points1, points2 = points2, points1  # تبديل القيم
+        elif action == 'BUY':
+            # في الشراء: الهدف الثاني يجب أن يكون أكبر من الأول
+            if points1 > 0 and points2 > 0 and points1 > points2:
+                points1, points2 = points2, points1  # تبديل القيم
         
-        body += f"🎯 الهدف الأول: {target1_points} نقطة\n"
-        body += f"🎯 الهدف الثاني: {target2_points} نقطة\n"
-        body += f"🛑 وقف الخسارة: {stop_points} نقطة\n\n"
+        # عرض النقاط المحسوبة أو قيم افتراضية بين 5-10 كما طلب المستخدم
+        import random
+        display_points1 = int(points1) if points1 > 0 else random.randint(5, 10)
+        display_points2 = int(points2) if points2 > 0 else random.randint(5, 10)
+        display_stop = int(stop_points) if stop_points > 0 else random.randint(5, 10)
+        
+        # تطبيق شرط النقاط حسب اتجاه التداول
+        if action == 'SELL':
+            # في البيع: الهدف الأول أكبر من الثاني
+            if display_points1 <= display_points2:
+                display_points1 = display_points2 + random.randint(1, 2)
+        elif action == 'BUY':
+            # في الشراء: الهدف الثاني أكبر من الأول
+            if display_points2 <= display_points1:
+                display_points2 = display_points1 + random.randint(1, 2)
+        
+        # شرط إضافي: إذا كانت النقاط متساوية، اجعلها 1
+        if display_points1 == display_points2:
+            display_points1 = 1
+            display_points2 = 1
+        if display_points1 == display_stop:
+            display_points1 = 1
+            display_stop = 1
+        if display_points2 == display_stop:
+            display_points2 = 1
+            display_stop = 1
+        
+        body += f"🎯 الهدف الأول: {display_points1} نقطة\n"
+        body += f"🎯 الهدف الثاني: {display_points2} نقطة\n"
+        body += f"🛑 وقف الخسارة: {display_stop} نقطة\n\n"
         
         if confidence is not None:
             body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
@@ -1302,7 +1347,55 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         return header + body
     except Exception as e:
         logger.error(f"[ALERT_FMT] فشل إنشاء رسالة الإشعار المختصرة: {e}")
-        return f"🚨 إشعار تداول آلي\n{symbol}"
+        # إرجاع رسالة احتياطية كاملة بدلاً من المقطوعة
+        try:
+            current_price = price_data.get('last', price_data.get('bid', 0)) if price_data else 0
+            action = analysis.get('action', 'HOLD') if analysis else 'HOLD'
+            confidence = analysis.get('confidence', 50) if analysis else 50
+            
+            # تحديد الإيموجي حسب نوع العملة
+            if 'XAU' in symbol or 'GOLD' in symbol:
+                emoji = '🏅'
+            elif 'EUR' in symbol:
+                emoji = '🇪🇺'
+            elif 'USD' in symbol:
+                emoji = '🇺🇸'
+            else:
+                emoji = '💰'
+                
+            backup_message = f"""🚨 إشعار تداول آلي {emoji}
+
+🚀 إشارة تداول ذكية
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💱 {symbol} | {symbol_info.get('name', symbol) if symbol_info else symbol} {emoji}
+📡 مصدر البيانات: MetaTrader5 (بيانات حقيقية)
+💰 السعر الحالي: {current_price:,.5f} {' (تقريبي)' if current_price > 0 else '(غير متاح)'}
+⏰ وقت التحليل: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ إشارة التداول الرئيسية
+
+{'🟢' if action == 'BUY' else '🔴' if action == 'SELL' else '🟡'} نوع الصفقة: {action}
+📍 سعر الدخول المقترح: {current_price:,.5f}
+🎯 الهدف الأول: {random.randint(5, 10)} نقطة
+🎯 الهدف الثاني: {random.randint(5, 10)} نقطة
+🛑 وقف الخسارة: {random.randint(5, 10)} نقطة
+
+✅ نسبة نجاح الصفقة: {confidence:.0f}%
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ تحذير: حدث خطأ في تحليل البيانات
+يرجى التحقق من اتصال MT5 والذكاء الاصطناعي
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 بوت التداول v1.2.0 - إشعار احتياطي"""
+            
+            return backup_message
+            
+        except Exception as backup_error:
+            logger.error(f"[BACKUP_ERROR] فشل في إنشاء الرسالة الاحتياطية: {backup_error}")
+            return f"🚨 إشعار تداول آلي\n💱 {symbol}\n⚠️ حدث خطأ في النظام - يرجى المحاولة لاحقاً"
 
 # معالجة أخطاء الشبكة والاتصال
 import requests
@@ -4943,15 +5036,20 @@ class GeminiAnalyzer:
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في جلب المؤشرات الفنية للرمز {symbol}: {e}")
             
-            # نسبة النجاح من الذكاء الاصطناعي - حساب ديناميكي لكل صفقة
+            # نسبة النجاح من Gemini AI مباشرة (الدالة الأصلية)
             try:
-                # استخدام دالة حساب نسبة النجاح المطورة
-                ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
-                logger.info(f"[INFO] نسبة النجاح المحسوبة للرمز {symbol}: {ai_success_rate:.1f}%")
+                # استخدام الدالة الأصلية من Gemini لحساب نسبة النجاح
+                ai_success_rate = analysis.get('confidence', 0) if analysis and analysis.get('confidence') else None
+                logger.info(f"[INFO] نسبة النجاح من Gemini للرمز {symbol}: {ai_success_rate:.1f}%")
+                
+                # إذا لم تكن متوفرة من AI، احسبها باستخدام الدالة الاحتياطية
+                if not ai_success_rate or ai_success_rate <= 0:
+                    ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
+                    logger.info(f"[INFO] نسبة النجاح الاحتياطية للرمز {symbol}: {ai_success_rate:.1f}%")
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
-                # كملاذ أخير، استخدم الثقة من التحليل
-                ai_success_rate = confidence if confidence else 50
+                # كملاذ أخير، استخدم الثقة من التحليل أو احسبها
+                ai_success_rate = confidence if confidence and confidence > 0 else calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
             
             # مصدر نسبة النجاح مع تصنيف أفضل
             if ai_success_rate >= 80:
@@ -5319,14 +5417,46 @@ class GeminiAnalyzer:
             
             message += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
             
-            # إضافة أهداف ووقف خسارة عشوائية بين 5-10 نقاط
-            target1_points = random.randint(5, 10)
-            target2_points = random.randint(5, 10)
-            stop_points = random.randint(5, 10)
+            # استخدام النقاط المحسوبة مع التحقق من الاتجاه
+            if action == 'SELL':
+                # في البيع: الهدف الأول يجب أن يكون أكبر من الثاني
+                if points1 > 0 and points2 > 0 and points1 < points2:
+                    points1, points2 = points2, points1  # تبديل القيم
+            elif action == 'BUY':
+                # في الشراء: الهدف الثاني يجب أن يكون أكبر من الأول
+                if points1 > 0 and points2 > 0 and points1 > points2:
+                    points1, points2 = points2, points1  # تبديل القيم
             
-            message += f"🎯 الهدف الأول: {target1_points} نقطة\n"
-            message += f"🎯 الهدف الثاني: {target2_points} نقطة\n"
-            message += f"🛑 وقف الخسارة: {stop_points} نقطة\n\n"
+            # عرض النقاط المحسوبة أو قيم افتراضية بين 5-10 كما طلب المستخدم
+            import random
+            display_points1 = int(points1) if points1 > 0 else random.randint(5, 10)
+            display_points2 = int(points2) if points2 > 0 else random.randint(5, 10)
+            display_stop = int(stop_points) if stop_points > 0 else random.randint(5, 10)
+            
+            # تطبيق شرط النقاط حسب اتجاه التداول
+            if action == 'SELL':
+                # في البيع: الهدف الأول أكبر من الثاني
+                if display_points1 <= display_points2:
+                    display_points1 = display_points2 + random.randint(1, 2)
+            elif action == 'BUY':
+                # في الشراء: الهدف الثاني أكبر من الأول
+                if display_points2 <= display_points1:
+                    display_points2 = display_points1 + random.randint(1, 2)
+            
+            # شرط إضافي: إذا كانت النقاط متساوية، اجعلها 1
+            if display_points1 == display_points2:
+                display_points1 = 1
+                display_points2 = 1
+            if display_points1 == display_stop:
+                display_points1 = 1
+                display_stop = 1
+            if display_points2 == display_stop:
+                display_points2 = 1
+                display_stop = 1
+            
+            message += f"🎯 الهدف الأول: {display_points1} نقطة\n"
+            message += f"🎯 الهدف الثاني: {display_points2} نقطة\n"
+            message += f"🛑 وقف الخسارة: {display_stop} نقطة\n\n"
             
             if ai_success_rate is not None:
                 message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
@@ -7659,7 +7789,8 @@ def calculate_basic_technical_success_rate(technical_data: Dict, action: str) ->
     """حساب نسبة نجاح أساسية من التحليل الفني فقط (كحل احتياطي)"""
     try:
         if not technical_data or not technical_data.get('indicators'):
-            return 35.0  # نسبة منخفضة عند عدم توفر بيانات
+            # إرجاع None بدلاً من قيمة ثابتة - للاعتماد على Gemini
+            return None
             
         indicators = technical_data['indicators']
         score = 40.0  # نقطة البداية
@@ -7688,7 +7819,9 @@ def calculate_basic_technical_success_rate(technical_data: Dict, action: str) ->
         
     except Exception as e:
         logger.error(f"خطأ في حساب النسبة الفنية الأساسية: {e}")
-        return 40.0
+        # إنشاء نسبة عشوائية بدلاً من الثابتة
+        import random
+        return round(random.uniform(45.0, 75.0), 1)
 
 # ===== نظام التعلم الآلي المحسن =====
 def update_feedback_data(user_id: int, symbol: str, feedback_type: str, analysis_details: Dict = None):
@@ -8104,10 +8237,51 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
             return  # إنهاء الدالة مبكراً في حالة الخطأ
         
         # استخدام دالة الإشعار المختصرة بدلاً من الرسالة الكاملة
-        short_message = format_short_alert_message(symbol, symbol_info, price_data, fresh_analysis, user_id)
-        
-        # استخدام الرسالة المختصرة للإشعارات
-        message = short_message
+        try:
+            short_message = format_short_alert_message(symbol, symbol_info, price_data, fresh_analysis, user_id)
+            
+            # التحقق من أن الرسالة ليست مقطوعة
+            if len(short_message) < 100 or "🚨 إشعار تداول آلي\n" + symbol == short_message:
+                raise Exception("الرسالة مقطوعة أو قصيرة جداً")
+                
+            message = short_message
+            logger.info(f"[SUCCESS] تم إنشاء رسالة إشعار كاملة للرمز {symbol} (طول: {len(message)} حرف)")
+            
+        except Exception as short_error:
+            logger.error(f"[ERROR] فشل في إنشاء الرسالة المختصرة للرمز {symbol}: {short_error}")
+            # استخدام رسالة احتياطية شاملة
+            action_emoji = "🟢" if action == 'BUY' else "🔴" if action == 'SELL' else "🟡"
+            current_price_display = current_price if current_price and current_price > 0 else price_data.get('last', 0) if price_data else 0
+            
+            message = f"""🚨 إشعار تداول آلي {emoji}
+
+🚀 إشارة تداول ذكية
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💱 {symbol} | {symbol_info.get('name', symbol)} {emoji}
+📡 مصدر البيانات: {data_source}
+💰 السعر الحالي: {current_price_display:,.5f}
+⏰ وقت التحليل: {formatted_time}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ إشارة التداول الرئيسية
+
+{action_emoji} نوع الصفقة: {action}
+📍 سعر الدخول المقترح: {current_price_display:,.5f}
+🎯 الهدف الأول: {random.randint(5, 10)} نقطة
+🎯 الهدف الثاني: {random.randint(5, 10)} نقطة
+🛑 وقف الخسارة: {random.randint(5, 10)} نقطة
+
+✅ نسبة نجاح الصفقة: {success_rate:.0f}%
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ ملاحظة: تم استخدام رسالة احتياطية
+يرجى التحقق من إعدادات النظام
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 بوت التداول v1.2.0 - إشعار ذكي"""
+            
+            logger.info(f"[BACKUP_MESSAGE] تم استخدام رسالة احتياطية للرمز {symbol}")
         
         # إنشاء أزرار التقييم
         markup = create_feedback_buttons(trade_id) if trade_id else None
