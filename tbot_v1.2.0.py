@@ -1043,7 +1043,7 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                 if indicators:
                     rsi = indicators.get('rsi', 50)
                     macd = indicators.get('macd', {})
-                    volume_ratio = indicators.get('volume_ratio', 1.0)
+                    volume_ratio = indicators.get('volume_ratio') or None
                     
                     # تعديل النسبة بناءً على RSI
                     if action == 'BUY':
@@ -1079,224 +1079,44 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                 
             except Exception as backup_error:
                 logger.error(f"[ERROR] فشل في الحساب الاحتياطي للرمز {symbol}: {backup_error}")
-                confidence = 50  # نسبة افتراضية آمنة
+                confidence = None  # لا قيمة افتراضية
         
-        # حساب التغير اليومي الصحيح
-        price_change_pct = indicators.get('price_change_pct', 0)
-        if price_change_pct == -100 or price_change_pct < -99:
+        # حساب التغير اليومي الصحيح - بدون قيم افتراضية
+        price_change_pct = indicators.get('price_change_pct')
+        if price_change_pct is None or price_change_pct == -100 or price_change_pct < -99:
             try:
                 daily_rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, 2)
                 if daily_rates is not None and len(daily_rates) >= 2:
                     yesterday_close = daily_rates[-2]['close']
                     if yesterday_close > 0:
                         price_change_pct = ((current_price - yesterday_close) / yesterday_close) * 100
-            except:
-                price_change_pct = 0
+                        logger.debug(f"[DAILY_CHANGE] {symbol}: تم حساب التغيير اليومي {price_change_pct:.2f}%")
+                    else:
+                        price_change_pct = None
+                        logger.warning(f"[DAILY_CHANGE] {symbol}: قيمة إغلاق الأمس غير صحيحة")
+                else:
+                    price_change_pct = None
+                    logger.warning(f"[DAILY_CHANGE] {symbol}: فشل في جلب البيانات اليومية")
+            except Exception as e:
+                logger.warning(f"[DAILY_CHANGE] {symbol}: خطأ في الحساب - {e}")
+                price_change_pct = None
         
-        # تنسيق التغير اليومي
-        if abs(price_change_pct) < 0.01:
-            daily_change = "0.00%"
-        elif price_change_pct != 0:
-            daily_change = f"{price_change_pct:+.2f}%"
-        else:
+        # تنسيق التغير اليومي - استخدام -- عند عدم التوفر
+        if price_change_pct is None:
             daily_change = "--"
+        elif abs(price_change_pct) < 0.01:
+            daily_change = "0.00%"
+        else:
+            daily_change = f"{price_change_pct:+.2f}%"
 
         # استخدام نفس منطق حساب الأهداف من التحليل اليدوي
         trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
         capital = get_user_capital(user_id) if user_id else 1000
         
-        # الحصول على الأهداف ووقف الخسارة من تحليل AI أو حسابها
+        # سعر الدخول فقط - تم حذف الأهداف ووقف الخسارة
         entry_price = analysis.get('entry_price') or analysis.get('entry') or current_price
-        target1 = analysis.get('target1') or analysis.get('tp1')
-        target2 = analysis.get('target2') or analysis.get('tp2')
-        stop_loss = analysis.get('stop_loss') or analysis.get('sl')
-        risk_reward_ratio = analysis.get('risk_reward')
         
-        # التحقق من صحة القيم المستخرجة من AI وتطبيق قواعد نمط التداول
-        ai_values_valid = True
-        if target1 and target2 and stop_loss and entry_price:
-            # التحقق من منطقية القيم
-            if trading_mode == 'scalping':
-                # للسكالبينغ: التأكد من أن الأهداف قريبة (1-3%) ووقف الخسارة ضيق (<1%)
-                if action == 'BUY':
-                    tp1_pct = abs((target1 - entry_price) / entry_price) * 100
-                    tp2_pct = abs((target2 - entry_price) / entry_price) * 100
-                    sl_pct = abs((entry_price - stop_loss) / entry_price) * 100
-                    
-                    if tp1_pct > 3 or tp2_pct > 5 or sl_pct > 1.5:
-                        logger.warning(f"[SCALPING_CHECK] قيم AI غير مناسبة للسكالبينغ للرمز {symbol}: TP1={tp1_pct:.1f}%, TP2={tp2_pct:.1f}%, SL={sl_pct:.1f}%")
-                        ai_values_valid = False
-                elif action == 'SELL':
-                    tp1_pct = abs((entry_price - target1) / entry_price) * 100
-                    tp2_pct = abs((entry_price - target2) / entry_price) * 100
-                    sl_pct = abs((stop_loss - entry_price) / entry_price) * 100
-                    
-                    if tp1_pct > 3 or tp2_pct > 5 or sl_pct > 1.5:
-                        logger.warning(f"[SCALPING_CHECK] قيم AI غير مناسبة للسكالبينغ للرمز {symbol}: TP1={tp1_pct:.1f}%, TP2={tp2_pct:.1f}%, SL={sl_pct:.1f}%")
-                        ai_values_valid = False
-                        
-                if ai_values_valid:
-                    logger.info(f"[AI_SUCCESS] استخدام قيم AI للسكالبينغ للرمز {symbol}: TP1={target1:.5f}, TP2={target2:.5f}, SL={stop_loss:.5f}")
-            else:
-                logger.info(f"[AI_SUCCESS] استخدام قيم AI للتداول طويل الأمد للرمز {symbol}: TP1={target1:.5f}, TP2={target2:.5f}, SL={stop_loss:.5f}")
-        else:
-            ai_values_valid = False
-            logger.debug(f"[AI_MISSING] قيم AI مفقودة للرمز {symbol}: TP1={target1}, TP2={target2}, SL={stop_loss}, Entry={entry_price}")
-        
-        # إذا لم تكن متوفرة من AI أو غير صالحة، احسبها من المؤشرات الفنية
-        if not ai_values_valid or not all([target1, target2, stop_loss]):
-            # استخدام مستويات الدعم والمقاومة الحقيقية من MT5
-            resistance = indicators.get('resistance')
-            support = indicators.get('support')
-            
-            if resistance and support and resistance > support:
-                if action == 'BUY':
-                    # للشراء: الأهداف يجب أن تكون أعلى من السعر الحالي
-                    if resistance > current_price:
-                        target1 = target1 or min(resistance * 0.99, current_price * 1.02)
-                        target2 = target2 or min(resistance * 1.01, current_price * 1.04)
-                    else:
-                        # إذا كانت المقاومة أقل من السعر، استخدم نسبة من السعر الحالي
-                        target1 = target1 or current_price * 1.015
-                        target2 = target2 or current_price * 1.03
-                    stop_loss = stop_loss or max(support * 1.01, current_price * 0.985)
-                elif action == 'SELL':
-                    # للبيع: الأهداف يجب أن تكون أقل من السعر الحالي
-                    if support < current_price:
-                        target1 = target1 or max(support * 1.01, current_price * 0.98)
-                        target2 = target2 or max(support * 0.99, current_price * 0.96)
-                    else:
-                        # إذا كان الدعم أعلى من السعر، استخدم نسبة من السعر الحالي
-                        target1 = target1 or current_price * 0.985
-                        target2 = target2 or current_price * 0.97
-                    stop_loss = stop_loss or min(resistance * 0.99, current_price * 1.015)
-                else:  # HOLD
-                    target1 = target1 or current_price * 1.015
-                    target2 = target2 or current_price * 1.03
-                    stop_loss = stop_loss or current_price * 0.985
-            else:
-                # إذا لم تتوفر مستويات من MT5، احسب بناءً على ATR أو نسبة مئوية
-                atr = indicators.get('atr') if indicators else None
-                if atr and atr > 0:
-                    # استخدام ATR لحساب مستويات دقيقة
-                    if action == 'BUY':
-                        target1 = target1 or current_price + (atr * 1.5)
-                        target2 = target2 or current_price + (atr * 2.5)
-                        stop_loss = stop_loss or current_price - (atr * 1.0)
-                    elif action == 'SELL':
-                        target1 = target1 or current_price - (atr * 1.5)
-                        target2 = target2 or current_price - (atr * 2.5)
-                        stop_loss = stop_loss or current_price + (atr * 1.0)
-                    else:
-                        target1 = target1 or current_price + (atr * 1.0)
-                        target2 = target2 or current_price + (atr * 2.0)
-                        stop_loss = stop_loss or current_price - (atr * 1.0)
-                else:
-                    # نسب افتراضية حسب النمط - محسنة للسكالبينغ
-                    if trading_mode == 'scalping':
-                        # نسب دقيقة للسكالبينغ
-                        tp1_pct, tp2_pct, sl_pct = 0.015, 0.025, 0.005  # TP1: 1.5%, TP2: 2.5%, SL: 0.5%
-                        logger.info(f"[SCALPING] استخدام نسب السكالبينغ للرمز {symbol}: TP1={tp1_pct*100}%, TP2={tp2_pct*100}%, SL={sl_pct*100}%")
-                    else:
-                        # نسب للتداول طويل الأمد
-                        tp1_pct, tp2_pct, sl_pct = 0.05, 0.08, 0.02  # TP1: 5%, TP2: 8%, SL: 2%
-                        logger.info(f"[LONGTERM] استخدام نسب التداول طويل الأمد للرمز {symbol}: TP1={tp1_pct*100}%, TP2={tp2_pct*100}%, SL={sl_pct*100}%")
-                    
-                    if action == 'BUY':
-                        target1 = target1 or current_price * (1 + tp1_pct)
-                        target2 = target2 or current_price * (1 + tp2_pct)
-                        stop_loss = stop_loss or current_price * (1 - sl_pct)
-                    elif action == 'SELL':
-                        target1 = target1 or current_price * (1 - tp1_pct)
-                        target2 = target2 or current_price * (1 - tp2_pct)
-                        stop_loss = stop_loss or current_price * (1 + sl_pct)
-                    else:  # HOLD
-                        target1 = target1 or current_price * (1 + tp1_pct)
-                        target2 = target2 or current_price * (1 + tp2_pct)
-                        stop_loss = stop_loss or current_price * (1 - sl_pct)
-
-        # التحقق من منطقية القيم قبل المتابعة - مع تحسين الرسائل
-        if current_price > 0:  # تأكد من أن السعر الحالي صحيح
-            if action == 'BUY':
-                # في صفقة الشراء: الأهداف يجب أن تكون أعلى من السعر والاستوب أقل
-                if target1 and target1 <= current_price:
-                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 1 للشراء - من {target1:.5f} إلى {current_price * 1.015:.5f}")
-                    target1 = current_price * 1.015
-                if target2 and target2 <= current_price:
-                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 2 للشراء - من {target2:.5f} إلى {current_price * 1.03:.5f}")
-                    target2 = current_price * 1.03
-                if stop_loss and stop_loss >= current_price:
-                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح وقف الخسارة للشراء - من {stop_loss:.5f} إلى {current_price * 0.985:.5f}")
-                    stop_loss = current_price * 0.985
-            elif action == 'SELL':
-                # في صفقة البيع: الأهداف يجب أن تكون أقل من السعر والاستوب أعلى
-                if target1 and target1 >= current_price:
-                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 1 للبيع - من {target1:.5f} إلى {current_price * 0.985:.5f}")
-                    target1 = current_price * 0.985
-                if target2 and target2 >= current_price:
-                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 2 للبيع - من {target2:.5f} إلى {current_price * 0.97:.5f}")
-                    target2 = current_price * 0.97
-                if stop_loss and stop_loss <= current_price:
-                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح وقف الخسارة للبيع - من {stop_loss:.5f} إلى {current_price * 1.015:.5f}")
-                    stop_loss = current_price * 1.015
-        else:
-            logger.error(f"[PRICE_ERROR] {symbol}: السعر الحالي غير صحيح ({current_price}) - لا يمكن حساب الأهداف")
-
-        # حساب النقاط بدقة مع ضمان قيم صحيحة - محسن ومطور
-        def calc_points_for_symbol(price_diff, symbol_name):
-            """حساب النقاط حسب نوع الرمز بدقة محسنة"""
-            try:
-                if not price_diff or abs(price_diff) < 0.00001:
-                    return 0
-                
-                s = symbol_name.upper()
-                
-                # تحديد قيمة النقطة حسب نوع الأصل
-                if s.endswith('JPY'):
-                    # الين الياباني: النقطة = 0.01
-                    pip_size = 0.01
-                    base_points = abs(price_diff) / pip_size
-                elif s.startswith('XAU') or s.startswith('XAG') or 'GOLD' in s or 'SILVER' in s:
-                    # المعادن الثمينة: النقطة = 0.01
-                    pip_size = 0.01
-                    base_points = abs(price_diff) / pip_size
-                elif s.startswith('BTC') or s.startswith('ETH') or any(crypto in s for crypto in ['BTC', 'ETH', 'LTC', 'XRP']):
-                    # العملات الرقمية: النقطة = 1 (بسبب السعر المرتفع)
-                    pip_size = 1.0
-                    base_points = abs(price_diff) / pip_size
-                elif any(s.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
-                    # أزواج العملات الرئيسية: النقطة = 0.0001
-                    pip_size = 0.0001
-                    base_points = abs(price_diff) / pip_size
-                elif any(index in s for index in ['SPX', 'DXY', 'NASDAQ', 'DOW']):
-                    # المؤشرات: النقطة = 1
-                    pip_size = 1.0
-                    base_points = abs(price_diff) / pip_size
-                else:
-                    # افتراضي للأسهم والأصول الأخرى: النقطة = 0.01
-                    pip_size = 0.01
-                    base_points = abs(price_diff) / pip_size
-                
-                # تطبيق تعديل بناءً على رأس المال (تأثير أقل)
-                capital_multiplier = 1.0
-                if capital < 1000:
-                    capital_multiplier = 0.9
-                elif capital > 10000:
-                    capital_multiplier = 1.05
-                
-                final_points = base_points * capital_multiplier
-                
-                logger.debug(f"[POINTS_CALC] {symbol_name}: diff={price_diff:.5f}, pip_size={pip_size}, base_points={base_points:.1f}, final={final_points:.1f}")
-                
-                return max(0, round(final_points, 1))
-            except Exception as e:
-                logger.error(f"[ERROR] خطأ في حساب النقاط: {e}")
-                return 0
-        
-        # جلب حجم النقطة (pip size) الخاص بالرمز
-        asset_type, pip_size = get_asset_type_and_pip_size(symbol)
-        
-        # استخدام النقاط المحسوبة من AI إذا كانت متوفرة، وإلا حسابها يدوياً
+        # تم حذف حساب الأهداف ووقف الخسارة - الاعتماد على سعر الدخول فقط
         points1 = 0
         points2 = 0
         stop_points = 0
@@ -1380,9 +1200,9 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                 logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
                 # حساب نقاط افتراضية بناءً على نوع الرمز
                 if 'JPY' in symbol:
-                    points1 = 20.0 if target1 else 0
-                    points2 = 35.0 if target2 else 0  
-                    stop_points = 10.0 if stop_loss else 0
+                    points1 = None if not target1 else None
+                    points2 = None if not target2 else None  
+                    stop_points = None if not stop_loss else None
                 elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
                     points1 = 50.0 if target1 else 0
                     points2 = 80.0 if target2 else 0  
@@ -1397,7 +1217,7 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             if stop_points > 0 and points1 > 0:
                 risk_reward_ratio = points1 / stop_points
             else:
-                risk_reward_ratio = 1.0
+                risk_reward_ratio = None
 
         # هيكل رسالة مطابق للتحليل اليدوي
         header = f"🚨 إشعار تداول آلي {symbol_info['emoji']}\n\n"
@@ -1437,14 +1257,9 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         else:
             body += "🟡 نوع الصفقة: انتظار (HOLD)\n"
         
-        # معلومات الصفقة
+        # معلومات الصفقة - تم حذف الأهداف ووقف الخسارة والنقاط
         body += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-        body += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
-        if target2:
-            body += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
-        body += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
-        body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
-        body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
+        body += f"✅ نسبة نجاح الصفقة: {confidence:.0f if confidence is not None else '--'}%\n\n"
         
         # الأخبار الاقتصادية - مطابق للتحليل اليدوي
         body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -2324,27 +2139,15 @@ class MT5Manager:
     
 
 
-    def get_live_price(self, symbol: str, force_fresh: bool = False) -> Optional[Dict]:
-        """جلب السعر اللحظي الحقيقي - MT5 هو المصدر الأساسي الأولي مع نظام كاش"""
+    def get_live_price(self, symbol: str, force_fresh: bool = True) -> Optional[Dict]:
+        """جلب السعر اللحظي الحقيقي - MT5 مباشرة بدون كاش للبيانات اللحظية"""
         
         if not symbol or symbol in ['notification', 'null', '', None]:
             logger.warning(f"[WARNING] رمز غير صالح في get_live_price: {symbol}")
             return None
         
-        # إذا كان طلب بيانات لحظية مباشرة (للتحليل اليدوي)، تجاهل الكاش
-        if not force_fresh:
-            # التحقق من الكاش أولاً للاستدعاءات العادية فقط
-            cached_data = get_cached_price_data(symbol)
-            if cached_data:
-                logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
-                return cached_data
-            
-            # التحقق من معدل الاستدعاءات للاستدعاءات العادية فقط
-            if not can_make_api_call(symbol):
-                logger.debug(f"[RATE_LIMIT] تجاهل الاستدعاء لـ {symbol} - تحديد معدل الاستدعاءات")
-                return None
-        else:
-            logger.info(f"[FRESH_DATA] طلب بيانات لحظية مباشرة للرمز {symbol} - تجاهل الكاش")
+        # البيانات اللحظية دائماً مباشرة من MT5 بدون كاش
+        logger.debug(f"[LIVE_DATA] جلب بيانات لحظية مباشرة للرمز {symbol} - بدون كاش")
         
         # تسجيل وقت الاستدعاء
         record_api_call(symbol)
@@ -2488,10 +2291,12 @@ class MT5Manager:
                     'is_fresh': time_diff.total_seconds() <= 900,
                     'is_manual_analysis': force_fresh  # علامة للبيانات اللحظية المباشرة
                 }
-                    # حفظ في الكاش (حتى البيانات اللحظية المباشرة يمكن استخدامها لفترة قصيرة)
-                    if force_fresh:
-                        logger.info(f"[FRESH_DATA] تم الحصول على بيانات لحظية مباشرة للرمز {symbol} في الوقت {tick_time}")
-                    cache_price_data(symbol, data)
+                    # حفظ في الكاش فقط للتحليل التاريخي، ليس للبيانات اللحظية
+                    if not force_fresh:
+                        cache_price_data(symbol, data)
+                        logger.debug(f"[CACHE] حفظ البيانات في الكاش للتحليل التاريخي للرمز {symbol}")
+                    else:
+                        logger.info(f"[LIVE_DATA] تم الحصول على بيانات لحظية مباشرة للرمز {symbol} في الوقت {tick_time} - بدون كاش")
                     return data
                 else:
                     logger.warning(f"[WARNING] لا توجد بيانات صحيحة من MT5 لـ {symbol}")
@@ -2611,21 +2416,15 @@ class MT5Manager:
                     'time': current_tick.get('time')
                 }
             
-            # المتوسطات المتحركة (محسوبة من أحدث البيانات) - مع التحقق من صحة الدوال
+            # المتوسطات المتحركة - MA9 و MA21 فقط
             try:
                 if len(df) >= 9:
                     indicators['ma_9'] = ta.trend.sma_indicator(df['close'], window=9).iloc[-1]
-                if len(df) >= 10:
-                    indicators['ma_10'] = ta.trend.sma_indicator(df['close'], window=10).iloc[-1]
-                if len(df) >= 20:
-                    indicators['ma_20'] = ta.trend.sma_indicator(df['close'], window=20).iloc[-1]
                 if len(df) >= 21:
                     indicators['ma_21'] = ta.trend.sma_indicator(df['close'], window=21).iloc[-1]
-                if len(df) >= 50:
-                    indicators['ma_50'] = ta.trend.sma_indicator(df['close'], window=50).iloc[-1]
                     
                 # التحقق من صحة القيم المحسوبة
-                for ma_key in ['ma_9', 'ma_10', 'ma_20', 'ma_21', 'ma_50']:
+                for ma_key in ['ma_9', 'ma_21']:
                     if ma_key in indicators:
                         if pd.isna(indicators[ma_key]) or indicators[ma_key] <= 0:
                             logger.warning(f"[WARNING] قيمة {ma_key} غير صحيحة: {indicators[ma_key]}")
@@ -2635,9 +2434,9 @@ class MT5Manager:
                             
             except Exception as ma_error:
                 logger.error(f"[ERROR] خطأ في حساب المتوسطات المتحركة: {ma_error}")
-                # استخدام حساب بديل يدوي
+                # استخدام حساب بديل يدوي - MA9 و MA21 فقط
                 try:
-                    for window in [9, 10, 20, 21, 50]:
+                    for window in [9, 21]:
                         if len(df) >= window:
                             ma_value = df['close'].rolling(window=window).mean().iloc[-1]
                             if not pd.isna(ma_value) and ma_value > 0:
@@ -2676,7 +2475,7 @@ class MT5Manager:
                     
                 except Exception as e:
                     logger.error(f"[ERROR] خطأ في حساب RSI لـ {symbol}: {e}")
-                    indicators['rsi'] = 50  # قيمة افتراضية محايدة
+                    indicators['rsi'] = None  # لا قيمة افتراضية
                     indicators['rsi_interpretation'] = 'خطأ في الحساب'
             
             # MACD - مع معالجة أخطاء محسنة
@@ -2755,14 +2554,14 @@ class MT5Manager:
                                 if len(valid_volumes) > 0:
                                     indicators['current_volume'] = valid_volumes.mean()
                                 else:
-                                    indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+                                    indicators['current_volume'] = None  # لا قيمة افتراضية
                         else:
                             # محاولة حساب من البيانات المتاحة
                             valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
                             if len(valid_volumes) > 0:
                                 indicators['current_volume'] = valid_volumes.iloc[-1]
                             else:
-                                indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+                                indicators['current_volume'] = None  # لا قيمة افتراضية
                 else:
                     logger.warning(f"[WARNING] عمود الحجم غير متوفر لـ {symbol}")
                     # محاولة استخدام بيانات الحجم من المصادر الأخرى
@@ -2771,7 +2570,7 @@ class MT5Manager:
                         indicators['current_volume'] = current_tick['volume']
                         logger.info(f"[INFO] تم استخدام حجم التداول من البيانات اللحظية لـ {symbol}")
                     else:
-                        indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+                        indicators['current_volume'] = None  # لا قيمة افتراضية
                     
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في جلب الحجم الحالي لـ {symbol}: {e}")
@@ -2782,9 +2581,9 @@ class MT5Manager:
                         indicators['current_volume'] = current_tick['volume']
                         logger.info(f"[INFO] تم استخدام حجم التداول من البيانات اللحظية كملاذ أخير لـ {symbol}")
                     else:
-                        indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+                        indicators['current_volume'] = None  # لا قيمة افتراضية
                 except:
-                    indicators['current_volume'] = 1000  # قيمة افتراضية معقولة
+                    indicators['current_volume'] = None  # لا قيمة افتراضية
             
             # حساب متوسط الحجم ونسبة الحجم - محسن
             try:
@@ -2794,25 +2593,25 @@ class MT5Manager:
                     if len(valid_volumes) >= 10:  # نحتاج على الأقل 10 نقاط صحيحة
                         indicators['avg_volume'] = valid_volumes.rolling(window=min(20, len(valid_volumes))).mean().iloc[-1]
                     else:
-                        indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                        indicators['avg_volume'] = indicators.get('current_volume') or None
                 elif len(df) >= 5:
                     # للبيانات المحدودة، استخدم ما متاح
                     valid_volumes = df['tick_volume'][df['tick_volume'] > 0].dropna()
                     if len(valid_volumes) > 0:
                         indicators['avg_volume'] = valid_volumes.mean()
                     else:
-                        indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                        indicators['avg_volume'] = indicators.get('current_volume') or None
                 else:
                     # بيانات قليلة جداً
-                    indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                    indicators['avg_volume'] = indicators.get('current_volume') or None
                 
                 # التأكد من صحة متوسط الحجم
                 if pd.isna(indicators['avg_volume']) or indicators['avg_volume'] <= 0:
-                    indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                    indicators['avg_volume'] = indicators.get('current_volume') or None
                 
                 # حساب نسبة الحجم
-                current_vol = indicators.get('current_volume', 1000)
-                avg_vol = indicators.get('avg_volume', 1000)
+                current_vol = indicators.get('current_volume') or None
+                avg_vol = indicators.get('avg_volume') or None
                 
                 if avg_vol > 0:
                     indicators['volume_ratio'] = current_vol / avg_vol
@@ -2822,7 +2621,7 @@ class MT5Manager:
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في حساب متوسط الحجم لـ {symbol}: {e}")
                 # قيم افتراضية آمنة
-                indicators['avg_volume'] = indicators.get('current_volume', 1000)
+                indicators['avg_volume'] = indicators.get('current_volume') or None
                 indicators['volume_ratio'] = 1.0
                 
             # حساب مؤشرات الحجم الإضافية - محسن
@@ -2832,28 +2631,28 @@ class MT5Manager:
                 if len(valid_volumes) >= 5:
                     indicators['volume_trend_5'] = valid_volumes.tail(5).mean()
                 else:
-                    indicators['volume_trend_5'] = indicators.get('current_volume', 1000)
+                    indicators['volume_trend_5'] = indicators.get('current_volume') or None
                 
                 if len(valid_volumes) >= 10:
                     indicators['volume_trend_10'] = valid_volumes.tail(10).mean()
                 else:
-                    indicators['volume_trend_10'] = indicators.get('current_volume', 1000)
+                    indicators['volume_trend_10'] = indicators.get('current_volume') or None
                 
                 # Volume Moving Average (VMA) - محسن
                 if len(valid_volumes) >= 9:
                     indicators['volume_ma_9'] = valid_volumes.rolling(window=9).mean().iloc[-1]
                 else:
-                    indicators['volume_ma_9'] = indicators.get('avg_volume', 1000)
+                    indicators['volume_ma_9'] = indicators.get('avg_volume') or None
                 
                 if len(valid_volumes) >= 21:
                     indicators['volume_ma_21'] = valid_volumes.rolling(window=21).mean().iloc[-1]
                 else:
-                    indicators['volume_ma_21'] = indicators.get('avg_volume', 1000)
+                    indicators['volume_ma_21'] = indicators.get('avg_volume') or None
                 
                 # Volume Rate of Change - محسن
                 if len(valid_volumes) >= 10:
                     vol_10_ago = valid_volumes.iloc[-10] if len(valid_volumes) >= 10 else valid_volumes.iloc[0]
-                    current_vol = indicators.get('current_volume', 1000)
+                    current_vol = indicators.get('current_volume') or None
                     if vol_10_ago > 0:
                         indicators['volume_roc'] = ((current_vol - vol_10_ago) / vol_10_ago) * 100
                     else:
@@ -2864,7 +2663,7 @@ class MT5Manager:
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في حساب مؤشرات الحجم الإضافية لـ {symbol}: {e}")
                 # قيم افتراضية آمنة
-                current_vol = indicators.get('current_volume', 1000)
+                current_vol = indicators.get('current_volume') or None
                 indicators['volume_trend_5'] = current_vol
                 indicators['volume_trend_10'] = current_vol
                 indicators['volume_ma_9'] = current_vol
@@ -2874,10 +2673,10 @@ class MT5Manager:
             # تفسير حجم التداول المتقدم - يتم حسابه دائماً
             try:
                 volume_signals = []
-                volume_ratio = indicators.get('volume_ratio', 1.0)
+                volume_ratio = indicators.get('volume_ratio') or None
                 
                 # تصنيف نسبة الحجم
-                if volume_ratio > 2.0:
+                if volume_ratio is not None and volume_ratio > 2.0:
                     volume_signals.append('حجم عالي جداً - اهتمام قوي')
                 elif volume_ratio >= 1.5:  # تغيير من > إلى >= لتطابق 1.5 تماماً
                     volume_signals.append('حجم عالي - نشاط متزايد')
@@ -3092,23 +2891,14 @@ class MT5Manager:
                         indicators['price_change_pct'] = daily_change_pct
                     else:
                         # في حالة قيم غير صحيحة، استخدم حساب بديل
-                        indicators['price_change_pct'] = ((df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2] * 100) if len(df) >= 2 else 0
+                        indicators['price_change_pct'] = None  # لا قيمة افتراضية عند فشل جلب البيانات اليومية
                 else:
-                    # في حالة فشل جلب البيانات اليومية، استخدم مقارنة مع الشمعة السابقة
-                    if len(df) >= 2:
-                        indicators['price_change_pct'] = ((df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2] * 100)
-                    else:
-                        indicators['price_change_pct'] = 0
+                    # في حالة فشل جلب البيانات اليومية، لا نضع قيمة افتراضية
+                    indicators['price_change_pct'] = None
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في حساب التغير اليومي لـ {symbol}: {e}")
-                # استخدام حساب بديل آمن
-                try:
-                    if len(df) >= 2 and df['close'].iloc[-2] > 0:
-                        indicators['price_change_pct'] = ((df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2] * 100)
-                    else:
-                        indicators['price_change_pct'] = 0
-                except:
-                    indicators['price_change_pct'] = 0
+                # لا نضع قيمة افتراضية عند الفشل
+                indicators['price_change_pct'] = None
             
             # ===== كشف التقاطعات للمتوسطات المتحركة =====
             ma_crossovers = []
@@ -4113,9 +3903,8 @@ class GeminiAnalyzer:
                     - اهتم بـ RSI و MACD للإشارات السريعة
                     
                     ⚠️ مهم جداً للسكالبينغ:
-                    - يجب تحديد TP1 (الهدف الأول) و TP2 (الهدف الثاني) و SL (وقف الخسارة) بأرقام دقيقة
-                    - استخدم نسب صغيرة: TP1 = +1.5%, TP2 = +2.5%, SL = -0.5% من سعر الدخول
-                    - اكتب القيم بوضوح: "TP1: [رقم]" و "TP2: [رقم]" و "SL: [رقم]"
+                    - ركز على التحليل الفني والتوصية فقط (BUY/SELL/HOLD)
+                    - لا تذكر الأهداف أو وقف الخسارة في التحليل
                     """
                 else:
                     trading_mode_instructions = """
@@ -5415,9 +5204,9 @@ class GeminiAnalyzer:
                 logger.warning(f"[WARNING] خطأ في حساب النقاط للرمز {symbol}: {e}")
                 # حساب نقاط افتراضية بناءً على نوع الرمز
                 if 'JPY' in symbol:
-                    points1 = 20.0 if target1 else 0
-                    points2 = 35.0 if target2 else 0  
-                    stop_points = 10.0 if stop_loss else 0
+                    points1 = None if not target1 else None
+                    points2 = None if not target2 else None  
+                    stop_points = None if not stop_loss else None
                 elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
                     points1 = 50.0 if target1 else 0
                     points2 = 80.0 if target2 else 0  
@@ -5432,7 +5221,7 @@ class GeminiAnalyzer:
                 if stop_points > 0 and points1 > 0:
                     risk_reward_ratio = points1 / stop_points
                 else:
-                    risk_reward_ratio = 1.0
+                    risk_reward_ratio = None
             
 
             
@@ -5462,7 +5251,7 @@ class GeminiAnalyzer:
             # تنسيق عرض التغير اليومي
             if abs(price_change_pct) < 0.01:  # إذا كان التغير صغير جداً
                 daily_change = "0.00%"
-            elif price_change_pct != 0:
+            elif price_change_pct is not None and price_change_pct != 0:
                 daily_change = f"{price_change_pct:+.2f}%"
             else:
                 daily_change = "--"
@@ -5513,11 +5302,7 @@ class GeminiAnalyzer:
                 message += f"🟡 نوع الصفقة: انتظار (HOLD)\n"
             
             message += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-            message += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
-            message += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
-            message += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
-            message += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
-            message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
+            message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f if ai_success_rate is not None else '--'}%\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             message += "🔧 التحليل الفني المتقدم\n\n"
@@ -5554,26 +5339,11 @@ class GeminiAnalyzer:
                     message += f"• MA9: {ma9:.5f}\n"
                 else:
                     message += f"• MA9: --\n"
-                    
-                if ma10 and ma10 > 0:
-                    message += f"• MA10: {ma10:.5f}\n"
-                else:
-                    message += f"• MA10: --\n"
-                
-                if ma20 and ma20 > 0:
-                    message += f"• MA20: {ma20:.5f}\n"
-                else:
-                    message += f"• MA20: --\n"
                 
                 if ma21 and ma21 > 0:
                     message += f"• MA21: {ma21:.5f}\n"
                 else:
                     message += f"• MA21: --\n"
-                    
-                if ma50 and ma50 > 0:
-                    message += f"• MA50: {ma50:.5f}\n"
-                else:
-                    message += f"• MA50: --\n"
                 
                 # Stochastic Oscillator
                 stochastic = indicators.get('stochastic', {})
@@ -5608,7 +5378,7 @@ class GeminiAnalyzer:
                         message += f"• تحليل الحجم: {volume_interpretation}\n"
                     
                     # إضافة تقييم بصري للحجم
-                    if volume_ratio > 2.0:
+                    if volume_ratio is not None and volume_ratio > 2.0:
                         message += f"• مستوى النشاط: 🔥 استثنائي - اهتمام كبير جداً\n"
                     elif volume_ratio > 1.5:
                         message += f"• مستوى النشاط: ⚡ عالي - نشاط متزايد\n"
@@ -5631,10 +5401,7 @@ class GeminiAnalyzer:
                 message += f"• RSI: --\n"
                 message += f"• MACD: --\n"
                 message += f"• MA9: --\n"
-                message += f"• MA10: --\n"
-                message += f"• MA20: --\n"
                 message += f"• MA21: --\n"
-                message += f"• MA50: --\n"
                 message += f"• Stochastic: --\n"
                 message += f"• ATR: --\n"
                 message += f"• الحجم: --\n"
@@ -7692,7 +7459,7 @@ def calculate_old_complex_success_rate():
         if technical_data and technical_data.get('indicators'):
             volume_ratio = technical_data['indicators'].get('volume_ratio', 1.0)
             
-            if volume_ratio > 2.0:  # حجم عالي جداً
+            if volume_ratio is not None and volume_ratio > 2.0:  # حجم عالي جداً
                 volume_score = 5
             elif volume_ratio > 1.5:  # حجم عالي
                 volume_score = 4
@@ -12244,8 +12011,9 @@ def monitoring_loop():
                                 successful_operations += 1  # العملية نجحت لكن ليس الوقت المناسب
                                 continue
                             
-                            # إرسال التنبيه إذا كانت هناك إشارة قوية
-                            if analysis.get('confidence', 0) >= min_confidence:
+                            # إرسال التنبيه إذا كانت هناك إشارة قوية - فلترة للقيم فوق 0% فقط
+                            confidence_value = analysis.get('confidence', 0)
+                            if confidence_value is not None and confidence_value > 0 and confidence_value >= min_confidence:
                                 signal = {
                                     'action': analysis.get('action', 'HOLD'),
                                     'confidence': analysis.get('confidence', 0),
