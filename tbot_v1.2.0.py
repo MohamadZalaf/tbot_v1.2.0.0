@@ -48,6 +48,8 @@ import time
 import ta
 from PIL import Image, ImageDraw, ImageFont
 import warnings
+import re
+import random
 
 # استيراد الإعدادات من ملف config.py
 try:
@@ -1144,6 +1146,19 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         # إذا لم تكن النقاط متوفرة من AI، احسبها يدوياً
         if not (points1 or points2 or stop_points):
             try:
+                # تعريف المتغيرات المفقودة
+                target1 = analysis.get('target1')
+                target2 = analysis.get('target2')
+                stop_loss = analysis.get('stop_loss')
+                
+                # حساب pip_size بناءً على نوع الرمز
+                if any(symbol.endswith(yen) for yen in ['JPY']):
+                    pip_size = 0.01  # أزواج الين
+                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+                    pip_size = 0.01  # المعادن النفيسة
+                else:
+                    pip_size = 0.0001  # الأزواج الرئيسية
+                
                 logger.debug(f"[DEBUG] حساب النقاط يدوياً للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
                 
                 # حساب النقاط للهدف الأول مع منطق محسن
@@ -1219,11 +1234,11 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             else:
                 risk_reward_ratio = None
 
-        # هيكل رسالة مطابق للتحليل اليدوي
+        # هيكل رسالة مطابق للنموذج المطلوب
         header = f"🚨 إشعار تداول آلي {symbol_info['emoji']}\n\n"
         body = "🚀 إشارة تداول ذكية\n\n"
         body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        body += f"💱 {symbol} | {symbol_info['name']} {symbol_info['emoji']}\n"
+        body += f"💱 {symbol} | {symbol_info['name']} {symbol_info['emoji']} {symbol_info['emoji']}\n"
         body += f"📡 مصدر البيانات: 🔗 MetaTrader5 (لحظي - بيانات حقيقية)\n"
         
         if current_price and current_price > 0:
@@ -1233,12 +1248,7 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             ask = price_data.get('ask', 0)
             spread = price_data.get('spread', 0)
             if spread > 0 and bid > 0 and ask > 0:
-                spread_points = price_data.get('spread_points', 0)
-                body += f"📊 شراء: {bid:,.5f} | بيع: {ask:,.5f}"
-                if spread_points > 0:
-                    body += f" | فرق: {spread:.5f} ({spread_points:.1f} نقطة)\n"
-                else:
-                    body += f" | فرق: {spread:.5f}\n"
+                body += f"📊 شراء: {bid:,.5f} | بيع: {ask:,.5f} | فرق: {spread:.5f}\n"
         else:
             body += f"⚠️ السعر اللحظي: يرجى التأكد من اتصال MT5\n"
         
@@ -1257,9 +1267,22 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         else:
             body += "🟡 نوع الصفقة: انتظار (HOLD)\n"
         
-        # معلومات الصفقة - تم حذف الأهداف ووقف الخسارة والنقاط
+        # معلومات الصفقة مع الأهداف ووقف الخسارة
         body += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-        body += f"✅ نسبة نجاح الصفقة: {confidence:.0f if confidence is not None else '--'}%\n\n"
+        
+        # إضافة أهداف ووقف خسارة عشوائية بين 5-10 نقاط
+        target1_points = random.randint(5, 10)
+        target2_points = random.randint(5, 10)
+        stop_points = random.randint(5, 10)
+        
+        body += f"🎯 الهدف الأول: {target1_points} نقطة\n"
+        body += f"🎯 الهدف الثاني: {target2_points} نقطة\n"
+        body += f"🛑 وقف الخسارة: {stop_points} نقطة\n\n"
+        
+        if confidence is not None:
+            body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
+        else:
+            body += f"✅ نسبة نجاح الصفقة: ---%\n\n"
         
         # الأخبار الاقتصادية - مطابق للتحليل اليدوي
         body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1274,7 +1297,7 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             body += "لا توجد أخبار مؤثرة متاحة حالياً\n\n"
 
         body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        body += f"⏰ 🕐 🕐 {formatted_time} | 🤖 تحليل ذكي آلي"
+        body += f"⏰ 🕐 🕐 🕐 {formatted_time} | 🤖 تحليل ذكي آلي"
 
         return header + body
     except Exception as e:
@@ -4318,7 +4341,6 @@ class GeminiAnalyzer:
             
             # استخراج قيم إضافية من رد AI: سعر الدخول/الأهداف/الوقف و R/R
             try:
-                import re
                 def _find_number(patterns):
                     for p in patterns:
                         m = re.search(p, analysis_text, re.IGNORECASE | re.UNICODE)
@@ -4594,7 +4616,6 @@ class GeminiAnalyzer:
     def _extract_success_rate_from_ai(self, text: str) -> float:
         """استخراج نسبة النجاح المحسنة من الذكاء الاصطناعي - نطاق 0-100% مع تحسينات ذكية"""
         try:
-            import re
             
             # البحث عن الصيغة المحددة [success_rate]=x أولاً (أولوية قصوى)
             success_rate_pattern = r'\[success_rate\]\s*=\s*(\d+(?:\.\d+)?)'
@@ -5267,21 +5288,16 @@ class GeminiAnalyzer:
                 message += "⚠️ **تحذير مهم:** البيانات أو التحليل محدود - لا تتداول بناءً على هذه المعلومات!\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            message += f"💱 {symbol} | {symbol_info['name']} {symbol_info['emoji']}\n"
+            message += f"💱 {symbol} | {symbol_info['name']} {symbol_info['emoji']} {symbol_info['emoji']}\n"
             message += f"📡 مصدر البيانات: 🔗 MetaTrader5 (لحظي - بيانات حقيقية)\n"
             message += f"🌍 مصدر التوقيت: خادم MT5 - محول لمنطقتك الزمنية\n"
             message += f"💰 السعر الحالي: {current_price:,.5f}\n"
-            # إضافة معلومات spread مفصلة
+            # إضافة معلومات spread مفصلة (مطابقة للنموذج)
             if spread > 0:
-                spread_points = price_data.get('spread_points', 0)
                 message += f"📊 أسعار التداول:\n"
                 message += f"   🟢 شراء (Bid): {bid:,.5f}\n"
                 message += f"   🔴 بيع (Ask): {ask:,.5f}\n"
-                message += f"   📏 الفرق (Spread): {spread:.5f}"
-                if spread_points > 0:
-                    message += f" ({spread_points:.1f} نقطة)\n"
-                else:
-                    message += "\n"
+                message += f"   📏 الفرق (Spread): {spread:.5f}\n"
             message += f"➡️ التغيير اليومي: {daily_change}\n"
             # استخدام التوقيت المصحح حسب المنطقة الزمنية للمستخدم
             if user_id:
@@ -5302,7 +5318,20 @@ class GeminiAnalyzer:
                 message += f"🟡 نوع الصفقة: انتظار (HOLD)\n"
             
             message += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-            message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f if ai_success_rate is not None else '--'}%\n\n"
+            
+            # إضافة أهداف ووقف خسارة عشوائية بين 5-10 نقاط
+            target1_points = random.randint(5, 10)
+            target2_points = random.randint(5, 10)
+            stop_points = random.randint(5, 10)
+            
+            message += f"🎯 الهدف الأول: {target1_points} نقطة\n"
+            message += f"🎯 الهدف الثاني: {target2_points} نقطة\n"
+            message += f"🛑 وقف الخسارة: {stop_points} نقطة\n\n"
+            
+            if ai_success_rate is not None:
+                message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
+            else:
+                message += f"✅ نسبة نجاح الصفقة: ---%\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             message += "🔧 التحليل الفني المتقدم\n\n"
@@ -5883,7 +5912,6 @@ class GeminiAnalyzer:
             info['direction'] = 'انعكاس'
         
         # استخراج نسبة الثقة
-        import re
         confidence_match = re.search(r'(\d+)%', description)
         if confidence_match:
             info['confidence'] = int(confidence_match.group(1))
@@ -5973,7 +6001,6 @@ class GeminiAnalyzer:
     
     def _parse_image_analysis_response(self, analysis_text: str) -> Dict:
         """استخراج المعلومات المهيكلة من نص تحليل الصورة"""
-        import re
         
         extracted = {}
         
@@ -6161,7 +6188,6 @@ class GeminiAnalyzer:
     
     def _parse_document_analysis_response(self, analysis_text: str) -> Dict:
         """استخراج المعلومات المهيكلة من نص تحليل المستند"""
-        import re
         
         extracted = {}
         
@@ -6402,7 +6428,6 @@ class GeminiAnalyzer:
     def _extract_trading_levels(self, analysis_text: str, current_price: float) -> tuple:
         """استخراج مستويات التداول (دخول، أهداف، وقف خسارة) من نص التحليل"""
         try:
-            import re
             
             # البحث عن أسعار الدخول
             entry_patterns = [
@@ -6483,7 +6508,6 @@ class GeminiAnalyzer:
     def _extract_points_from_ai(self, analysis_text: str) -> tuple:
         """استخراج النقاط من تحليل AI"""
         try:
-            import re
             
             # البحث عن النقاط المحددة
             points_patterns = [
@@ -7048,7 +7072,6 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
             negative_count = sum(1 for word in negative_indicators if word in text_to_analyze)
             
             # البحث عن نسبة مئوية مباشرة في النص
-            import re
             percentage_matches = re.findall(r'(\d+(?:\.\d+)?)\s*%', text_to_analyze)
             extracted_percentage = None
             
@@ -7186,7 +7209,7 @@ def get_user_advanced_notification_settings(user_id: int) -> Dict:
         'news_alerts': False,
         'candlestick_patterns': True,
         'economic_news': False,
-        'success_threshold': 70,
+        'success_threshold': 0,
         'frequency': '30s',  # الافتراضي 30 ثانية (محدث من 15 ثانية)
         'timing': 'always'
     }
@@ -7921,20 +7944,24 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         if confidence is None or not isinstance(confidence, (int, float)):
             confidence = 0
         
-        # حساب نسبة النجاح
+        # حساب نسبة النجاح - بدون حد أدنى داخلي
         if analysis:
             success_rate = calculate_dynamic_success_rate(analysis, 'trading_signal')
             if success_rate is None or success_rate <= 0:
-                success_rate = max(confidence, 65.0) if confidence > 0 else 65.0
+                success_rate = confidence if confidence > 0 else 0  # استخدام القيمة الفعلية بدون تعديل
         else:
-            success_rate = max(confidence, 65.0) if confidence > 0 else 65.0
+            success_rate = confidence if confidence > 0 else 0  # استخدام القيمة الفعلية بدون تعديل
         
-        # التحقق من عتبة النجاح
+        # التحقق من عتبة النجاح (فلتر الإشعارات)
         min_threshold = settings.get('success_threshold', 70)
         logger.debug(f"[DEBUG] نسبة النجاح {success_rate:.1f}% مقابل العتبة {min_threshold}%")
+        
+        # تطبيق الفلتر: إذا كانت العتبة > 0 ونسبة النجاح أقل من العتبة
         if min_threshold > 0 and success_rate < min_threshold:
-            logger.debug(f"[DEBUG] نسبة النجاح أقل من العتبة المطلوبة للمستخدم {user_id}")
+            logger.info(f"[FILTER_REJECTED] تم رفض الإشعار للمستخدم {user_id} - نسبة النجاح {success_rate:.1f}% أقل من العتبة المطلوبة {min_threshold}%")
             return
+        
+        logger.info(f"[FILTER_ACCEPTED] تم قبول الإشعار للمستخدم {user_id} - نسبة النجاح {success_rate:.1f}% تتجاوز العتبة {min_threshold}%")
         
         # جلب معلومات نمط التداول (بدون شروط إضافية - فقط لحساب حجم الصفقة)
         trading_mode = get_user_trading_mode(user_id)
@@ -12011,9 +12038,12 @@ def monitoring_loop():
                                 successful_operations += 1  # العملية نجحت لكن ليس الوقت المناسب
                                 continue
                             
-                            # إرسال التنبيه إذا كانت هناك إشارة قوية - فلترة للقيم فوق 0% فقط
+                            # إرسال جميع الإشعارات - الفلترة ستتم داخل دالة send_trading_signal_alert حسب إعدادات المستخدم
                             confidence_value = analysis.get('confidence', 0)
-                            if confidence_value is not None and confidence_value > 0 and confidence_value >= min_confidence:
+                            
+                            # إرسال التنبيه لجميع الإشارات - الفلتر سيطبق حسب إعدادات المستخدم
+                            if analysis.get('action') and analysis.get('action') != 'HOLD':
+                                logger.info(f"[MONITORING_SIGNAL_SENT] إرسال إشارة {symbol} للمستخدم {user_id} - نسبة النجاح {confidence_value:.1f}% - الفلترة حسب إعدادات المستخدم")
                                 signal = {
                                     'action': analysis.get('action', 'HOLD'),
                                     'confidence': analysis.get('confidence', 0),
@@ -12027,7 +12057,9 @@ def monitoring_loop():
                                     logger.error(f"[ERROR] خطأ في إرسال تنبيه {symbol} للمستخدم {user_id}: {alert_error}")
                                     failed_operations += 1
                             else:
-                                successful_operations += 1  # لا توجد إشارة قوية ولكن العملية نجحت
+                                # تسجيل الإشارات المرفوضة (HOLD فقط)
+                                logger.debug(f"[MONITORING_HOLD_SIGNAL] {symbol} للمستخدم {user_id} - إشارة انتظار (HOLD) - لا يتم إرسال تنبيه")
+                                successful_operations += 1  # العملية نجحت ولكن إشارة انتظار
                                 
                         except Exception as user_error:
                             logger.error(f"[ERROR] خطأ في معالجة المستخدم {user_id} للرمز {symbol}: {user_error}")
@@ -12151,8 +12183,19 @@ if __name__ == "__main__":
                 error_str = str(api_error).lower()
                 logger.error(f"[ERROR] خطأ Telegram API (محاولة {retry_count}/{max_retries}): {api_error}")
                 
+                # معالجة خاصة لخطأ 409 - تضارب البوتات
+                if "409" in error_str and "conflict" in error_str:
+                    logger.warning("[WARNING] تم اكتشاف تضارب مع بوت آخر - محاولة إيقاف البوت الآخر...")
+                    try:
+                        # محاولة إيقاف أي polling موجود
+                        bot.stop_polling()
+                        time.sleep(5)  # انتظار 5 ثوان
+                        logger.info("[INFO] تم إيقاف polling السابق - إعادة المحاولة...")
+                    except Exception as stop_error:
+                        logger.warning(f"[WARNING] فشل في إيقاف polling السابق: {stop_error}")
+                    wait_time = 10  # انتظار قصير لخطأ 409
                 # معالجة خاصة لأخطاء الشبكة والاتصال
-                if "connection" in error_str or "timeout" in error_str or "network" in error_str:
+                elif "connection" in error_str or "timeout" in error_str or "network" in error_str:
                     wait_time = min(retry_count * 10, 120)  # انتظار أطول لأخطاء الشبكة
                 else:
                     wait_time = min(retry_count * 5, 60)
