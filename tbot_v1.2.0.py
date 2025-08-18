@@ -1840,6 +1840,302 @@ NOTIFICATION_FREQUENCIES = {
     '30s': {'name': '30 ثانية ⚡', 'seconds': 30},  # التردد الوحيد المدعوم
 }
 
+# ===== كلاس محلل Gemini AI =====
+class GeminiAnalyzer:
+    """محلل الأسواق المالية باستخدام Google Gemini AI"""
+    
+    def __init__(self, api_key: str = None):
+        """تهيئة محلل Gemini"""
+        self.api_key = api_key or GEMINI_API_KEY
+        self.model = None
+        self.initialize_gemini()
+    
+    def initialize_gemini(self):
+        """تهيئة نموذج Gemini AI"""
+        try:
+            if not self.api_key:
+                logger.error("[GEMINI] مفتاح API غير متوفر")
+                return False
+            
+            genai.configure(api_key=self.api_key)
+            
+            # تكوين النموذج مع الإعدادات المحسنة
+            generation_config = {
+                'temperature': 0.7,
+                'top_p': 0.8,
+                'top_k': 40,
+                'max_output_tokens': 2048,
+            }
+            
+            safety_settings = [
+                {
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                },
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH", 
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                },
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                }
+            ]
+            
+            self.model = genai.GenerativeModel(
+                model_name=GEMINI_MODEL,
+                generation_config=generation_config,
+                safety_settings=safety_settings
+            )
+            
+            logger.info(f"[OK] تم تهيئة محلل Gemini بنجاح - النموذج: {GEMINI_MODEL}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"[ERROR] فشل في تهيئة Gemini: {e}")
+            self.model = None
+            return False
+    
+    def analyze_market_data_with_retry(self, symbol: str, price_data: Dict, user_id: int = None, market_data = None, max_retries: int = 3) -> Dict:
+        """تحليل بيانات السوق مع آلية إعادة المحاولة"""
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                return self.analyze_market_data(symbol, price_data, user_id, market_data)
+            except Exception as e:
+                last_error = e
+                if attempt == max_retries - 1:
+                    logger.error(f"[ERROR] فشل نهائي في تحليل {symbol} بعد {max_retries} محاولات: {e}")
+                    return self._fallback_analysis(symbol, price_data)
+                
+                wait_time = (2 ** attempt) + (attempt * 0.1)  # exponential backoff
+                logger.warning(f"[WARNING] محاولة {attempt + 1} فشلت لـ {symbol}: {e}. إعادة المحاولة خلال {wait_time:.1f} ثانية...")
+                time.sleep(wait_time)
+        
+        # إذا فشلت جميع المحاولات
+        return self._fallback_analysis(symbol, price_data)
+
+    def analyze_market_data(self, symbol: str, price_data: Dict, user_id: int = None, market_data = None) -> Dict:
+        """تحليل بيانات السوق باستخدام Gemini AI"""
+        if not self.model:
+            return self._fallback_analysis(symbol, price_data)
+        
+        try:
+            # إعداد البيانات للتحليل
+            current_price = price_data.get('last', price_data.get('bid', 0))
+            spread = price_data.get('spread', 0)
+            data_source = price_data.get('source', 'Unknown')
+            
+            # جلب المؤشرات الفنية من MT5
+            technical_data = mt5_manager.calculate_technical_indicators(symbol) if mt5_manager.connected else None
+            
+            # إنشاء prompt التحليل المتقدم
+            prompt = self._create_analysis_prompt(symbol, price_data, technical_data, user_id)
+            
+            # إرسال للـ AI
+            response = self._send_to_gemini(prompt)
+            
+            if response:
+                # استخراج التحليل من الرد
+                analysis = self._parse_gemini_response(response, symbol, price_data)
+                return analysis
+            else:
+                return self._fallback_analysis(symbol, price_data)
+                
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في تحليل {symbol}: {e}")
+            return self._fallback_analysis(symbol, price_data)
+    
+    def _create_analysis_prompt(self, symbol: str, price_data: Dict, technical_data: Dict, user_id: int) -> str:
+        """إنشاء prompt التحليل المتقدم"""
+        current_price = price_data.get('last', price_data.get('bid', 0))
+        spread = price_data.get('spread', 0)
+        data_source = price_data.get('source', 'MT5')
+        
+        # معلومات المؤشرات الفنية
+        technical_analysis = ""
+        if technical_data and technical_data.get('indicators'):
+            indicators = technical_data['indicators']
+            technical_analysis = f"""
+📊 **المؤشرات الفنية اللحظية:**
+- RSI: {indicators.get('rsi', 50):.2f} ({indicators.get('rsi_interpretation', 'محايد')})
+- MACD: {indicators.get('macd', {}).get('macd', 0):.5f}
+- MA9: {indicators.get('ma_9', 0):.5f}
+- MA21: {indicators.get('ma_21', 0):.5f}
+- الدعم: {indicators.get('support', 0):.5f}
+- المقاومة: {indicators.get('resistance', 0):.5f}
+- ATR: {indicators.get('atr', 0):.5f}
+- حجم التداول: {indicators.get('current_volume', 0)}
+"""
+        
+        prompt = f"""
+أنت محلل مالي خبير متخصص في التداول اللحظي. قم بتحليل البيانات التالية للرمز {symbol}:
+
+**البيانات اللحظية:**
+- السعر الحالي: {current_price:.5f}
+- سعر الشراء: {price_data.get('bid', 'غير متوفر')}
+- سعر البيع: {price_data.get('ask', 'غير متوفر')}
+- الفرق (Spread): {spread:.5f}
+- مصدر البيانات: {data_source}
+
+{technical_analysis}
+
+**تعليمات التحليل:**
+1. حلل المؤشرات الفنية بدقة
+2. حدد الاتجاه العام (صاعد/هابط/جانبي)
+3. قدم توصية واضحة (BUY/SELL/HOLD)
+4. احسب نسبة النجاح بناءً على قوة الإشارات (0-100%)
+5. حدد مستويات الدخول والأهداف ووقف الخسارة
+
+**يجب أن تنهي تحليلك بـ:**
+- "التوصية: [BUY/SELL/HOLD]"
+- "نسبة النجاح: X%"
+- "[success_rate]=X"
+
+قدم تحليلاً مفصلاً ومهنياً.
+"""
+        
+        return prompt
+    
+    def _send_to_gemini(self, prompt: str) -> str:
+        """إرسال prompt إلى Gemini وإرجاع النتيجة"""
+        try:
+            if not self.model:
+                logger.error("[GEMINI_ERROR] نموذج Gemini غير متاح")
+                return None
+                
+            response = self.model.generate_content(prompt)
+            if response and response.text:
+                return response.text.strip()
+            else:
+                logger.warning("[GEMINI_WARNING] رد فارغ من Gemini")
+                return None
+                
+        except Exception as e:
+            logger.error(f"[GEMINI_ERROR] خطأ في إرسال إلى Gemini: {e}")
+            return None
+    
+    def _parse_gemini_response(self, response: str, symbol: str, price_data: Dict) -> Dict:
+        """استخراج التحليل من رد Gemini"""
+        try:
+            # استخراج التوصية
+            action = 'HOLD'
+            if 'التوصية: BUY' in response or 'BUY' in response.upper():
+                action = 'BUY'
+            elif 'التوصية: SELL' in response or 'SELL' in response.upper():
+                action = 'SELL'
+            
+            # استخراج نسبة النجاح
+            confidence = 50
+            import re
+            success_match = re.search(r'\[success_rate\]=(\d+)', response)
+            if success_match:
+                confidence = int(success_match.group(1))
+            else:
+                # البحث عن نسبة النجاح في النص
+                percentage_match = re.search(r'نسبة النجاح[:\s]*(\d+)%', response)
+                if percentage_match:
+                    confidence = int(percentage_match.group(1))
+            
+            return {
+                'action': action,
+                'confidence': confidence,
+                'reasoning': [response[:200] + '...' if len(response) > 200 else response],
+                'ai_analysis': response,
+                'source': 'Gemini AI',
+                'symbol': symbol,
+                'timestamp': datetime.now(),
+                'price_data': price_data
+            }
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج التحليل: {e}")
+            return self._fallback_analysis(symbol, price_data)
+    
+    def _fallback_analysis(self, symbol: str, price_data: Dict) -> Dict:
+        """تحليل بديل عند فشل AI"""
+        return {
+            'action': 'HOLD',
+            'confidence': 30,
+            'reasoning': ['تحليل محدود - Gemini AI غير متوفر'],
+            'ai_analysis': f'⚠️ تحذير: لا يمكن تقديم تحليل كامل للرمز {symbol} بدون Gemini AI.',
+            'source': 'Fallback Analysis',
+            'symbol': symbol,
+            'timestamp': datetime.now(),
+            'price_data': price_data,
+            'warning': 'لا توصيات تداول - AI غير متوفر'
+        }
+    
+    def format_comprehensive_analysis_v120(self, symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
+        """تنسيق التحليل الشامل للعرض"""
+        try:
+            current_price = price_data.get('last', price_data.get('bid', 0))
+            action = analysis.get('action', 'HOLD')
+            confidence = analysis.get('confidence', 50)
+            ai_analysis = analysis.get('ai_analysis', 'تحليل غير متوفر')
+            
+            # تحديد لون التوصية
+            if action == 'BUY':
+                action_emoji = '🟢'
+                action_text = 'شراء'
+            elif action == 'SELL':
+                action_emoji = '🔴'
+                action_text = 'بيع'
+            else:
+                action_emoji = '🟡'
+                action_text = 'انتظار'
+            
+            # تحديد مستوى الثقة
+            if confidence >= 80:
+                confidence_emoji = '🎯'
+                confidence_text = 'عالية جداً'
+            elif confidence >= 70:
+                confidence_emoji = '✅'
+                confidence_text = 'عالية'
+            elif confidence >= 60:
+                confidence_emoji = '⚖️'
+                confidence_text = 'متوسطة'
+            elif confidence >= 40:
+                confidence_emoji = '⚠️'
+                confidence_text = 'منخفضة'
+            else:
+                confidence_emoji = '🚫'
+                confidence_text = 'ضعيفة جداً'
+            
+            formatted_analysis = f"""
+📊 **تحليل شامل - {symbol_info['emoji']} {symbol_info['name']}**
+
+💰 **السعر الحالي:** `{current_price:.5f}`
+📈 **التوصية:** {action_emoji} **{action_text}**
+{confidence_emoji} **مستوى الثقة:** {confidence}% ({confidence_text})
+
+🔍 **التحليل التفصيلي:**
+{ai_analysis[:800]}{'...' if len(ai_analysis) > 800 else ''}
+
+⚠️ **تنبيه:** هذا تحليل للمعلومات فقط وليس نصيحة استثمارية.
+
+🕒 **وقت التحليل:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📊 **مصدر البيانات:** {price_data.get('source', 'MT5')}
+"""
+            
+            return formatted_analysis
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في تنسيق التحليل: {e}")
+            return f"""
+📊 **خطأ في عرض التحليل**
+
+❌ حدث خطأ في تنسيق تحليل {symbol_info['name']}.
+🔧 يرجى المحاولة مرة أخرى لاحقاً.
+
+🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+
 # ===== كلاس إدارة MT5 =====
 class MT5Manager:
     """مدير الاتصال مع MetaTrader5"""
@@ -2404,8 +2700,10 @@ class MT5Manager:
                         # تقليل التحذيرات - فقط لليوم الواحد (86400 ثانية)
                         if time_diff.total_seconds() < 86400:
                             logger.debug(f"[DATA_AGE] بيانات {symbol} عمرها {time_diff.total_seconds():.0f} ثانية - مقبولة")
+                        elif time_diff.total_seconds() < 86400 * 7:  # أقل من أسبوع
+                            logger.debug(f"[OLD_DATA] بيانات {symbol} قديمة (عمر: {time_diff}) - لكن قابلة للاستخدام")
                         else:
-                            logger.warning(f"[WARNING] بيانات MT5 قديمة جداً للرمز {symbol} (عمر: {time_diff.total_seconds():.0f} ثانية)")
+                            logger.info(f"[INFO] بيانات {symbol} قديمة جداً (عمر: {time_diff}) - قد تحتاج لتحديث MT5")
                         
                         # محاولة تحديث السعر بطلب جديد فقط للبيانات اللحظية المباشرة
                         if force_fresh:
@@ -9154,6 +9452,10 @@ def handle_single_symbol_analysis(call):
             else:
                 main_message = message_text
             
+            # إضافة طابع زمني لتجنب خطأ "message is not modified"
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            main_message = f"{main_message}\n\n🕒 _محدث: {timestamp}_"
+            
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
@@ -9175,19 +9477,33 @@ def handle_single_symbol_analysis(call):
             
         except Exception as send_error:
             logger.error(f"[ERROR] فشل في إرسال التحليل: {send_error}")
+            
+            # التحقق من نوع الخطأ
+            error_str = str(send_error).lower()
+            if "message is not modified" in error_str:
+                logger.info(f"[INFO] الرسالة لم تتغير للرمز {symbol} - تجاهل الخطأ")
+                # لا حاجة لإعادة الإرسال إذا كان المحتوى نفسه
+                return
+            
             try:
-                # محاولة إرسال رسالة خطأ بسيطة
+                # محاولة إرسال رسالة خطأ بسيطة مع طابع زمني
+                error_timestamp = datetime.now().strftime("%H:%M:%S")
                 bot.edit_message_text(
                     f"❌ **خطأ في عرض التحليل**\n\n"
                     f"حدث خطأ في عرض تحليل {symbol_info['emoji']} {symbol_info['name']}.\n\n"
-                    "يرجى المحاولة مرة أخرى لاحقاً.",
+                    f"يرجى المحاولة مرة أخرى لاحقاً.\n\n"
+                    f"🕒 _خطأ في: {error_timestamp}_",
                     call.message.chat.id,
                     call.message.message_id,
                     parse_mode='Markdown',
                     reply_markup=markup
                 )
-            except:
-                bot.answer_callback_query(call.id, "حدث خطأ في عرض التحليل", show_alert=True)
+            except Exception as final_error:
+                logger.error(f"[ERROR] فشل في إرسال رسالة الخطأ أيضاً: {final_error}")
+                try:
+                    bot.answer_callback_query(call.id, "حدث خطأ في عرض التحليل", show_alert=True)
+                except:
+                    pass
         
     except Exception as e:
         logger.error(f"[ERROR] خطأ عام في تحليل الرمز {call.data}: {e}")
@@ -12028,11 +12344,53 @@ if __name__ == "__main__":
     try:
         logger.info("▶️ بدء تشغيل بوت التداول المتقدم v1.2.0...")
         
+        # تعريف المتغيرات الأساسية المفقودة
+        mt5_manager = MT5Manager()
+        
+        # تعريف محلل Gemini AI الكامل
+        gemini_analyzer = GeminiAnalyzer()
+        
+        # تعريف الدوال المساعدة المفقودة
+        def cache_price_data(symbol, data):
+            """حفظ بيانات السعر في الكاش"""
+            global price_data_cache
+            price_data_cache[symbol] = {
+                'data': data,
+                'timestamp': datetime.now()
+            }
+        
+        # تعريف المتغيرات العامة المفقودة الأخرى
+        global analysis_in_progress, monitoring_active
+        global active_users, user_selected_symbols, user_monitoring_active
+        global mt5_operation_lock, crossover_tracker
+        
+        analysis_in_progress = False
+        monitoring_active = True
+        active_users = set()
+        user_selected_symbols = {}
+        user_monitoring_active = {}
+        mt5_operation_lock = threading.Lock()
+        
+        # تعريف crossover_tracker كبديل مؤقت
+        class SimpleCrossoverTracker:
+            def analyze_crossover_patterns(self, symbol):
+                return {'recent_count': 0, 'dominant_type': 'غير محدد', 'pattern_strength': 0.5}
+            def get_recent_crossovers(self, symbol, hours=48):
+                return []
+        
+        crossover_tracker = SimpleCrossoverTracker()
+        
         # التحقق من اتصال MT5
         if mt5_manager.connected:
             logger.info("[OK] MetaTrader5 متصل ومستعد!")
         else:
             logger.warning("[WARNING] MetaTrader5 غير متصل - يرجى التحقق من الإعدادات")
+        
+        # تعريف متغيرات Gemini العامة
+        global GEMINI_API_KEY, GEMINI_MODEL
+        GEMINI_API_KEY = config.GEMINI_API_KEY if hasattr(config, 'GEMINI_API_KEY') else 'AIzaSyDAOp1ARgrkUvPcmGmXddFx8cqkzhy-3O8'
+        GEMINI_MODEL = config.GEMINI_MODEL if hasattr(config, 'GEMINI_MODEL') else 'gemini-2.0-flash'
+        GEMINI_AVAILABLE = True
         
         # التحقق من Gemini AI
         if GEMINI_AVAILABLE:
@@ -12043,8 +12401,8 @@ if __name__ == "__main__":
         logger.info("[SYSTEM] نظام التنبيهات: مراقبة لحظية مع تقييم المستخدم")
         logger.info("[SYSTEM] نظام التخزين: تسجيل جميع الصفقات والتقييمات")
         
-        # إنشاء متغير لإيقاف حلقة المراقبة بأمان
-        monitoring_active = True
+        # إنشاء متغير لإيقاف حلقة المراقبة بأمان (تم تعريفه مسبقاً)
+        # monitoring_active = True
         
         # بدء حلقة المراقبة في خيط منفصل مع معالجة محسنة
         monitoring_thread = threading.Thread(
@@ -12064,7 +12422,9 @@ if __name__ == "__main__":
         
         # بدء البوت
         logger.info("[SYSTEM] البوت جاهز للعمل!")
-        # تنظيف شامل عند بدء التشغيل
+        # تعريف وتنظيف شامل عند بدء التشغيل
+        price_data_cache = {}
+        last_api_calls = {}
         price_data_cache.clear()
         last_api_calls.clear()
         logger.info("[SYSTEM] تم تنظيف جميع البيانات المؤقتة عند بدء التشغيل")
@@ -12097,13 +12457,24 @@ if __name__ == "__main__":
                 import gc
                 gc.collect()
                 
-                bot.infinity_polling(
-                    none_stop=False,  # معالجة أفضل للأخطاء
-                    interval=2,       # زيادة المدة لتقليل الضغط على الخادم
-                    timeout=90,       # زيادة timeout للاستقرار
-                    long_polling_timeout=45,  # زيادة long polling timeout
-                    restart_on_change=True    # إعادة التشغيل عند تغيير الكود
-                )
+                # محاولة استخدام restart_on_change إذا كانت الحزم متاحة
+                polling_kwargs = {
+                    'none_stop': False,  # معالجة أفضل للأخطاء
+                    'interval': 2,       # زيادة المدة لتقليل الضغط على الخادم
+                    'timeout': 90,       # زيادة timeout للاستقرار
+                    'long_polling_timeout': 45,  # زيادة long polling timeout
+                }
+                
+                # إضافة restart_on_change فقط إذا كانت الحزم متاحة
+                try:
+                    import watchdog
+                    import psutil
+                    polling_kwargs['restart_on_change'] = True
+                    logger.info("[SYSTEM] تم تفعيل إعادة التشغيل التلقائي عند التغيير")
+                except ImportError:
+                    logger.warning("[WARNING] watchdog أو psutil غير مثبتة - إعادة التشغيل التلقائي معطلة")
+                
+                bot.infinity_polling(**polling_kwargs)
                 break  # إذا انتهى بشكل طبيعي
                 
             except telebot.apihelper.ApiException as api_error:
