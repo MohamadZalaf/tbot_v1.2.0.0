@@ -1326,62 +1326,58 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             try:
                 logger.debug(f"[DEBUG] حساب النقاط يدوياً للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
                 
-                # حساب النقاط للهدف الأول - منطق بسيط ومباشر (5-10 نقاط)
-                if target1 and entry_price and target1 != entry_price:
-                    # استخدام قيم عشوائية بسيطة بين 5-10 نقاط
-                    import random
-                    points1 = random.uniform(5.0, 10.0)
-                    
-                    # حساب الهدف بناءً على النقاط المحددة
+                # حساب النقاط المحسن - خانة واحدة بين 1-9 مع منطق الشراء/البيع
+                import random
+                
+                # حساب النقاط للهدف الأول
+                if action == 'BUY':
+                    # للشراء: الهدف الأول نقاط أقل (3-5)
+                    points1 = random.randint(3, 5)
+                elif action == 'SELL':
+                    # للبيع: الهدف الأول نقاط أكثر (6-8) 
+                    points1 = random.randint(6, 8)
+                else:
+                    points1 = random.randint(4, 6)
+                
+                # حساب النقاط للهدف الثاني
+                if action == 'BUY':
+                    # للشراء: الهدف الثاني نقاط أكثر (6-9)
+                    points2 = random.randint(6, 9)
+                    # التأكد من أن الثاني أكبر من الأول
+                    while points2 <= points1:
+                        points2 = random.randint(points1 + 1, 9)
+                elif action == 'SELL':
+                    # للبيع: الهدف الثاني نقاط أقل (1-4)
+                    points2 = random.randint(1, 4)
+                    # التأكد من أن الثاني أقل من الأول
+                    while points2 >= points1:
+                        points2 = random.randint(1, points1 - 1)
+                else:
+                    points2 = random.randint(5, 7)
+                
+                # حساب النقاط لوقف الخسارة (3-6 نقاط متوسط)
+                stop_points = random.randint(3, 6)
+                
+                # حساب الأسعار بناءً على النقاط
+                if target1 and entry_price:
                     if action == 'BUY':
                         target1 = entry_price + (points1 * pip_size)
                     elif action == 'SELL':
                         target1 = entry_price - (points1 * pip_size)
-                    
-                    logger.debug(f"[DEBUG] الهدف الأول: النقاط={points1:.1f}, السعر الجديد={target1:.5f}")
-                    
-                # حساب النقاط للهدف الثاني - منطق صحيح حسب نوع الصفقة
-                if target2 and entry_price and target2 != entry_price:
-                    if action == 'BUY':
-                        # للشراء: الهدف الثاني أكبر من الأول (نقاط أكثر)
-                        if points1 > 0:
-                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
-                        else:
-                            points2 = random.uniform(6.0, 10.0)
-                    elif action == 'SELL':
-                        # للبيع: الهدف الأول أكبر من الثاني (نقاط أقل للثاني)
-                        if points1 > 0:
-                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
-                        else:
-                            points2 = random.uniform(5.0, 7.0)
-                    
-                    # التأكد من عدم تساوي النقاط والمنطق الصحيح
-                    if action == 'BUY':
-                        while points2 <= points1 or abs(points2 - points1) < 0.5:
-                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
-                    elif action == 'SELL':
-                        while points2 >= points1 or abs(points1 - points2) < 0.5:
-                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
-                    
-                    # حساب الهدف بناءً على النقاط المحددة
+                
+                if target2 and entry_price:
                     if action == 'BUY':
                         target2 = entry_price + (points2 * pip_size)
                     elif action == 'SELL':
                         target2 = entry_price - (points2 * pip_size)
-                    
-                    logger.debug(f"[DEBUG] الهدف الثاني: النقاط={points2:.1f}, السعر الجديد={target2:.5f}")
-                    
-                # حساب النقاط لوقف الخسارة - منطق بسيط (5-10 نقاط)
-                if entry_price and stop_loss and entry_price != stop_loss:
-                    stop_points = random.uniform(5.0, 10.0)
-                    
-                    # حساب وقف الخسارة بناءً على النقاط المحددة
+                
+                if stop_loss and entry_price:
                     if action == 'BUY':
                         stop_loss = entry_price - (stop_points * pip_size)
                     elif action == 'SELL':
                         stop_loss = entry_price + (stop_points * pip_size)
-                    
-                    logger.debug(f"[DEBUG] وقف الخسارة: النقاط={stop_points:.1f}, السعر الجديد={stop_loss:.5f}")
+                
+                logger.debug(f"[DEBUG] النقاط المحسنة للرمز {symbol}: TP1={points1}, TP2={points2}, SL={stop_points}")
                     
                 logger.info(f"[MANUAL_POINTS] النقاط المحسوبة يدوياً للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
             
@@ -3541,9 +3537,9 @@ class GeminiAnalyzer:
         return None
 
     def _analyze_with_full_manual_instructions(self, symbol: str, price_data: Dict, technical_data: Dict, user_id: int) -> str:
-        """تحليل شامل باستخدام نفس التعليمات المفصلة للوضع اليدوي"""
+        """تحليل شامل باستخدام نفس التعليمات المفصلة للوضع اليدوي - موحد تماماً"""
         try:
-            # الحصول على بيانات المستخدم
+            # الحصول على بيانات المستخدم - نفس ما في اليدوي
             trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
             capital = get_user_capital(user_id) if user_id else 1000
             timezone_str = get_user_timezone(user_id) if user_id else 'UTC'
@@ -3639,12 +3635,18 @@ class GeminiAnalyzer:
         - تقاطع MA10/MA20: {indicators.get('ma_10_20_crossover', 'لا يوجد')}
         - تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
         
-        📊 مؤشرات الزخم:
-        - RSI: {indicators.get('rsi', 50):.2f} ({indicators.get('rsi_interpretation', 'غير محدد')})
-        - MACD: {indicators.get('macd', {}).get('macd', 0):.5f}
-        - MACD Signal: {indicators.get('macd', {}).get('signal', 0):.5f}
-        - MACD Histogram: {indicators.get('macd', {}).get('histogram', 0):.5f}
-        - تفسير MACD: {indicators.get('macd_interpretation', 'غير محدد')}
+        📊 المؤشرات الفنية المفصلة:
+        • RSI: {indicators.get('rsi', 50):.1f} ({indicators.get('rsi_interpretation', 'محايد')})
+        • MACD: {indicators.get('macd', {}).get('macd', 0):.4f} ({indicators.get('macd_interpretation', 'إشارة محايدة')})
+        • MA9: {indicators.get('ma_9', 0):.5f}
+        • MA21: {indicators.get('ma_21', 0):.5f}
+        • Stochastic %K: {indicators.get('stochastic', {}).get('k', 50):.1f}, %D: {indicators.get('stochastic', {}).get('d', 50):.1f} ({indicators.get('stochastic_interpretation', 'تقاطع محايد - إشارة محايدة | منطقة محايدة - احتمالية متوازنة')})
+        • ATR: {indicators.get('atr', 0):.5f} (التقلبات)
+        • الحجم الحالي: {indicators.get('current_volume', 0)}
+        • متوسط الحجم (20): {indicators.get('avg_volume', 0)}
+        • نسبة الحجم: {indicators.get('volume_ratio', 1.0):.2f}x
+        • تحليل الحجم: {indicators.get('volume_interpretation', 'حجم طبيعي')}
+        • مستوى النشاط: {indicators.get('activity_level', '📊 طبيعي - نشاط عادي للتحليل في الخلفية لا تغير رسالة إشعار التداول')}
         
         🎢 Stochastic Oscillator المتقدم:
         - %K: {indicators.get('stochastic', {}).get('k', 50):.2f}
