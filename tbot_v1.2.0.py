@@ -3598,7 +3598,80 @@ class GeminiAnalyzer:
         """
         
         return prompt
-
+    
+    def _format_technical_indicators(self, technical_data: Dict, symbol: str) -> str:
+        """تنسيق المؤشرات الفنية للعرض في التحليل الشامل"""
+        if not technical_data or not technical_data.get('indicators'):
+            return "لا توجد بيانات فنية متوفرة حالياً"
+        
+        indicators = technical_data['indicators']
+        
+        formatted_text = f"""
+        🎯 المؤشرات الفنية اللحظية المتقدمة للرمز {symbol}:
+        
+        ⏰ حالة البيانات اللحظية:
+        - نوع البيانات: {indicators.get('data_freshness', 'غير محدد')}
+        - آخر تحديث: {indicators.get('last_update', 'غير محدد')}
+        - Bid: {indicators.get('tick_info', {}).get('bid', 0):.5f}
+        - Ask: {indicators.get('tick_info', {}).get('ask', 0):.5f}
+        - Spread: {indicators.get('tick_info', {}).get('spread', 0):.5f}
+        - Volume: {indicators.get('tick_info', {}).get('volume', 0)}
+        
+        📈 المتوسطات المتحركة والتقاطعات:
+        - MA 9: {indicators.get('ma_9', 0):.5f}
+        - MA 10: {indicators.get('ma_10', 0):.5f}
+        - MA 20: {indicators.get('ma_20', 0):.5f}
+        - MA 21: {indicators.get('ma_21', 0):.5f}
+        - MA 50: {indicators.get('ma_50', 0):.5f}
+        - تقاطع MA9/MA21: {indicators.get('ma_9_21_crossover', 'لا يوجد')}
+        - تقاطع MA10/MA20: {indicators.get('ma_10_20_crossover', 'لا يوجد')}
+        - تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
+        
+        📊 مؤشرات الزخم:
+        - RSI: {indicators.get('rsi', 50):.2f} ({indicators.get('rsi_interpretation', 'غير محدد')})
+        - MACD: {indicators.get('macd', {}).get('macd', 0):.5f}
+        - MACD Signal: {indicators.get('macd', {}).get('signal', 0):.5f}
+        - MACD Histogram: {indicators.get('macd', {}).get('histogram', 0):.5f}
+        - تفسير MACD: {indicators.get('macd_interpretation', 'غير محدد')}
+        
+        🎢 Stochastic Oscillator المتقدم:
+        - %K: {indicators.get('stochastic', {}).get('k', 50):.2f}
+        - %D: {indicators.get('stochastic', {}).get('d', 50):.2f}
+        - تقاطع Stochastic: {indicators.get('stochastic', {}).get('crossover', 'لا يوجد')}
+        - منطقة التداول: {indicators.get('stochastic', {}).get('zone', 'غير محدد')}
+        - قوة الإشارة: {indicators.get('stochastic', {}).get('strength', 'غير محدد')}
+        - اتجاه Stochastic: {indicators.get('stochastic', {}).get('trend', 'غير محدد')}
+        - تفسير Stochastic: {indicators.get('stochastic_interpretation', 'غير محدد')}
+        
+        📊 تحليل حجم التداول المتقدم:
+        - الحجم الحالي: {indicators.get('current_volume', 0)}
+        - متوسط الحجم: {indicators.get('avg_volume', 0)}
+        - نسبة الحجم: {indicators.get('volume_ratio', 1.0):.2f}
+        - VMA 9: {indicators.get('volume_ma_9', 0):.0f}
+        - VMA 21: {indicators.get('volume_ma_21', 0):.0f}
+        - Volume ROC: {indicators.get('volume_roc', 0):.2f}%
+        - قوة الحجم: {indicators.get('volume_strength', 'غير محدد')}
+        - تفسير الحجم: {indicators.get('volume_interpretation', 'غير محدد')}
+        
+        🏛️ مستويات الدعم والمقاومة:
+        - الدعم الأول: {indicators.get('support', 0):.5f}
+        - المقاومة الأولى: {indicators.get('resistance', 0):.5f}
+        - المدى اليومي: {indicators.get('daily_range', 0):.5f}
+        - ATR: {indicators.get('atr', 0):.5f}
+        - التقلبات: {indicators.get('volatility', 'غير محدد')}
+        
+        🔄 تحليل التقاطعات الأخيرة:
+        - آخر تقاطع: {indicators.get('last_crossover', 'لا يوجد')}
+        - قوة التقاطع: {indicators.get('crossover_strength', 'غير محدد')}
+        
+        📈 الاتجاه العام:
+        - اتجاه قصير المدى: {indicators.get('short_term_trend', 'غير محدد')}
+        - اتجاه متوسط المدى: {indicators.get('medium_term_trend', 'غير محدد')}
+        - قوة الاتجاه: {indicators.get('trend_strength', 'غير محدد')}
+        """
+        
+        return formatted_text
+    
     def _get_comprehensive_instructions(self) -> str:
         """الحصول على نفس التعليمات المفصلة المستخدمة في الوضع اليدوي"""
         return """
