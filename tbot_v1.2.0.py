@@ -1343,21 +1343,25 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                 # حساب النقاط للهدف الثاني - منطق صحيح حسب نوع الصفقة
                 if target2 and entry_price and target2 != entry_price:
                     if action == 'BUY':
-                        # للشراء: الهدف الثاني يجب أن يكون أكبر من الأول (نقاط أكثر)
+                        # للشراء: الهدف الثاني أكبر من الأول (نقاط أكثر)
                         if points1 > 0:
                             points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
                         else:
                             points2 = random.uniform(6.0, 10.0)
                     elif action == 'SELL':
-                        # للبيع: الهدف الثاني يجب أن يكون أكبر من الأول (نقاط أكثر)
+                        # للبيع: الهدف الأول أكبر من الثاني (نقاط أقل للثاني)
                         if points1 > 0:
-                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
                         else:
-                            points2 = random.uniform(6.0, 10.0)
+                            points2 = random.uniform(5.0, 7.0)
                     
-                    # التأكد من عدم تساوي النقاط
-                    while abs(points2 - points1) < 0.5:
-                        points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                    # التأكد من عدم تساوي النقاط والمنطق الصحيح
+                    if action == 'BUY':
+                        while points2 <= points1 or abs(points2 - points1) < 0.5:
+                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                    elif action == 'SELL':
+                        while points2 >= points1 or abs(points1 - points2) < 0.5:
+                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
                     
                     # حساب الهدف بناءً على النقاط المحددة
                     if action == 'BUY':
@@ -5188,17 +5192,28 @@ class GeminiAnalyzer:
                     
                     logger.debug(f"[DEBUG] الهدف الأول: النقاط={points1:.1f}, السعر={target1:.5f}")
                     
-                # حساب النقاط للهدف الثاني - منطق صحيح (أكبر من الهدف الأول)
+                # حساب النقاط للهدف الثاني - منطق صحيح حسب نوع الصفقة
                 if target2 and entry_price and target2 != entry_price:
-                    # للشراء والبيع: الهدف الثاني دائماً أكبر من الأول في النقاط
-                    if points1 > 0:
-                        points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
-                    else:
-                        points2 = random.uniform(6.0, 10.0)
+                    if action == 'BUY':
+                        # للشراء: الهدف الثاني أكبر من الأول (نقاط أكثر)
+                        if points1 > 0:
+                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                        else:
+                            points2 = random.uniform(6.0, 10.0)
+                    elif action == 'SELL':
+                        # للبيع: الهدف الأول أكبر من الثاني (نقاط أقل للثاني)
+                        if points1 > 0:
+                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
+                        else:
+                            points2 = random.uniform(5.0, 7.0)
                     
-                    # التأكد من عدم تساوي النقاط
-                    while abs(points2 - points1) < 0.5:
-                        points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                    # التأكد من عدم تساوي النقاط والمنطق الصحيح
+                    if action == 'BUY':
+                        while points2 <= points1 or abs(points2 - points1) < 0.5:
+                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                    elif action == 'SELL':
+                        while points2 >= points1 or abs(points1 - points2) < 0.5:
+                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
                     
                     # حساب الهدف بناءً على النقاط المحددة
                     if action == 'BUY':
