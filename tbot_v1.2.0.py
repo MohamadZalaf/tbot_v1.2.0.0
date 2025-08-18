@@ -1024,62 +1024,22 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             # التأكد من أن AI يدرس المؤشرات دائماً ويحسب النسبة
             ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
             
-            # التأكد من أن النسبة ضمن النطاق المطلوب 0-100%
-            if ai_success_rate is None or ai_success_rate < 0:
-                ai_success_rate = 15  # حد أدنى
-            elif ai_success_rate > 100:
-                ai_success_rate = 95  # حد أقصى
-            
-            confidence = ai_success_rate
-            logger.info(f"[AI_SUCCESS] تم حساب نسبة النجاح للرمز {symbol}: {confidence:.1f}%")
+            # التأكد من أن النسبة من AI صحيحة أو عرض --
+            if ai_success_rate == "--" or ai_success_rate is None:
+                confidence = "--"
+                logger.warning(f"[AI_SUCCESS] لم يتم الحصول على نسبة نجاح من AI للرمز {symbol}")
+            elif isinstance(ai_success_rate, (int, float)) and 0 <= ai_success_rate <= 100:
+                confidence = ai_success_rate
+                logger.info(f"[AI_SUCCESS] تم حساب نسبة النجاح للرمز {symbol}: {confidence:.1f}%")
+            else:
+                confidence = "--"
+                logger.warning(f"[AI_SUCCESS] نسبة نجاح غير صحيحة من AI للرمز {symbol}: {ai_success_rate}")
             
         except Exception as e:
             logger.error(f"[ERROR] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
-            # في حالة الفشل، حساب نسبة بديلة بناءً على المؤشرات المتوفرة
-            backup_score = 50  # نقطة البداية
-            
-            try:
-                # حساب بديل بناءً على المؤشرات الأساسية
-                if indicators:
-                    rsi = indicators.get('rsi', 50)
-                    macd = indicators.get('macd', {})
-                    volume_ratio = indicators.get('volume_ratio', 1.0)
-                    
-                    # تعديل النسبة بناءً على RSI
-                    if action == 'BUY':
-                        if rsi < 30:  # ذروة بيع - فرصة شراء
-                            backup_score += 20
-                        elif rsi > 70:  # ذروة شراء - خطر
-                            backup_score -= 15
-                    elif action == 'SELL':
-                        if rsi > 70:  # ذروة شراء - فرصة بيع
-                            backup_score += 20
-                        elif rsi < 30:  # ذروة بيع - خطر
-                            backup_score -= 15
-                    
-                    # تعديل بناءً على MACD
-                    if macd.get('macd') is not None:
-                        macd_value = macd['macd']
-                        if (action == 'BUY' and macd_value > 0) or (action == 'SELL' and macd_value < 0):
-                            backup_score += 10
-                        else:
-                            backup_score -= 5
-                    
-                    # تعديل بناءً على الحجم
-                    if volume_ratio > 1.5:
-                        backup_score += 10
-                    elif volume_ratio < 0.5:
-                        backup_score -= 10
-                    
-                    # ضمان النطاق 15-90%
-                    backup_score = max(15, min(90, backup_score))
-                
-                confidence = backup_score
-                logger.info(f"[BACKUP_SUCCESS] استخدام نسبة احتياطية للرمز {symbol}: {confidence:.1f}%")
-                
-            except Exception as backup_error:
-                logger.error(f"[ERROR] فشل في الحساب الاحتياطي للرمز {symbol}: {backup_error}")
-                confidence = 50  # نسبة افتراضية آمنة
+            # لا نسب احتياطية - عرض -- للمستخدم
+            confidence = "--"
+            logger.warning(f"[AUTO_FAILED] عرض -- للمستخدم - فشل في حساب نسبة النجاح")
         
         # حساب التغير اليومي الصحيح
         price_change_pct = indicators.get('price_change_pct', 0)
@@ -1326,62 +1286,58 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             try:
                 logger.debug(f"[DEBUG] حساب النقاط يدوياً للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
                 
-                # حساب النقاط للهدف الأول - منطق بسيط ومباشر (5-10 نقاط)
-                if target1 and entry_price and target1 != entry_price:
-                    # استخدام قيم عشوائية بسيطة بين 5-10 نقاط
-                    import random
-                    points1 = random.uniform(5.0, 10.0)
-                    
-                    # حساب الهدف بناءً على النقاط المحددة
+                # حساب النقاط المحسن - خانة واحدة بين 1-9 مع منطق الشراء/البيع
+                import random
+                
+                # حساب النقاط للهدف الأول
+                if action == 'BUY':
+                    # للشراء: الهدف الأول نقاط أقل (3-5)
+                    points1 = random.randint(3, 5)
+                elif action == 'SELL':
+                    # للبيع: الهدف الأول نقاط أكثر (6-8) 
+                    points1 = random.randint(6, 8)
+                else:
+                    points1 = random.randint(4, 6)
+                
+                # حساب النقاط للهدف الثاني
+                if action == 'BUY':
+                    # للشراء: الهدف الثاني نقاط أكثر (6-9)
+                    points2 = random.randint(6, 9)
+                    # التأكد من أن الثاني أكبر من الأول
+                    while points2 <= points1:
+                        points2 = random.randint(points1 + 1, 9)
+                elif action == 'SELL':
+                    # للبيع: الهدف الثاني نقاط أقل (1-4)
+                    points2 = random.randint(1, 4)
+                    # التأكد من أن الثاني أقل من الأول
+                    while points2 >= points1:
+                        points2 = random.randint(1, points1 - 1)
+                else:
+                    points2 = random.randint(5, 7)
+                
+                # حساب النقاط لوقف الخسارة (3-6 نقاط متوسط)
+                stop_points = random.randint(3, 6)
+                
+                # حساب الأسعار بناءً على النقاط
+                if target1 and entry_price:
                     if action == 'BUY':
                         target1 = entry_price + (points1 * pip_size)
                     elif action == 'SELL':
                         target1 = entry_price - (points1 * pip_size)
-                    
-                    logger.debug(f"[DEBUG] الهدف الأول: النقاط={points1:.1f}, السعر الجديد={target1:.5f}")
-                    
-                # حساب النقاط للهدف الثاني - منطق صحيح حسب نوع الصفقة
-                if target2 and entry_price and target2 != entry_price:
-                    if action == 'BUY':
-                        # للشراء: الهدف الثاني أكبر من الأول (نقاط أكثر)
-                        if points1 > 0:
-                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
-                        else:
-                            points2 = random.uniform(6.0, 10.0)
-                    elif action == 'SELL':
-                        # للبيع: الهدف الأول أكبر من الثاني (نقاط أقل للثاني)
-                        if points1 > 0:
-                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
-                        else:
-                            points2 = random.uniform(5.0, 7.0)
-                    
-                    # التأكد من عدم تساوي النقاط والمنطق الصحيح
-                    if action == 'BUY':
-                        while points2 <= points1 or abs(points2 - points1) < 0.5:
-                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
-                    elif action == 'SELL':
-                        while points2 >= points1 or abs(points1 - points2) < 0.5:
-                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
-                    
-                    # حساب الهدف بناءً على النقاط المحددة
+                
+                if target2 and entry_price:
                     if action == 'BUY':
                         target2 = entry_price + (points2 * pip_size)
                     elif action == 'SELL':
                         target2 = entry_price - (points2 * pip_size)
-                    
-                    logger.debug(f"[DEBUG] الهدف الثاني: النقاط={points2:.1f}, السعر الجديد={target2:.5f}")
-                    
-                # حساب النقاط لوقف الخسارة - منطق بسيط (5-10 نقاط)
-                if entry_price and stop_loss and entry_price != stop_loss:
-                    stop_points = random.uniform(5.0, 10.0)
-                    
-                    # حساب وقف الخسارة بناءً على النقاط المحددة
+                
+                if stop_loss and entry_price:
                     if action == 'BUY':
                         stop_loss = entry_price - (stop_points * pip_size)
                     elif action == 'SELL':
                         stop_loss = entry_price + (stop_points * pip_size)
-                    
-                    logger.debug(f"[DEBUG] وقف الخسارة: النقاط={stop_points:.1f}, السعر الجديد={stop_loss:.5f}")
+                
+                logger.debug(f"[DEBUG] النقاط المحسنة للرمز {symbol}: TP1={points1}, TP2={points2}, SL={stop_points}")
                     
                 logger.info(f"[MANUAL_POINTS] النقاط المحسوبة يدوياً للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
             
@@ -1449,7 +1405,10 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             body += f"🎯 الهدف الثاني: ({points2:.0f} نقطة)\n"
         body += f"🛑 وقف الخسارة: ({stop_points:.0f} نقطة)\n"
         body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
-        body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
+        if isinstance(confidence, (int, float)):
+            body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
+        else:
+            body += f"✅ نسبة نجاح الصفقة: {confidence}\n\n"
         
         # الأخبار الاقتصادية - مطابق للتحليل اليدوي
         body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -3541,9 +3500,9 @@ class GeminiAnalyzer:
         return None
 
     def _analyze_with_full_manual_instructions(self, symbol: str, price_data: Dict, technical_data: Dict, user_id: int) -> str:
-        """تحليل شامل باستخدام نفس التعليمات المفصلة للوضع اليدوي"""
+        """تحليل شامل باستخدام نفس التعليمات المفصلة للوضع اليدوي - موحد تماماً"""
         try:
-            # الحصول على بيانات المستخدم
+            # الحصول على بيانات المستخدم - نفس ما في اليدوي
             trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
             capital = get_user_capital(user_id) if user_id else 1000
             timezone_str = get_user_timezone(user_id) if user_id else 'UTC'
@@ -3639,12 +3598,18 @@ class GeminiAnalyzer:
         - تقاطع MA10/MA20: {indicators.get('ma_10_20_crossover', 'لا يوجد')}
         - تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
         
-        📊 مؤشرات الزخم:
-        - RSI: {indicators.get('rsi', 50):.2f} ({indicators.get('rsi_interpretation', 'غير محدد')})
-        - MACD: {indicators.get('macd', {}).get('macd', 0):.5f}
-        - MACD Signal: {indicators.get('macd', {}).get('signal', 0):.5f}
-        - MACD Histogram: {indicators.get('macd', {}).get('histogram', 0):.5f}
-        - تفسير MACD: {indicators.get('macd_interpretation', 'غير محدد')}
+        📊 المؤشرات الفنية المفصلة:
+        • RSI: {indicators.get('rsi', 50):.1f} ({indicators.get('rsi_interpretation', 'محايد')})
+        • MACD: {indicators.get('macd', {}).get('macd', 0):.4f} ({indicators.get('macd_interpretation', 'إشارة محايدة')})
+        • MA9: {indicators.get('ma_9', 0):.5f}
+        • MA21: {indicators.get('ma_21', 0):.5f}
+        • Stochastic %K: {indicators.get('stochastic', {}).get('k', 50):.1f}, %D: {indicators.get('stochastic', {}).get('d', 50):.1f} ({indicators.get('stochastic_interpretation', 'تقاطع محايد - إشارة محايدة | منطقة محايدة - احتمالية متوازنة')})
+        • ATR: {indicators.get('atr', 0):.5f} (التقلبات)
+        • الحجم الحالي: {indicators.get('current_volume', 0)}
+        • متوسط الحجم (20): {indicators.get('avg_volume', 0)}
+        • نسبة الحجم: {indicators.get('volume_ratio', 1.0):.2f}x
+        • تحليل الحجم: {indicators.get('volume_interpretation', 'حجم طبيعي')}
+        • مستوى النشاط: {indicators.get('activity_level', '📊 طبيعي - نشاط عادي للتحليل في الخلفية لا تغير رسالة إشعار التداول')}
         
         🎢 Stochastic Oscillator المتقدم:
         - %K: {indicators.get('stochastic', {}).get('k', 50):.2f}
@@ -4340,18 +4305,22 @@ class GeminiAnalyzer:
             
             **🔥 تذكر:** أنت تعمل كخبير احترافي في غرفة تداول مؤسسية. قدم التحليل الكامل والشفاف مع التحذيرات المناسبة. المتداول يعتمد على تحليلك في اتخاذ قرارات مالية مهمة جداً!
             
-            **🚨 MANDATORY - يجب أن تنهي تحليلك بـ:**
+            **🚨🚨🚨 CRITICAL REQUIREMENT - يجب أن تنهي تحليلك بـ: 🚨🚨🚨**
             
-            1. الجملة العادية: "نسبة نجاح الصفقة: X%" 
-            2. الكود المطلوب: "[success_rate]=X"
+            ✅ **STEP 1:** اكتب الجملة العادية: "نسبة نجاح الصفقة: X%" 
+            ✅ **STEP 2:** اكتب الكود المطلوب: "[success_rate]=X"
             
-            حيث X هو الرقم الذي حسبته بناءً على المؤشرات الفنية المتاحة.
+            حيث X هو الرقم من 1 إلى 100 الذي حسبته من المؤشرات الفنية.
             
-            **مثال على الصيغة الصحيحة:**
-            "بناءً على التحليل أعلاه، نسبة نجاح الصفقة: 73%
-            [success_rate]=73"
+            **🔥 مثال إجباري على الصيغة الصحيحة:**
+            ```
+            بناءً على التحليل أعلاه، نسبة نجاح الصفقة: 73%
+            [success_rate]=73
+            ```
             
-            **هذا إلزامي ولا يمكن تجاهله! بدون هاتين الجملتين لن يعمل النظام!**
+            **⛔ بدون هاتين الجملتين بالضبط، النظام لن يعمل وستفشل العملية كاملة! ⛔**
+            **🔴 هذا ليس اختياري - هذا إجباري 100% 🔴**
+            **💀 عدم كتابة النسبة = فشل كامل في النظام 💀**
             """
             
             # إرسال الطلب لـ Gemini باستخدام جلسة دردشة لكل رمز
@@ -4404,16 +4373,12 @@ class GeminiAnalyzer:
             recommendation = self._extract_recommendation(analysis_text)
             confidence = self._extract_confidence(analysis_text)
             
-            # التحقق المحسن من صحة نسبة النجاح
+            # التحقق المحسن من صحة نسبة النجاح - AI يجب أن ينتج النسبة
             if confidence is None:
-                logger.warning(f"[AI_ANALYSIS] لم يتم العثور على نسبة نجاح في تحليل AI للرمز {symbol}")
-                # بدلاً من استخدام نسبة ثابتة، نستخدم تحليل فني كاحتياط
-                if technical_data and technical_data.get('indicators'):
-                    confidence = calculate_basic_technical_success_rate(technical_data, recommendation)
-                    logger.info(f"[FALLBACK_ANALYSIS] استخدام التحليل الفني الاحتياطي: {confidence}%")
-                else:
-                    logger.error(f"[ANALYSIS_FAILED] فشل كامل في تحليل الرمز {symbol} - لا توجد بيانات كافية")
-                    confidence = None
+                logger.error(f"[AI_ANALYSIS] ❌ فشل AI في إنتاج نسبة النجاح للرمز {symbol} - مشكلة في البرومت أو الاستخراج")
+                # عرض -- للمستخدم عند فشل AI
+                confidence = "--"
+                logger.warning(f"[AI_FAILED] عرض -- للمستخدم - AI لم ينتج نسبة النجاح المطلوبة")
             elif confidence < 0 or confidence > 100:
                 logger.warning(f"[AI_ANALYSIS] نسبة نجاح خارج النطاق من AI: {confidence}% - تصحيح")
                 confidence = max(0, min(100, confidence))  # تصحيح النطاق
@@ -5014,7 +4979,7 @@ class GeminiAnalyzer:
             if not action or not confidence:
                 has_warning = True
                 action = action or 'HOLD'
-                confidence = confidence or 50
+                confidence = confidence or "--"  # لا نسبة افتراضية
             
             # جلب المؤشرات الفنية الحقيقية قبل حساب نسبة النجاح
             technical_data = None
@@ -5028,14 +4993,20 @@ class GeminiAnalyzer:
             try:
                 # استخدام دالة حساب نسبة النجاح المطورة
                 ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
-                logger.info(f"[INFO] نسبة النجاح المحسوبة للرمز {symbol}: {ai_success_rate:.1f}%")
+                if isinstance(ai_success_rate, (int, float)):
+                    logger.info(f"[INFO] نسبة النجاح المحسوبة للرمز {symbol}: {ai_success_rate:.1f}%")
+                else:
+                    logger.info(f"[INFO] نسبة النجاح للرمز {symbol}: {ai_success_rate}")
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
-                # كملاذ أخير، استخدم الثقة من التحليل
-                ai_success_rate = confidence if confidence else 50
+                # كملاذ أخير، عرض -- عند فشل AI
+                ai_success_rate = "--"
+                logger.warning(f"[AI_FALLBACK] فشل AI في حساب نسبة النجاح للرمز {symbol}")
             
             # مصدر نسبة النجاح مع تصنيف أفضل
-            if ai_success_rate >= 80:
+            if ai_success_rate == "--":
+                success_rate_source = "غير متوفر - فشل AI في الحساب"
+            elif ai_success_rate >= 80:
                 success_rate_source = "عالية - ثقة قوية"
             elif ai_success_rate >= 70:
                 success_rate_source = "جيدة - ثقة مقبولة"
@@ -5442,7 +5413,10 @@ class GeminiAnalyzer:
             message += f"🎯 الهدف الثاني: ({points2:.0f} نقطة)\n"
             message += f"🛑 وقف الخسارة: ({stop_points:.0f} نقطة)\n"
             message += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
-            message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
+            if isinstance(ai_success_rate, (int, float)):
+                message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
+            else:
+                message += f"✅ نسبة نجاح الصفقة: {ai_success_rate}\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             message += "🔧 التحليل الفني المتقدم\n\n"
@@ -7455,25 +7429,14 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
             logger.info(f"[SIMPLIFIED_AUTO_SUCCESS] {symbol} - {action}: {final_score:.1f}% (AI: {ai_confidence}%)")
             return round(final_score, 1)
         
-        # الخطوة 2: إذا لم نحصل على نسبة من AI، استخدم التحليل الفني كاحتياط (مثل الوضع اليدوي)
-        logger.warning(f"[AUTO_FALLBACK] لا توجد نسبة من AI للرمز {symbol} - استخدام التحليل الفني الاحتياطي")
-        if technical_data and technical_data.get('indicators'):
-            fallback_rate = calculate_basic_technical_success_rate(technical_data, action)
-            logger.info(f"[AUTO_FALLBACK_SUCCESS] {symbol} - {action}: {fallback_rate:.1f}% (تحليل فني احتياطي)")
-            return fallback_rate
-        
-        # الخطوة 3: فشل كامل - لا نسبة ثابتة (مثل الوضع اليدوي)
-        logger.error(f"[AUTO_ANALYSIS_FAILED] فشل كامل في تحليل الرمز {symbol} - لا توجد بيانات كافية")
-        return None
+        # الخطوة 2: إذا لم نحصل على نسبة من AI، هناك مشكلة في البرومت أو الاستخراج
+        logger.error(f"[AUTO_AI_FAILED] فشل AI في إنتاج نسبة النجاح للرمز {symbol} - يجب فحص البرومت والاستخراج")
+        return "--"
         
     except Exception as e:
         logger.error(f"خطأ في حساب نسبة النجاح المبسط: {e}")
-        # في حالة الخطأ، استخدم تحليل AI إذا كان متوفراً
-        if analysis and analysis.get('confidence', 0) > 0:
-            return min(max(analysis.get('confidence', 50), 10), 90)
-        else:
-            # كحل أخير، استخدم تحليل فني بسيط
-            return calculate_basic_technical_success_rate(technical_data, action) if technical_data else None
+        # في حالة الخطأ، عرض -- (لا نسب احتياطية)
+        return "--"
 
 # دالة مساعدة لحساب نسبة نجاح بسيطة من المؤشرات الفنية (نفس ما في اليدوي)
 def calculate_simplified_technical_rate(technical_data: Dict, action: str) -> float:
@@ -8042,7 +8005,7 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
 ⚡ إشارة التداول الرئيسية
 
 {action_emoji} نوع الصفقة: {action}
-✅ نسبة نجاح الصفقة: {success_rate:.0f}%
+✅ نسبة نجاح الصفقة: {success_rate if isinstance(success_rate, str) else f"{success_rate:.0f}%"}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 🤖 **بوت التداول v1.2.0 - إشعار ذكي**"""
@@ -12120,12 +12083,26 @@ if __name__ == "__main__":
         
         while retry_count < max_retries:
             try:
-                logger.info("[SYSTEM] بدء استقبال الرسائل...")
+                logger.info(f"[SYSTEM] بدء استقبال الرسائل (محاولة {retry_count + 1}/{max_retries})...")
+                
+                # فحص صحة الاتصال مع Telegram قبل البدء
+                try:
+                    bot_info = bot.get_me()
+                    logger.info(f"[OK] اتصال Telegram سليم - البوت: {bot_info.first_name}")
+                except Exception as test_error:
+                    logger.error(f"[ERROR] فشل في الاتصال مع Telegram: {test_error}")
+                    raise test_error
+                
+                # تنظيف الذاكرة قبل البدء
+                import gc
+                gc.collect()
+                
                 bot.infinity_polling(
-                    none_stop=False,  # تغيير إلى False لمعالجة أفضل للأخطاء
-                    interval=1,       # تقليل المدة للاستجابة الأسرع
-                    timeout=60,       # زيادة timeout للاستقرار
-                    long_polling_timeout=30  # زيادة long polling timeout
+                    none_stop=False,  # معالجة أفضل للأخطاء
+                    interval=2,       # زيادة المدة لتقليل الضغط على الخادم
+                    timeout=90,       # زيادة timeout للاستقرار
+                    long_polling_timeout=45,  # زيادة long polling timeout
+                    restart_on_change=True    # إعادة التشغيل عند تغيير الكود
                 )
                 break  # إذا انتهى بشكل طبيعي
                 
@@ -12159,9 +12136,15 @@ if __name__ == "__main__":
                     monitoring_active = True
                 
                 # معالجة خاصة لأخطاء محددة
-                if "infinity polling" in error_str or "polling exited" in error_str:
+                if "infinity polling" in error_str or "polling exited" in error_str or "break infinity polling" in error_str:
                     logger.warning("[WARNING] انقطاع في infinity polling - محاولة إعادة الاتصال...")
+                    # تنظيف الذاكرة قبل إعادة المحاولة
+                    import gc
+                    gc.collect()
                     wait_time = min(retry_count * 8, 90)
+                elif "connection" in error_str or "timeout" in error_str or "network" in error_str:
+                    logger.warning("[WARNING] مشكلة في الشبكة - انتظار أطول...")
+                    wait_time = min(retry_count * 15, 180)  # انتظار أطول لمشاكل الشبكة
                 else:
                     wait_time = min(retry_count * 5, 60)
                     
