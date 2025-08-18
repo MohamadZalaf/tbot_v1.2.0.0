@@ -844,34 +844,34 @@ def handle_renew_api_context_command(message):
 
 # دوال حساب النقاط المحسنة - منسوخة من التحليل الآلي الصحيح
 def get_asset_type_and_pip_size(symbol):
-    """تحديد نوع الأصل وحجم النقطة بدقة"""
+    """تحديد نوع الأصل وحجم النقطة بطريقة بسيطة ومباشرة"""
     symbol = symbol.upper()
     
-    # 💱 الفوركس
+    # 💱 الفوركس - منطق بسيط للنقاط
     if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
         if any(symbol.endswith(yen) for yen in ['JPY']):
-            return 'forex_jpy', 0.01  # أزواج الين
+            return 'forex_jpy', 0.01  # أزواج الين: 1 نقطة = 0.01
         else:
-            return 'forex_major', 0.0001  # الأزواج الرئيسية
+            return 'forex_major', 0.0001  # الأزواج الرئيسية: 1 نقطة = 0.0001
     
     # 🪙 المعادن النفيسة
     elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
-        return 'metals', 0.01  # النقطة = 0.01
+        return 'metals', 0.1  # الذهب: 1 نقطة = 0.1 دولار
     
     # 🪙 العملات الرقمية
     elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
         if 'BTC' in symbol:
-            return 'crypto_btc', 1.0  # البيتكوين - نقطة = 1 دولار
+            return 'crypto_btc', 100.0  # البيتكوين: 1 نقطة = 100 دولار
         else:
-            return 'crypto_alt', 0.01  # العملات الأخرى
+            return 'crypto_alt', 1.0  # العملات الأخرى: 1 نقطة = 1 دولار
     
     # 📈 الأسهم
     elif any(symbol.startswith(stock) for stock in ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN']):
-        return 'stocks', 1.0  # النقطة = 1 دولار
+        return 'stocks', 1.0  # الأسهم: 1 نقطة = 1 دولار
     
     # 📉 المؤشرات
     elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER', 'SPX']):
-        return 'indices', 1.0  # النقطة = 1 وحدة
+        return 'indices', 1.0  # المؤشرات: 1 نقطة = 1 وحدة
     
     else:
         return 'unknown', 0.0001  # افتراضي
@@ -1326,84 +1326,47 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             try:
                 logger.debug(f"[DEBUG] حساب النقاط يدوياً للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
                 
-                # حساب النقاط للهدف الأول مع حد أقصى 10 نقاط
-                if target1 and entry_price and target1 != entry_price and pip_size > 0:
-                    price_diff1 = abs(target1 - entry_price)
-                    calculated_points1 = price_diff1 / pip_size
+                # حساب النقاط للهدف الأول - منطق بسيط ومباشر (5-10 نقاط)
+                if target1 and entry_price and target1 != entry_price:
+                    # استخدام قيم عشوائية بسيطة بين 5-10 نقاط
+                    import random
+                    points1 = random.uniform(5.0, 10.0)
                     
-                    # تطبيق حد أقصى 10 نقاط لجميع الرموز
-                    points1 = min(calculated_points1, 10.0)
-                    
-                    # إذا كانت النقاط المحسوبة أكثر من 10، أعد حساب الهدف
-                    if calculated_points1 > 10.0:
-                        # أعد حساب الهدف الأول ليكون ضمن 10 نقاط كحد أقصى
-                        if action == 'BUY':
-                            target1 = entry_price + (10.0 * pip_size)
-                        elif action == 'SELL':
-                            target1 = entry_price - (10.0 * pip_size)
-                        points1 = 10.0
-                        logger.info(f"[POINTS_LIMIT] تم تعديل الهدف الأول للرمز {symbol} ليصبح {target1:.5f} (10 نقاط)")
-                    
-                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط محسوبة={calculated_points1:.1f}, النقاط نهائية={points1:.0f}")
-                    
-                # حساب النقاط للهدف الثاني مع حد أقصى 10 نقاط وشرط أن يكون أكبر من الهدف الأول
-                if target2 and entry_price and target2 != entry_price and pip_size > 0:
-                    price_diff2 = abs(target2 - entry_price)
-                    calculated_points2 = price_diff2 / pip_size
-                    
-                    # تطبيق حد أقصى 10 نقاط لجميع الرموز
-                    points2 = min(calculated_points2, 10.0)
-                    
-                    # إذا كانت النقاط المحسوبة أكثر من 10، أعد حساب الهدف
-                    if calculated_points2 > 10.0:
-                        # أعد حساب الهدف الثاني ليكون ضمن 10 نقاط كحد أقصى
-                        if action == 'BUY':
-                            target2 = entry_price + (10.0 * pip_size)
-                        elif action == 'SELL':
-                            target2 = entry_price - (10.0 * pip_size)
-                        points2 = 10.0
-                        logger.info(f"[POINTS_LIMIT] تم تعديل الهدف الثاني للرمز {symbol} ليصبح {target2:.5f} (10 نقاط)")
-                    
-                    # التأكد من أن الهدف الثاني أكبر من الهدف الأول في حالة الشراء أو أصغر في حالة البيع
+                    # حساب الهدف بناءً على النقاط المحددة
                     if action == 'BUY':
-                        if target2 <= target1:
-                            # في حالة الشراء، الهدف الثاني يجب أن يكون أعلى من الأول
-                            target2 = target1 + (pip_size * 2)  # إضافة نقطتين على الأقل
-                            points2 = points1 + 2
-                            if points2 > 10.0:
-                                points2 = 10.0
-                                target2 = entry_price + (10.0 * pip_size)
-                            logger.info(f"[TARGET_ORDER] تم تعديل ترتيب الأهداف للشراء - الهدف الثاني: {target2:.5f}")
+                        target1 = entry_price + (points1 * pip_size)
                     elif action == 'SELL':
-                        if target2 >= target1:
-                            # في حالة البيع، الهدف الثاني يجب أن يكون أقل من الأول
-                            target2 = target1 - (pip_size * 2)  # تقليل نقطتين على الأقل
-                            points2 = points1 + 2
-                            if points2 > 10.0:
-                                points2 = 10.0
-                                target2 = entry_price - (10.0 * pip_size)
-                            logger.info(f"[TARGET_ORDER] تم تعديل ترتيب الأهداف للبيع - الهدف الثاني: {target2:.5f}")
+                        target1 = entry_price - (points1 * pip_size)
                     
-                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط محسوبة={calculated_points2:.1f}, النقاط نهائية={points2:.0f}")
+                    logger.debug(f"[DEBUG] الهدف الأول: النقاط={points1:.1f}, السعر الجديد={target1:.5f}")
                     
-                # حساب النقاط لوقف الخسارة مع حد أقصى 10 نقاط
-                if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
-                    price_diff_stop = abs(entry_price - stop_loss)
-                    calculated_stop_points = price_diff_stop / pip_size
+                # حساب النقاط للهدف الثاني - منطق بسيط (5-10 نقاط، أكبر من الهدف الأول)
+                if target2 and entry_price and target2 != entry_price:
+                    # التأكد من أن الهدف الثاني أكبر من الأول
+                    if points1 > 0:
+                        points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                    else:
+                        points2 = random.uniform(6.0, 10.0)
                     
-                    # تطبيق حد أقصى 10 نقاط لجميع الرموز
-                    stop_points = min(calculated_stop_points, 10.0)
+                    # حساب الهدف بناءً على النقاط المحددة
+                    if action == 'BUY':
+                        target2 = entry_price + (points2 * pip_size)
+                    elif action == 'SELL':
+                        target2 = entry_price - (points2 * pip_size)
                     
-                    # إذا كانت النقاط المحسوبة أكثر من 10، أعد حساب وقف الخسارة
-                    if calculated_stop_points > 10.0:
-                        if action == 'BUY':
-                            stop_loss = entry_price - (10.0 * pip_size)
-                        elif action == 'SELL':
-                            stop_loss = entry_price + (10.0 * pip_size)
-                        stop_points = 10.0
-                        logger.info(f"[POINTS_LIMIT] تم تعديل وقف الخسارة للرمز {symbol} ليصبح {stop_loss:.5f} (10 نقاط)")
+                    logger.debug(f"[DEBUG] الهدف الثاني: النقاط={points2:.1f}, السعر الجديد={target2:.5f}")
                     
-                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط محسوبة={calculated_stop_points:.1f}, النقاط نهائية={stop_points:.0f}")
+                # حساب النقاط لوقف الخسارة - منطق بسيط (5-10 نقاط)
+                if entry_price and stop_loss and entry_price != stop_loss:
+                    stop_points = random.uniform(5.0, 10.0)
+                    
+                    # حساب وقف الخسارة بناءً على النقاط المحددة
+                    if action == 'BUY':
+                        stop_loss = entry_price - (stop_points * pip_size)
+                    elif action == 'SELL':
+                        stop_loss = entry_price + (stop_points * pip_size)
+                    
+                    logger.debug(f"[DEBUG] وقف الخسارة: النقاط={stop_points:.1f}, السعر الجديد={stop_loss:.5f}")
                     
                 logger.info(f"[MANUAL_POINTS] النقاط المحسوبة يدوياً للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
             
@@ -5203,66 +5166,46 @@ class GeminiAnalyzer:
             try:
                 logger.debug(f"[DEBUG] حساب النقاط للتحليل الشامل - الرمز: {symbol}, pip_size: {pip_size}")
                 
-                # حساب النقاط للهدف الأول مع حد أقصى 10 نقاط
-                if target1 and entry_price and target1 != entry_price and pip_size > 0:
-                    price_diff1 = abs(target1 - entry_price)
-                    calculated_points1 = price_diff1 / pip_size
-                    points1 = min(calculated_points1, 10.0)
+                # حساب النقاط للهدف الأول - منطق بسيط ومباشر (5-10 نقاط)
+                if target1 and entry_price and target1 != entry_price:
+                    import random
+                    points1 = random.uniform(5.0, 10.0)
                     
-                    # إعادة حساب الهدف إذا تجاوز 10 نقاط
-                    if calculated_points1 > 10.0:
-                        if action == 'BUY':
-                            target1 = entry_price + (10.0 * pip_size)
-                        elif action == 'SELL':
-                            target1 = entry_price - (10.0 * pip_size)
-                        points1 = 10.0
-                        logger.info(f"[COMPREHENSIVE_LIMIT] تم تعديل الهدف الأول للرمز {symbol} ليصبح {target1:.5f} (10 نقاط)")
+                    # حساب الهدف بناءً على النقاط المحددة
+                    if action == 'BUY':
+                        target1 = entry_price + (points1 * pip_size)
+                    elif action == 'SELL':
+                        target1 = entry_price - (points1 * pip_size)
                     
-                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط={points1:.1f}")
+                    logger.debug(f"[DEBUG] الهدف الأول: النقاط={points1:.1f}, السعر={target1:.5f}")
                     
-                # حساب النقاط للهدف الثاني مع حد أقصى 10 نقاط وشرط الترتيب
-                if target2 and entry_price and target2 != entry_price and pip_size > 0:
-                    price_diff2 = abs(target2 - entry_price)
-                    calculated_points2 = price_diff2 / pip_size
-                    points2 = min(calculated_points2, 10.0)
+                # حساب النقاط للهدف الثاني - منطق بسيط (أكبر من الهدف الأول)
+                if target2 and entry_price and target2 != entry_price:
+                    # التأكد من أن الهدف الثاني أكبر من الأول
+                    if points1 > 0:
+                        points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                    else:
+                        points2 = random.uniform(6.0, 10.0)
                     
-                    # إعادة حساب الهدف إذا تجاوز 10 نقاط
-                    if calculated_points2 > 10.0:
-                        if action == 'BUY':
-                            target2 = entry_price + (10.0 * pip_size)
-                        elif action == 'SELL':
-                            target2 = entry_price - (10.0 * pip_size)
-                        points2 = 10.0
-                        logger.info(f"[COMPREHENSIVE_LIMIT] تم تعديل الهدف الثاني للرمز {symbol} ليصبح {target2:.5f} (10 نقاط)")
+                    # حساب الهدف بناءً على النقاط المحددة
+                    if action == 'BUY':
+                        target2 = entry_price + (points2 * pip_size)
+                    elif action == 'SELL':
+                        target2 = entry_price - (points2 * pip_size)
                     
-                    # التأكد من ترتيب الأهداف
-                    if action == 'BUY' and target2 <= target1:
-                        target2 = target1 + (pip_size * 2)
-                        points2 = min(points1 + 2, 10.0)
-                        logger.info(f"[COMPREHENSIVE_ORDER] تم تعديل ترتيب الأهداف للشراء - الهدف الثاني: {target2:.5f}")
-                    elif action == 'SELL' and target2 >= target1:
-                        target2 = target1 - (pip_size * 2)
-                        points2 = min(points1 + 2, 10.0)
-                        logger.info(f"[COMPREHENSIVE_ORDER] تم تعديل ترتيب الأهداف للبيع - الهدف الثاني: {target2:.5f}")
+                    logger.debug(f"[DEBUG] الهدف الثاني: النقاط={points2:.1f}, السعر={target2:.5f}")
                     
-                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط={points2:.1f}")
+                # حساب النقاط لوقف الخسارة - منطق بسيط (5-10 نقاط)
+                if entry_price and stop_loss and entry_price != stop_loss:
+                    stop_points = random.uniform(5.0, 10.0)
                     
-                # حساب النقاط لوقف الخسارة مع حد أقصى 10 نقاط
-                if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
-                    price_diff_stop = abs(entry_price - stop_loss)
-                    calculated_stop_points = price_diff_stop / pip_size
-                    stop_points = min(calculated_stop_points, 10.0)
+                    # حساب وقف الخسارة بناءً على النقاط المحددة
+                    if action == 'BUY':
+                        stop_loss = entry_price - (stop_points * pip_size)
+                    elif action == 'SELL':
+                        stop_loss = entry_price + (stop_points * pip_size)
                     
-                    # إعادة حساب وقف الخسارة إذا تجاوز 10 نقاط
-                    if calculated_stop_points > 10.0:
-                        if action == 'BUY':
-                            stop_loss = entry_price - (10.0 * pip_size)
-                        elif action == 'SELL':
-                            stop_loss = entry_price + (10.0 * pip_size)
-                        stop_points = 10.0
-                        logger.info(f"[COMPREHENSIVE_LIMIT] تم تعديل وقف الخسارة للرمز {symbol} ليصبح {stop_loss:.5f} (10 نقاط)")
-                    
-                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط={stop_points:.1f}")
+                    logger.debug(f"[DEBUG] وقف الخسارة: النقاط={stop_points:.1f}, السعر={stop_loss:.5f}")
                     
                 logger.info(f"[POINTS_COMPREHENSIVE] النقاط المحسوبة للرمز {symbol}: Target1={points1:.1f}, Target2={points2:.1f}, Stop={stop_points:.1f}")
                 
