@@ -36,14 +36,7 @@ apihelper.READ_TIMEOUT = 60     # زيادة إلى 60 ثانية للاستقر
 apihelper.RETRY_TIMEOUT = 5     # زيادة timeout للمحاولات المتكررة
 import pandas as pd
 import numpy as np
-# استيراد MetaTrader5 (اختياري - متاح على Windows فقط)
-try:
-    import MetaTrader5 as mt5
-    MT5_AVAILABLE = True
-except ImportError:
-    print("[WARNING] MetaTrader5 غير متاح - بعض الوظائف ستكون معطلة")
-    MT5_AVAILABLE = False
-    mt5 = None
+import MetaTrader5 as mt5
 import google.generativeai as genai
 from datetime import datetime, timedelta
 from telebot import types
