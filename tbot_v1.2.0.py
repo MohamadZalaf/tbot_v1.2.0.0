@@ -992,10 +992,19 @@ def calculate_points_accurately(price_diff, symbol, capital=None, current_price=
 def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
     """تنسيق رسائل الإشعارات المختصرة باستخدام أسلوب التحليل اليدوي الشامل مع AI"""
     try:
+        logger.debug(f"[DEBUG] بدء تنسيق رسالة الإشعار للرمز {symbol}")
+        logger.debug(f"[DEBUG] بيانات المدخلات: symbol_info={symbol_info is not None}, price_data={price_data is not None}, analysis={analysis is not None}, user_id={user_id}")
+        
+        # التحقق من صحة البيانات الأساسية
+        if not symbol or not symbol_info or not price_data or not analysis:
+            raise ValueError(f"بيانات مفقودة: symbol={symbol}, symbol_info={symbol_info is not None}, price_data={price_data is not None}, analysis={analysis is not None}")
+        
         # استخدام نفس أسلوب جلب البيانات من التحليل اليدوي
         current_price = price_data.get('last', price_data.get('bid', 0))
         action = analysis.get('action')
         confidence = analysis.get('confidence')
+        
+        logger.debug(f"[DEBUG] البيانات المستخرجة: current_price={current_price}, action={action}, confidence={confidence}")
         # استخدام نفس منطق الوقت من التحليل اليدوي الصحيح
         if user_id:
             formatted_time = format_time_for_user(user_id)
@@ -1285,6 +1294,17 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         display_points2 = int(points2) if points2 > 0 else (50 if trading_mode == 'longterm' else 25)
         display_stop = int(stop_points) if stop_points > 0 else (20 if trading_mode == 'longterm' else 10)
         
+        # شرط إضافي: إذا كانت النقاط متساوية، اجعلها 1
+        if display_points1 == display_points2:
+            display_points1 = 1
+            display_points2 = 1
+        if display_points1 == display_stop:
+            display_points1 = 1
+            display_stop = 1
+        if display_points2 == display_stop:
+            display_points2 = 1
+            display_stop = 1
+        
         body += f"🎯 الهدف الأول: {display_points1} نقطة\n"
         body += f"🎯 الهدف الثاني: {display_points2} نقطة\n"
         body += f"🛑 وقف الخسارة: {display_stop} نقطة\n\n"
@@ -1312,7 +1332,55 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         return header + body
     except Exception as e:
         logger.error(f"[ALERT_FMT] فشل إنشاء رسالة الإشعار المختصرة: {e}")
-        return f"🚨 إشعار تداول آلي\n{symbol}"
+        # إرجاع رسالة احتياطية كاملة بدلاً من المقطوعة
+        try:
+            current_price = price_data.get('last', price_data.get('bid', 0)) if price_data else 0
+            action = analysis.get('action', 'HOLD') if analysis else 'HOLD'
+            confidence = analysis.get('confidence', 50) if analysis else 50
+            
+            # تحديد الإيموجي حسب نوع العملة
+            if 'XAU' in symbol or 'GOLD' in symbol:
+                emoji = '🏅'
+            elif 'EUR' in symbol:
+                emoji = '🇪🇺'
+            elif 'USD' in symbol:
+                emoji = '🇺🇸'
+            else:
+                emoji = '💰'
+                
+            backup_message = f"""🚨 إشعار تداول آلي {emoji}
+
+🚀 إشارة تداول ذكية
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💱 {symbol} | {symbol_info.get('name', symbol) if symbol_info else symbol} {emoji}
+📡 مصدر البيانات: MetaTrader5 (بيانات حقيقية)
+💰 السعر الحالي: {current_price:,.5f} {' (تقريبي)' if current_price > 0 else '(غير متاح)'}
+⏰ وقت التحليل: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ إشارة التداول الرئيسية
+
+{'🟢' if action == 'BUY' else '🔴' if action == 'SELL' else '🟡'} نوع الصفقة: {action}
+📍 سعر الدخول المقترح: {current_price:,.5f}
+🎯 الهدف الأول: 20 نقطة
+🎯 الهدف الثاني: 35 نقطة
+🛑 وقف الخسارة: 15 نقطة
+
+✅ نسبة نجاح الصفقة: {confidence:.0f}%
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ تحذير: حدث خطأ في تحليل البيانات
+يرجى التحقق من اتصال MT5 والذكاء الاصطناعي
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 بوت التداول v1.2.0 - إشعار احتياطي"""
+            
+            return backup_message
+            
+        except Exception as backup_error:
+            logger.error(f"[BACKUP_ERROR] فشل في إنشاء الرسالة الاحتياطية: {backup_error}")
+            return f"🚨 إشعار تداول آلي\n💱 {symbol}\n⚠️ حدث خطأ في النظام - يرجى المحاولة لاحقاً"
 
 # معالجة أخطاء الشبكة والاتصال
 import requests
@@ -5344,6 +5412,17 @@ class GeminiAnalyzer:
             display_points2 = int(points2) if points2 > 0 else (60 if trading_mode == 'longterm' else 35)
             display_stop = int(stop_points) if stop_points > 0 else (25 if trading_mode == 'longterm' else 15)
             
+            # شرط إضافي: إذا كانت النقاط متساوية، اجعلها 1
+            if display_points1 == display_points2:
+                display_points1 = 1
+                display_points2 = 1
+            if display_points1 == display_stop:
+                display_points1 = 1
+                display_stop = 1
+            if display_points2 == display_stop:
+                display_points2 = 1
+                display_stop = 1
+            
             message += f"🎯 الهدف الأول: {display_points1} نقطة\n"
             message += f"🎯 الهدف الثاني: {display_points2} نقطة\n"
             message += f"🛑 وقف الخسارة: {display_stop} نقطة\n\n"
@@ -8124,10 +8203,51 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
             return  # إنهاء الدالة مبكراً في حالة الخطأ
         
         # استخدام دالة الإشعار المختصرة بدلاً من الرسالة الكاملة
-        short_message = format_short_alert_message(symbol, symbol_info, price_data, fresh_analysis, user_id)
-        
-        # استخدام الرسالة المختصرة للإشعارات
-        message = short_message
+        try:
+            short_message = format_short_alert_message(symbol, symbol_info, price_data, fresh_analysis, user_id)
+            
+            # التحقق من أن الرسالة ليست مقطوعة
+            if len(short_message) < 100 or "🚨 إشعار تداول آلي\n" + symbol == short_message:
+                raise Exception("الرسالة مقطوعة أو قصيرة جداً")
+                
+            message = short_message
+            logger.info(f"[SUCCESS] تم إنشاء رسالة إشعار كاملة للرمز {symbol} (طول: {len(message)} حرف)")
+            
+        except Exception as short_error:
+            logger.error(f"[ERROR] فشل في إنشاء الرسالة المختصرة للرمز {symbol}: {short_error}")
+            # استخدام رسالة احتياطية شاملة
+            action_emoji = "🟢" if action == 'BUY' else "🔴" if action == 'SELL' else "🟡"
+            current_price_display = current_price if current_price and current_price > 0 else price_data.get('last', 0) if price_data else 0
+            
+            message = f"""🚨 إشعار تداول آلي {emoji}
+
+🚀 إشارة تداول ذكية
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💱 {symbol} | {symbol_info.get('name', symbol)} {emoji}
+📡 مصدر البيانات: {data_source}
+💰 السعر الحالي: {current_price_display:,.5f}
+⏰ وقت التحليل: {formatted_time}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ إشارة التداول الرئيسية
+
+{action_emoji} نوع الصفقة: {action}
+📍 سعر الدخول المقترح: {current_price_display:,.5f}
+🎯 الهدف الأول: 25 نقطة
+🎯 الهدف الثاني: 40 نقطة
+🛑 وقف الخسارة: 18 نقطة
+
+✅ نسبة نجاح الصفقة: {success_rate:.0f}%
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ ملاحظة: تم استخدام رسالة احتياطية
+يرجى التحقق من إعدادات النظام
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 بوت التداول v1.2.0 - إشعار ذكي"""
+            
+            logger.info(f"[BACKUP_MESSAGE] تم استخدام رسالة احتياطية للرمز {symbol}")
         
         # إنشاء أزرار التقييم
         markup = create_feedback_buttons(trade_id) if trade_id else None
