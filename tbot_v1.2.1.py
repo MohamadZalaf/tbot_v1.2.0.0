@@ -851,12 +851,10 @@ class MT5Manager:
             indicators = {}
             
             # المتوسطات المتحركة
-            if len(df) >= 10:
-                indicators['ma_10'] = ta.trend.sma_indicator(df['close'], window=10).iloc[-1]
-            if len(df) >= 20:
-                indicators['ma_20'] = ta.trend.sma_indicator(df['close'], window=20).iloc[-1]
-            if len(df) >= 50:
-                indicators['ma_50'] = ta.trend.sma_indicator(df['close'], window=50).iloc[-1]
+            if len(df) >= 9:
+                indicators['ma_9'] = ta.trend.sma_indicator(df['close'], window=9).iloc[-1]
+            if len(df) >= 21:
+                indicators['ma_21'] = ta.trend.sma_indicator(df['close'], window=21).iloc[-1]
             
             # RSI
             if len(df) >= 14:
@@ -945,8 +943,8 @@ class MT5Manager:
             
             # تحديد الاتجاه العام
             trend_signals = []
-            if 'ma_10' in indicators and 'ma_20' in indicators:
-                if indicators['ma_10'] > indicators['ma_20']:
+            if 'ma_9' in indicators and 'ma_21' in indicators:
+                if indicators['ma_9'] > indicators['ma_21']:
                     trend_signals.append('صعود')
                 else:
                     trend_signals.append('هبوط')
@@ -1034,9 +1032,8 @@ class GeminiAnalyzer:
                 technical_analysis = f"""
                 
                 المؤشرات الفنية الحقيقية (محسوبة من البيانات التاريخية):
-                - المتوسط المتحرك 10: {indicators.get('ma_10', 'غير متوفر'):.5f}
-                - المتوسط المتحرك 20: {indicators.get('ma_20', 'غير متوفر'):.5f}
-                - المتوسط المتحرك 50: {indicators.get('ma_50', 'غير متوفر'):.5f}
+                - المتوسط المتحرك 9: {indicators.get('ma_9', 'غير متوفر'):.5f}
+                - المتوسط المتحرك 21: {indicators.get('ma_21', 'غير متوفر'):.5f}
                 - RSI: {indicators.get('rsi', 'غير متوفر'):.2f} ({indicators.get('rsi_interpretation', 'غير محدد')})
                 - MACD: {indicators.get('macd', {}).get('macd', 'غير متوفر'):.5f}
                 - MACD Signal: {indicators.get('macd', {}).get('signal', 'غير متوفر'):.5f}
@@ -1215,8 +1212,8 @@ class GeminiAnalyzer:
             - تقاطع حديث: نقاط إضافية = +2
             
             **ج) المتوسطات المتحركة:**
-            - السعر فوق MA10 > MA20 > MA50: نقاط الشراء = 9/10
-            - السعر تحت MA10 < MA20 < MA50: نقاط البيع = 9/10
+            - السعر فوق MA9 > MA21: نقاط الشراء = 8/10
+            - السعر تحت MA9 < MA21: نقاط البيع = 8/10
             - ترتيب مختلط: نقاط = 3-5/10 حسب القوة
             
             **د) مستويات الدعم والمقاومة:**
@@ -1749,24 +1746,24 @@ class GeminiAnalyzer:
                     message += f"• MACD: --\n"
                 
                 # المتوسطات المتحركة
-                ma10 = indicators.get('ma_10')
-                ma50 = indicators.get('ma_50')
+                ma9 = indicators.get('ma_9')
+                ma21 = indicators.get('ma_21')
                 
-                if ma10 and ma10 > 0:
-                    message += f"• MA10: {ma10:.5f}\n"
+                if ma9 and ma9 > 0:
+                    message += f"• MA9: {ma9:.5f}\n"
                 else:
-                    message += f"• MA10: --\n"
+                    message += f"• MA9: --\n"
                     
-                if ma50 and ma50 > 0:
-                    message += f"• MA50: {ma50:.5f}\n"
+                if ma21 and ma21 > 0:
+                    message += f"• MA21: {ma21:.5f}\n"
                 else:
-                    message += f"• MA50: --\n"
+                    message += f"• MA21: --\n"
                 
             else:
                 message += f"• RSI: --\n"
                 message += f"• MACD: --\n"
-                message += f"• MA10: --\n"
-                message += f"• MA50: --\n"
+                message += f"• MA9: --\n"
+                message += f"• MA21: --\n"
             
             message += "\n"
             
@@ -1864,10 +1861,10 @@ class GeminiAnalyzer:
                         message += "📉 MACD سلبي - إشارة هبوط محتملة\n"
                 
                 # توصيات بناءً على المتوسطات المتحركة
-                ma10 = indicators.get('ma_10', 0)
-                ma20 = indicators.get('ma_20', 0)
-                if ma10 > 0 and ma20 > 0:
-                    if ma10 > ma20:
+                ma9 = indicators.get('ma_9', 0)
+                ma21 = indicators.get('ma_21', 0)
+                if ma9 > 0 and ma21 > 0:
+                    if ma9 > ma21:
                         message += "⬆️ المتوسطات تدعم الاتجاه الصاعد\n"
                     else:
                         message += "⬇️ المتوسطات تدعم الاتجاه الهابط\n"
@@ -2697,21 +2694,20 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
                     technical_score -= 5   # إشارة متضاربة
             
             # Moving Averages Analysis (10%)
-            ma10 = indicators.get('ma_10', 0)
-            ma20 = indicators.get('ma_20', 0)
-            ma50 = indicators.get('ma_50', 0)
+            ma9 = indicators.get('ma_9', 0)
+            ma21 = indicators.get('ma_21', 0)
             current_price = technical_data.get('price', 0)
             
-            if ma10 and ma20 and current_price:
+            if ma9 and ma21 and current_price:
                 if action == 'BUY':
-                    if current_price > ma10 > ma20:  # ترتيب صاعد
+                    if current_price > ma9 > ma21:  # ترتيب صاعد
                         technical_score += 10
-                    elif current_price > ma10:  # فوق المتوسط قصير المدى
+                    elif current_price > ma9:  # فوق المتوسط قصير المدى
                         technical_score += 5
                 elif action == 'SELL':
-                    if current_price < ma10 < ma20:  # ترتيب هابط
+                    if current_price < ma9 < ma21:  # ترتيب هابط
                         technical_score += 10
-                    elif current_price < ma10:  # تحت المتوسط قصير المدى
+                    elif current_price < ma9:  # تحت المتوسط قصير المدى
                         technical_score += 5
             
             # Support/Resistance Analysis (10%)
