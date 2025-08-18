@@ -4406,16 +4406,12 @@ class GeminiAnalyzer:
             recommendation = self._extract_recommendation(analysis_text)
             confidence = self._extract_confidence(analysis_text)
             
-            # التحقق المحسن من صحة نسبة النجاح
+            # التحقق المحسن من صحة نسبة النجاح - عرض -- عند الفشل
             if confidence is None:
                 logger.warning(f"[AI_ANALYSIS] لم يتم العثور على نسبة نجاح في تحليل AI للرمز {symbol}")
-                # بدلاً من استخدام نسبة ثابتة، نستخدم تحليل فني كاحتياط
-                if technical_data and technical_data.get('indicators'):
-                    confidence = calculate_basic_technical_success_rate(technical_data, recommendation)
-                    logger.info(f"[FALLBACK_ANALYSIS] استخدام التحليل الفني الاحتياطي: {confidence}%")
-                else:
-                    logger.error(f"[ANALYSIS_FAILED] فشل كامل في تحليل الرمز {symbol} - لا توجد بيانات كافية")
-                    confidence = None
+                # لا نستخدم نسب احتياطية - نعرض -- للمستخدم
+                confidence = "--"
+                logger.info(f"[NO_FALLBACK] عرض -- للمستخدم - لا توجد نسبة نجاح صريحة من AI")
             elif confidence < 0 or confidence > 100:
                 logger.warning(f"[AI_ANALYSIS] نسبة نجاح خارج النطاق من AI: {confidence}% - تصحيح")
                 confidence = max(0, min(100, confidence))  # تصحيح النطاق
@@ -7457,25 +7453,14 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
             logger.info(f"[SIMPLIFIED_AUTO_SUCCESS] {symbol} - {action}: {final_score:.1f}% (AI: {ai_confidence}%)")
             return round(final_score, 1)
         
-        # الخطوة 2: إذا لم نحصل على نسبة من AI، استخدم التحليل الفني كاحتياط (مثل الوضع اليدوي)
-        logger.warning(f"[AUTO_FALLBACK] لا توجد نسبة من AI للرمز {symbol} - استخدام التحليل الفني الاحتياطي")
-        if technical_data and technical_data.get('indicators'):
-            fallback_rate = calculate_basic_technical_success_rate(technical_data, action)
-            logger.info(f"[AUTO_FALLBACK_SUCCESS] {symbol} - {action}: {fallback_rate:.1f}% (تحليل فني احتياطي)")
-            return fallback_rate
-        
-        # الخطوة 3: فشل كامل - لا نسبة ثابتة (مثل الوضع اليدوي)
-        logger.error(f"[AUTO_ANALYSIS_FAILED] فشل كامل في تحليل الرمز {symbol} - لا توجد بيانات كافية")
-        return None
+        # الخطوة 2: فشل في الحصول على نسبة من AI - عرض -- (لا نسب احتياطية)
+        logger.warning(f"[AUTO_FALLBACK] لا توجد نسبة من AI للرمز {symbol} - عرض -- للمستخدم")
+        return "--"
         
     except Exception as e:
         logger.error(f"خطأ في حساب نسبة النجاح المبسط: {e}")
-        # في حالة الخطأ، استخدم تحليل AI إذا كان متوفراً
-        if analysis and analysis.get('confidence', 0) > 0:
-            return min(max(analysis.get('confidence', 50), 10), 90)
-        else:
-            # كحل أخير، استخدم تحليل فني بسيط
-            return calculate_basic_technical_success_rate(technical_data, action) if technical_data else None
+        # في حالة الخطأ، عرض -- (لا نسب احتياطية)
+        return "--"
 
 # دالة مساعدة لحساب نسبة نجاح بسيطة من المؤشرات الفنية (نفس ما في اليدوي)
 def calculate_simplified_technical_rate(technical_data: Dict, action: str) -> float:
