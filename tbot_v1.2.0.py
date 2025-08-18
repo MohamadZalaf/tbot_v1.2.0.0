@@ -12083,12 +12083,26 @@ if __name__ == "__main__":
         
         while retry_count < max_retries:
             try:
-                logger.info("[SYSTEM] بدء استقبال الرسائل...")
+                logger.info(f"[SYSTEM] بدء استقبال الرسائل (محاولة {retry_count + 1}/{max_retries})...")
+                
+                # فحص صحة الاتصال مع Telegram قبل البدء
+                try:
+                    bot_info = bot.get_me()
+                    logger.info(f"[OK] اتصال Telegram سليم - البوت: {bot_info.first_name}")
+                except Exception as test_error:
+                    logger.error(f"[ERROR] فشل في الاتصال مع Telegram: {test_error}")
+                    raise test_error
+                
+                # تنظيف الذاكرة قبل البدء
+                import gc
+                gc.collect()
+                
                 bot.infinity_polling(
-                    none_stop=False,  # تغيير إلى False لمعالجة أفضل للأخطاء
-                    interval=1,       # تقليل المدة للاستجابة الأسرع
-                    timeout=60,       # زيادة timeout للاستقرار
-                    long_polling_timeout=30  # زيادة long polling timeout
+                    none_stop=False,  # معالجة أفضل للأخطاء
+                    interval=2,       # زيادة المدة لتقليل الضغط على الخادم
+                    timeout=90,       # زيادة timeout للاستقرار
+                    long_polling_timeout=45,  # زيادة long polling timeout
+                    restart_on_change=True    # إعادة التشغيل عند تغيير الكود
                 )
                 break  # إذا انتهى بشكل طبيعي
                 
@@ -12122,9 +12136,15 @@ if __name__ == "__main__":
                     monitoring_active = True
                 
                 # معالجة خاصة لأخطاء محددة
-                if "infinity polling" in error_str or "polling exited" in error_str:
+                if "infinity polling" in error_str or "polling exited" in error_str or "break infinity polling" in error_str:
                     logger.warning("[WARNING] انقطاع في infinity polling - محاولة إعادة الاتصال...")
+                    # تنظيف الذاكرة قبل إعادة المحاولة
+                    import gc
+                    gc.collect()
                     wait_time = min(retry_count * 8, 90)
+                elif "connection" in error_str or "timeout" in error_str or "network" in error_str:
+                    logger.warning("[WARNING] مشكلة في الشبكة - انتظار أطول...")
+                    wait_time = min(retry_count * 15, 180)  # انتظار أطول لمشاكل الشبكة
                 else:
                     wait_time = min(retry_count * 5, 60)
                     
