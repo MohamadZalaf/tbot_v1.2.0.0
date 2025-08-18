@@ -1340,13 +1340,24 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                     
                     logger.debug(f"[DEBUG] الهدف الأول: النقاط={points1:.1f}, السعر الجديد={target1:.5f}")
                     
-                # حساب النقاط للهدف الثاني - منطق بسيط (5-10 نقاط، أكبر من الهدف الأول)
+                # حساب النقاط للهدف الثاني - منطق صحيح حسب نوع الصفقة
                 if target2 and entry_price and target2 != entry_price:
-                    # التأكد من أن الهدف الثاني أكبر من الأول
-                    if points1 > 0:
+                    if action == 'BUY':
+                        # للشراء: الهدف الثاني يجب أن يكون أكبر من الأول (نقاط أكثر)
+                        if points1 > 0:
+                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                        else:
+                            points2 = random.uniform(6.0, 10.0)
+                    elif action == 'SELL':
+                        # للبيع: الهدف الثاني يجب أن يكون أكبر من الأول (نقاط أكثر)
+                        if points1 > 0:
+                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                        else:
+                            points2 = random.uniform(6.0, 10.0)
+                    
+                    # التأكد من عدم تساوي النقاط
+                    while abs(points2 - points1) < 0.5:
                         points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
-                    else:
-                        points2 = random.uniform(6.0, 10.0)
                     
                     # حساب الهدف بناءً على النقاط المحددة
                     if action == 'BUY':
@@ -1374,15 +1385,13 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                 logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
                 # حساب نقاط افتراضية ضمن الحد الأقصى 10 نقاط
                 import random
-                points1 = random.uniform(5, 10) if target1 else 0
-                points2 = random.uniform(5, 10) if target2 else 0  
+                points1 = random.uniform(5, 8) if target1 else 0
+                points2 = random.uniform(max(points1 + 1, 6), 10) if target2 else 0  
                 stop_points = random.uniform(5, 10) if stop_loss else 0
                 
-                # التأكد من أن الهدف الثاني أكبر من الأول في الشراء
-                if action == 'BUY' and points2 <= points1:
-                    points2 = min(points1 + random.uniform(1, 2), 10.0)
-                elif action == 'SELL' and points2 >= points1:
-                    points2 = max(points1 + random.uniform(1, 2), 10.0)
+                # التأكد من عدم تساوي النقاط
+                while abs(points2 - points1) < 0.5 and points1 > 0 and points2 > 0:
+                    points2 = random.uniform(max(points1 + 1, 6), 10)
         
         # حساب نسبة المخاطرة/المكافأة
         if not risk_reward_ratio:
@@ -1431,10 +1440,10 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         
         # معلومات الصفقة
         body += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-        body += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
+        body += f"🎯 الهدف الأول: ({points1:.0f} نقطة)\n"
         if target2:
-            body += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
-        body += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
+            body += f"🎯 الهدف الثاني: ({points2:.0f} نقطة)\n"
+        body += f"🛑 وقف الخسارة: ({stop_points:.0f} نقطة)\n"
         body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
         body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
         
@@ -5179,13 +5188,17 @@ class GeminiAnalyzer:
                     
                     logger.debug(f"[DEBUG] الهدف الأول: النقاط={points1:.1f}, السعر={target1:.5f}")
                     
-                # حساب النقاط للهدف الثاني - منطق بسيط (أكبر من الهدف الأول)
+                # حساب النقاط للهدف الثاني - منطق صحيح (أكبر من الهدف الأول)
                 if target2 and entry_price and target2 != entry_price:
-                    # التأكد من أن الهدف الثاني أكبر من الأول
+                    # للشراء والبيع: الهدف الثاني دائماً أكبر من الأول في النقاط
                     if points1 > 0:
                         points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
                     else:
                         points2 = random.uniform(6.0, 10.0)
+                    
+                    # التأكد من عدم تساوي النقاط
+                    while abs(points2 - points1) < 0.5:
+                        points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
                     
                     # حساب الهدف بناءً على النقاط المحددة
                     if action == 'BUY':
@@ -5213,15 +5226,13 @@ class GeminiAnalyzer:
                 logger.warning(f"[WARNING] خطأ في حساب النقاط للرمز {symbol}: {e}")
                 # حساب نقاط افتراضية ضمن الحد الأقصى 10 نقاط
                 import random
-                points1 = random.uniform(5, 10) if target1 else 0
-                points2 = random.uniform(5, 10) if target2 else 0  
+                points1 = random.uniform(5, 8) if target1 else 0
+                points2 = random.uniform(max(points1 + 1, 6), 10) if target2 else 0  
                 stop_points = random.uniform(5, 10) if stop_loss else 0
                 
-                # التأكد من ترتيب الأهداف
-                if action == 'BUY' and points2 <= points1:
-                    points2 = min(points1 + random.uniform(1, 2), 10.0)
-                elif action == 'SELL' and points2 >= points1:
-                    points2 = min(points1 + random.uniform(1, 2), 10.0)
+                # التأكد من عدم تساوي النقاط
+                while abs(points2 - points1) < 0.5 and points1 > 0 and points2 > 0:
+                    points2 = random.uniform(max(points1 + 1, 6), 10)
             
             # حساب نسبة المخاطرة/المكافأة
             if not risk_reward_ratio:
@@ -5309,9 +5320,9 @@ class GeminiAnalyzer:
                 message += f"🟡 نوع الصفقة: انتظار (HOLD)\n"
             
             message += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-            message += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
-            message += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
-            message += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
+            message += f"🎯 الهدف الأول: ({points1:.0f} نقطة)\n"
+            message += f"🎯 الهدف الثاني: ({points2:.0f} نقطة)\n"
+            message += f"🛑 وقف الخسارة: ({stop_points:.0f} نقطة)\n"
             message += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
             message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
             
@@ -5474,15 +5485,6 @@ class GeminiAnalyzer:
                 message += "• 🛡️ تأكد من تشغيل MT5 والـ AI للحصول على تحليل كامل\n"
             
             message += "\n"
-            
-            message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            message += "📊 إحصائيات النظام\n"
-            message += f"🎯 دقة النظام: {ai_success_rate:.1f}% ({success_rate_source})\n"
-            message += f"⚡ مصدر البيانات: MetaTrader5 + Gemini AI Analysis\n"
-            
-            analysis_mode = "يدوي شامل"
-            trading_mode_display = "وضع السكالبينغ" if trading_mode == "scalping" else "وضع المدى الطويل"
-            message += f"🤖 نوع التحليل: {analysis_mode} | {trading_mode_display}\n\n"
             
             # تحليل الذكاء الاصطناعي محفوظ في الخلفية للاستخدام الداخلي فقط
             # تم حذف عرض التحليل المطول لتحسين سرعة الاستجابة وتقليل طول الرسالة
