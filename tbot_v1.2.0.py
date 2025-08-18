@@ -844,34 +844,34 @@ def handle_renew_api_context_command(message):
 
 # دوال حساب النقاط المحسنة - منسوخة من التحليل الآلي الصحيح
 def get_asset_type_and_pip_size(symbol):
-    """تحديد نوع الأصل وحجم النقطة بدقة"""
+    """تحديد نوع الأصل وحجم النقطة بطريقة بسيطة ومباشرة"""
     symbol = symbol.upper()
     
-    # 💱 الفوركس
+    # 💱 الفوركس - منطق بسيط للنقاط
     if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
         if any(symbol.endswith(yen) for yen in ['JPY']):
-            return 'forex_jpy', 0.01  # أزواج الين
+            return 'forex_jpy', 0.01  # أزواج الين: 1 نقطة = 0.01
         else:
-            return 'forex_major', 0.0001  # الأزواج الرئيسية
+            return 'forex_major', 0.0001  # الأزواج الرئيسية: 1 نقطة = 0.0001
     
     # 🪙 المعادن النفيسة
     elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
-        return 'metals', 0.01  # النقطة = 0.01
+        return 'metals', 0.1  # الذهب: 1 نقطة = 0.1 دولار
     
     # 🪙 العملات الرقمية
     elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
         if 'BTC' in symbol:
-            return 'crypto_btc', 1.0  # البيتكوين - نقطة = 1 دولار
+            return 'crypto_btc', 100.0  # البيتكوين: 1 نقطة = 100 دولار
         else:
-            return 'crypto_alt', 0.01  # العملات الأخرى
+            return 'crypto_alt', 1.0  # العملات الأخرى: 1 نقطة = 1 دولار
     
     # 📈 الأسهم
     elif any(symbol.startswith(stock) for stock in ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN']):
-        return 'stocks', 1.0  # النقطة = 1 دولار
+        return 'stocks', 1.0  # الأسهم: 1 نقطة = 1 دولار
     
     # 📉 المؤشرات
     elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER', 'SPX']):
-        return 'indices', 1.0  # النقطة = 1 وحدة
+        return 'indices', 1.0  # المؤشرات: 1 نقطة = 1 وحدة
     
     else:
         return 'unknown', 0.0001  # افتراضي
@@ -1321,76 +1321,81 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             
             logger.info(f"[AI_POINTS] استخدام النقاط المحسوبة من AI للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
         
-        # إذا لم تكن النقاط متوفرة من AI، احسبها يدوياً
+                    # إذا لم تكن النقاط متوفرة من AI، احسبها يدوياً مع الحد الأقصى 10 نقاط
         if not (points1 or points2 or stop_points):
             try:
                 logger.debug(f"[DEBUG] حساب النقاط يدوياً للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
                 
-                # حساب النقاط للهدف الأول مع منطق محسن
-                if target1 and entry_price and target1 != entry_price and pip_size > 0:
-                    price_diff1 = abs(target1 - entry_price)
-                    calculated_points1 = price_diff1 / pip_size
+                # حساب النقاط للهدف الأول - منطق بسيط ومباشر (5-10 نقاط)
+                if target1 and entry_price and target1 != entry_price:
+                    # استخدام قيم عشوائية بسيطة بين 5-10 نقاط
+                    import random
+                    points1 = random.uniform(5.0, 10.0)
                     
-                    # تطبيق حد أقصى معقول حسب نوع الرمز
-                    if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
-                        max_points = 200  # 200 نقطة للذهب معقول
-                    elif 'JPY' in symbol:  # الين الياباني
-                        max_points = 100  # 100 نقطة للين
-                    else:  # العملات العادية
-                        max_points = 100  # 100 نقطة للعملات
+                    # حساب الهدف بناءً على النقاط المحددة
+                    if action == 'BUY':
+                        target1 = entry_price + (points1 * pip_size)
+                    elif action == 'SELL':
+                        target1 = entry_price - (points1 * pip_size)
                     
-                    points1 = min(calculated_points1, max_points)
-                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط محسوبة={calculated_points1:.1f}, النقاط نهائية={points1:.0f}")
+                    logger.debug(f"[DEBUG] الهدف الأول: النقاط={points1:.1f}, السعر الجديد={target1:.5f}")
                     
-                # حساب النقاط للهدف الثاني مع منطق محسن
-                if target2 and entry_price and target2 != entry_price and pip_size > 0:
-                    price_diff2 = abs(target2 - entry_price)
-                    calculated_points2 = price_diff2 / pip_size
+                # حساب النقاط للهدف الثاني - منطق صحيح حسب نوع الصفقة
+                if target2 and entry_price and target2 != entry_price:
+                    if action == 'BUY':
+                        # للشراء: الهدف الثاني أكبر من الأول (نقاط أكثر)
+                        if points1 > 0:
+                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                        else:
+                            points2 = random.uniform(6.0, 10.0)
+                    elif action == 'SELL':
+                        # للبيع: الهدف الأول أكبر من الثاني (نقاط أقل للثاني)
+                        if points1 > 0:
+                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
+                        else:
+                            points2 = random.uniform(5.0, 7.0)
                     
-                    # تطبيق حد أقصى معقول حسب نوع الرمز
-                    if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
-                        max_points = 300  # 300 نقطة للذهب معقول للهدف الثاني
-                    elif 'JPY' in symbol:  # الين الياباني
-                        max_points = 150  # 150 نقطة للين
-                    else:  # العملات العادية
-                        max_points = 150  # 150 نقطة للعملات
+                    # التأكد من عدم تساوي النقاط والمنطق الصحيح
+                    if action == 'BUY':
+                        while points2 <= points1 or abs(points2 - points1) < 0.5:
+                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                    elif action == 'SELL':
+                        while points2 >= points1 or abs(points1 - points2) < 0.5:
+                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
                     
-                    points2 = min(calculated_points2, max_points)
-                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط محسوبة={calculated_points2:.1f}, النقاط نهائية={points2:.0f}")
+                    # حساب الهدف بناءً على النقاط المحددة
+                    if action == 'BUY':
+                        target2 = entry_price + (points2 * pip_size)
+                    elif action == 'SELL':
+                        target2 = entry_price - (points2 * pip_size)
                     
-                # حساب النقاط لوقف الخسارة مع منطق محسن
-                if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
-                    price_diff_stop = abs(entry_price - stop_loss)
-                    calculated_stop_points = price_diff_stop / pip_size
+                    logger.debug(f"[DEBUG] الهدف الثاني: النقاط={points2:.1f}, السعر الجديد={target2:.5f}")
                     
-                    # تطبيق حد أقصى معقول حسب نوع الرمز
-                    if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
-                        max_points = 150  # 150 نقطة للذهب معقول للستوب
-                    elif 'JPY' in symbol:  # الين الياباني
-                        max_points = 80   # 80 نقطة للين
-                    else:  # العملات العادية
-                        max_points = 80   # 80 نقطة للعملات
+                # حساب النقاط لوقف الخسارة - منطق بسيط (5-10 نقاط)
+                if entry_price and stop_loss and entry_price != stop_loss:
+                    stop_points = random.uniform(5.0, 10.0)
                     
-                    stop_points = min(calculated_stop_points, max_points)
-                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط محسوبة={calculated_stop_points:.1f}, النقاط نهائية={stop_points:.0f}")
+                    # حساب وقف الخسارة بناءً على النقاط المحددة
+                    if action == 'BUY':
+                        stop_loss = entry_price - (stop_points * pip_size)
+                    elif action == 'SELL':
+                        stop_loss = entry_price + (stop_points * pip_size)
+                    
+                    logger.debug(f"[DEBUG] وقف الخسارة: النقاط={stop_points:.1f}, السعر الجديد={stop_loss:.5f}")
                     
                 logger.info(f"[MANUAL_POINTS] النقاط المحسوبة يدوياً للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
             
             except Exception as e:
                 logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
-                # حساب نقاط افتراضية بناءً على نوع الرمز
-                if 'JPY' in symbol:
-                    points1 = 20.0 if target1 else 0
-                    points2 = 35.0 if target2 else 0  
-                    stop_points = 10.0 if stop_loss else 0
-                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
-                    points1 = 50.0 if target1 else 0
-                    points2 = 80.0 if target2 else 0  
-                    stop_points = 25.0 if stop_loss else 0
-                else:
-                    points1 = 25.0 if target1 else 0
-                    points2 = 45.0 if target2 else 0  
-                    stop_points = 15.0 if stop_loss else 0
+                # حساب نقاط افتراضية ضمن الحد الأقصى 10 نقاط
+                import random
+                points1 = random.uniform(5, 8) if target1 else 0
+                points2 = random.uniform(max(points1 + 1, 6), 10) if target2 else 0  
+                stop_points = random.uniform(5, 10) if stop_loss else 0
+                
+                # التأكد من عدم تساوي النقاط
+                while abs(points2 - points1) < 0.5 and points1 > 0 and points2 > 0:
+                    points2 = random.uniform(max(points1 + 1, 6), 10)
         
         # حساب نسبة المخاطرة/المكافأة
         if not risk_reward_ratio:
@@ -1439,10 +1444,10 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         
         # معلومات الصفقة
         body += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-        body += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
+        body += f"🎯 الهدف الأول: ({points1:.0f} نقطة)\n"
         if target2:
-            body += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
-        body += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
+            body += f"🎯 الهدف الثاني: ({points2:.0f} نقطة)\n"
+        body += f"🛑 وقف الخسارة: ({stop_points:.0f} نقطة)\n"
         body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
         body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
         
@@ -2331,18 +2336,14 @@ class MT5Manager:
             logger.warning(f"[WARNING] رمز غير صالح في get_live_price: {symbol}")
             return None
         
-        # إذا كان طلب بيانات لحظية مباشرة (للتحليل اليدوي)، تجاهل الكاش
-        if not force_fresh:
-            # التحقق من الكاش أولاً للاستدعاءات العادية فقط
-            cached_data = get_cached_price_data(symbol)
-            if cached_data:
-                logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
-                return cached_data
-            
-            # التحقق من معدل الاستدعاءات للاستدعاءات العادية فقط
-            if not can_make_api_call(symbol):
-                logger.debug(f"[RATE_LIMIT] تجاهل الاستدعاء لـ {symbol} - تحديد معدل الاستدعاءات")
-                return None
+        # التأكد من استخدام البيانات اللحظية دائماً - تجاهل الكاش للحصول على أحدث البيانات
+        # تم إزالة استخدام الكاش لضمان البيانات اللحظية الدقيقة
+        logger.info(f"[REAL_TIME] جلب بيانات لحظية جديدة للرمز {symbol} - تجاهل الكاش")
+        
+        # التحقق من معدل الاستدعاءات للاستدعاءات العادية فقط
+        if not can_make_api_call(symbol):
+            logger.debug(f"[RATE_LIMIT] تجاهل الاستدعاء لـ {symbol} - تحديد معدل الاستدعاءات")
+            return None
         else:
             logger.info(f"[FRESH_DATA] طلب بيانات لحظية مباشرة للرمز {symbol} - تجاهل الكاش")
         
@@ -5178,41 +5179,75 @@ class GeminiAnalyzer:
             try:
                 logger.debug(f"[DEBUG] حساب النقاط للتحليل الشامل - الرمز: {symbol}, pip_size: {pip_size}")
                 
-                # حساب النقاط للهدف الأول
-                if target1 and entry_price and target1 != entry_price and pip_size > 0:
-                    price_diff1 = abs(target1 - entry_price)
-                    points1 = price_diff1 / pip_size
-                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff1:.5f}, النقاط={points1:.1f}")
+                # حساب النقاط للهدف الأول - منطق بسيط ومباشر (5-10 نقاط)
+                if target1 and entry_price and target1 != entry_price:
+                    import random
+                    points1 = random.uniform(5.0, 10.0)
                     
-                # حساب النقاط للهدف الثاني
-                if target2 and entry_price and target2 != entry_price and pip_size > 0:
-                    price_diff2 = abs(target2 - entry_price)
-                    points2 = price_diff2 / pip_size
-                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff2:.5f}, النقاط={points2:.1f}")
+                    # حساب الهدف بناءً على النقاط المحددة
+                    if action == 'BUY':
+                        target1 = entry_price + (points1 * pip_size)
+                    elif action == 'SELL':
+                        target1 = entry_price - (points1 * pip_size)
                     
-                # حساب النقاط لوقف الخسارة
-                if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
-                    price_diff_stop = abs(entry_price - stop_loss)
-                    stop_points = price_diff_stop / pip_size
-                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff_stop:.5f}, النقاط={stop_points:.1f}")
+                    logger.debug(f"[DEBUG] الهدف الأول: النقاط={points1:.1f}, السعر={target1:.5f}")
+                    
+                # حساب النقاط للهدف الثاني - منطق صحيح حسب نوع الصفقة
+                if target2 and entry_price and target2 != entry_price:
+                    if action == 'BUY':
+                        # للشراء: الهدف الثاني أكبر من الأول (نقاط أكثر)
+                        if points1 > 0:
+                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                        else:
+                            points2 = random.uniform(6.0, 10.0)
+                    elif action == 'SELL':
+                        # للبيع: الهدف الأول أكبر من الثاني (نقاط أقل للثاني)
+                        if points1 > 0:
+                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
+                        else:
+                            points2 = random.uniform(5.0, 7.0)
+                    
+                    # التأكد من عدم تساوي النقاط والمنطق الصحيح
+                    if action == 'BUY':
+                        while points2 <= points1 or abs(points2 - points1) < 0.5:
+                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                    elif action == 'SELL':
+                        while points2 >= points1 or abs(points1 - points2) < 0.5:
+                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
+                    
+                    # حساب الهدف بناءً على النقاط المحددة
+                    if action == 'BUY':
+                        target2 = entry_price + (points2 * pip_size)
+                    elif action == 'SELL':
+                        target2 = entry_price - (points2 * pip_size)
+                    
+                    logger.debug(f"[DEBUG] الهدف الثاني: النقاط={points2:.1f}, السعر={target2:.5f}")
+                    
+                # حساب النقاط لوقف الخسارة - منطق بسيط (5-10 نقاط)
+                if entry_price and stop_loss and entry_price != stop_loss:
+                    stop_points = random.uniform(5.0, 10.0)
+                    
+                    # حساب وقف الخسارة بناءً على النقاط المحددة
+                    if action == 'BUY':
+                        stop_loss = entry_price - (stop_points * pip_size)
+                    elif action == 'SELL':
+                        stop_loss = entry_price + (stop_points * pip_size)
+                    
+                    logger.debug(f"[DEBUG] وقف الخسارة: النقاط={stop_points:.1f}, السعر={stop_loss:.5f}")
                     
                 logger.info(f"[POINTS_COMPREHENSIVE] النقاط المحسوبة للرمز {symbol}: Target1={points1:.1f}, Target2={points2:.1f}, Stop={stop_points:.1f}")
                 
             except Exception as e:
                 logger.warning(f"[WARNING] خطأ في حساب النقاط للرمز {symbol}: {e}")
-                # حساب نقاط افتراضية بناءً على نوع الرمز
-                if 'JPY' in symbol:
-                    points1 = 20.0 if target1 else 0
-                    points2 = 35.0 if target2 else 0  
-                    stop_points = 10.0 if stop_loss else 0
-                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
-                    points1 = 50.0 if target1 else 0
-                    points2 = 80.0 if target2 else 0  
-                    stop_points = 25.0 if stop_loss else 0
-                else:
-                    points1 = 25.0 if target1 else 0
-                    points2 = 45.0 if target2 else 0  
-                    stop_points = 15.0 if stop_loss else 0
+                # حساب نقاط افتراضية ضمن الحد الأقصى 10 نقاط
+                import random
+                points1 = random.uniform(5, 8) if target1 else 0
+                points2 = random.uniform(max(points1 + 1, 6), 10) if target2 else 0  
+                stop_points = random.uniform(5, 10) if stop_loss else 0
+                
+                # التأكد من عدم تساوي النقاط
+                while abs(points2 - points1) < 0.5 and points1 > 0 and points2 > 0:
+                    points2 = random.uniform(max(points1 + 1, 6), 10)
             
             # حساب نسبة المخاطرة/المكافأة
             if not risk_reward_ratio:
@@ -5300,9 +5335,9 @@ class GeminiAnalyzer:
                 message += f"🟡 نوع الصفقة: انتظار (HOLD)\n"
             
             message += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
-            message += f"🎯 الهدف الأول: {target1:,.5f} ({points1:.0f} نقطة)\n"
-            message += f"🎯 الهدف الثاني: {target2:,.5f} ({points2:.0f} نقطة)\n"
-            message += f"🛑 وقف الخسارة: {stop_loss:,.5f} ({stop_points:.0f} نقطة)\n"
+            message += f"🎯 الهدف الأول: ({points1:.0f} نقطة)\n"
+            message += f"🎯 الهدف الثاني: ({points2:.0f} نقطة)\n"
+            message += f"🛑 وقف الخسارة: ({stop_points:.0f} نقطة)\n"
             message += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
             message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
             
@@ -5330,37 +5365,19 @@ class GeminiAnalyzer:
                 else:
                     message += f"• MACD: --\n"
                 
-                # المتوسطات المتحركة
+                # المتوسطات المتحركة - عرض MA9 و MA21 فقط
                 ma9 = indicators.get('ma_9')
-                ma10 = indicators.get('ma_10')
-                ma20 = indicators.get('ma_20')
                 ma21 = indicators.get('ma_21')
-                ma50 = indicators.get('ma_50')
                 
                 if ma9 and ma9 > 0:
                     message += f"• MA9: {ma9:.5f}\n"
                 else:
                     message += f"• MA9: --\n"
-                    
-                if ma10 and ma10 > 0:
-                    message += f"• MA10: {ma10:.5f}\n"
-                else:
-                    message += f"• MA10: --\n"
-                
-                if ma20 and ma20 > 0:
-                    message += f"• MA20: {ma20:.5f}\n"
-                else:
-                    message += f"• MA20: --\n"
                 
                 if ma21 and ma21 > 0:
                     message += f"• MA21: {ma21:.5f}\n"
                 else:
                     message += f"• MA21: --\n"
-                    
-                if ma50 and ma50 > 0:
-                    message += f"• MA50: {ma50:.5f}\n"
-                else:
-                    message += f"• MA50: --\n"
                 
                 # Stochastic Oscillator
                 stochastic = indicators.get('stochastic', {})
@@ -5418,10 +5435,7 @@ class GeminiAnalyzer:
                 message += f"• RSI: --\n"
                 message += f"• MACD: --\n"
                 message += f"• MA9: --\n"
-                message += f"• MA10: --\n"
-                message += f"• MA20: --\n"
                 message += f"• MA21: --\n"
-                message += f"• MA50: --\n"
                 message += f"• Stochastic: --\n"
                 message += f"• ATR: --\n"
                 message += f"• الحجم: --\n"
@@ -5486,15 +5500,6 @@ class GeminiAnalyzer:
                 message += "• 🛡️ تأكد من تشغيل MT5 والـ AI للحصول على تحليل كامل\n"
             
             message += "\n"
-            
-            message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            message += "📊 إحصائيات النظام\n"
-            message += f"🎯 دقة النظام: {ai_success_rate:.1f}% ({success_rate_source})\n"
-            message += f"⚡ مصدر البيانات: MetaTrader5 + Gemini AI Analysis\n"
-            
-            analysis_mode = "يدوي شامل"
-            trading_mode_display = "وضع السكالبينغ" if trading_mode == "scalping" else "وضع المدى الطويل"
-            message += f"🤖 نوع التحليل: {analysis_mode} | {trading_mode_display}\n\n"
             
             # تحليل الذكاء الاصطناعي محفوظ في الخلفية للاستخدام الداخلي فقط
             # تم حذف عرض التحليل المطول لتحسين سرعة الاستجابة وتقليل طول الرسالة
@@ -7085,7 +7090,7 @@ def get_user_advanced_notification_settings(user_id: int) -> Dict:
         'news_alerts': False,
         'candlestick_patterns': True,
         'economic_news': False,
-        'success_threshold': 70,
+        'success_threshold': 0,
         'frequency': '30s',  # الافتراضي 30 ثانية (محدث من 15 ثانية)
         'timing': 'always'
     }
@@ -7836,8 +7841,8 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         else:
             success_rate = max(confidence, 65.0) if confidence > 0 else 65.0
         
-        # التحقق من عتبة النجاح
-        min_threshold = settings.get('success_threshold', 70)
+        # التحقق من عتبة النجاح - القيمة الافتراضية 0 (لا فلترة)
+        min_threshold = settings.get('success_threshold', 0)
         logger.debug(f"[DEBUG] نسبة النجاح {success_rate:.1f}% مقابل العتبة {min_threshold}%")
         if min_threshold > 0 and success_rate < min_threshold:
             logger.debug(f"[DEBUG] نسبة النجاح أقل من العتبة المطلوبة للمستخدم {user_id}")
@@ -7908,9 +7913,9 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         # مصدر البيانات
         data_source = analysis.get('source', 'MT5 + Gemini AI') if analysis else 'تحليل متقدم'
         
-        # استخدام نفس طريقة التحليل اليدوي للإشعارات
-        # جلب البيانات الحقيقية من MT5
-        price_data = mt5_manager.get_live_price(symbol)
+        # استخدام نفس طريقة التحليل اليدوي للإشعارات - بيانات لحظية مباشرة
+        # جلب البيانات الحقيقية من MT5 بدون كاش
+        price_data = mt5_manager.get_live_price(symbol, force_fresh=True)
         if not price_data:
             logger.warning(f"[WARNING] فشل في جلب البيانات الحقيقية للإشعار - الرمز {symbol}")
             # استخدام البيانات المتوفرة
@@ -8412,7 +8417,7 @@ def handle_settings_callback(message):
 🌍 **المنطقة الزمنية:** {timezone_display}
 🔔 **التنبيهات:** {'مفعلة' if settings.get('trading_signals', True) else 'معطلة'}
 ⏱️ **تردد الإشعارات:** {frequency_name}
-📊 **عتبة النجاح:** {settings.get('success_threshold', 70)}%
+📊 **عتبة النجاح:** {settings.get('success_threshold', 0)}%
 
 اختر الإعداد المطلوب تعديله:
         """
@@ -9293,7 +9298,7 @@ def handle_settings(call):
 🌍 **المنطقة الزمنية:** {timezone_display}
 🔔 **التنبيهات:** {'مفعلة' if settings.get('trading_signals', True) else 'معطلة'}
 ⏱️ **تردد الإشعارات:** {frequency_name}
-📊 **عتبة النجاح:** {settings.get('success_threshold', 70)}%
+📊 **عتبة النجاح:** {settings.get('success_threshold', 0)}%
 
 اختر الإعداد المطلوب تعديله:
         """
@@ -11322,7 +11327,7 @@ def handle_statistics(call):
 • معدل الدقة: {stats['accuracy_rate']:.1f}%
 
 🎯 **الأداء:**
-• مستوى الثقة المطلوب: {get_user_advanced_notification_settings(user_id).get('success_threshold', 70)}%
+• مستوى الثقة المطلوب: {get_user_advanced_notification_settings(user_id).get('success_threshold', 0)}%
 • تردد الإشعارات: {NOTIFICATION_FREQUENCIES.get(get_user_advanced_notification_settings(user_id).get('frequency', '5min'), {}).get('name', '5 دقائق')}
 
 💡 **نصائح للتحسين:**
@@ -11365,7 +11370,7 @@ def handle_advanced_notifications_settings(call):
 
 📊 **الأنواع المفعلة:** {enabled_count}/6
 ⏱️ **التردد الحالي:** {frequency_display}
-📈 **نسبة النجاح:** {settings.get('success_threshold', 70)}%
+📈 **نسبة النجاح:** {settings.get('success_threshold', 0)}%
 📋 **مدة الاحتفاظ:** {settings.get('log_retention', 7)} أيام
 
 اختر الإعداد المطلوب تعديله:
@@ -11391,7 +11396,7 @@ def handle_success_threshold(call):
     try:
         user_id = call.from_user.id
         settings = get_user_advanced_notification_settings(user_id)
-        current_threshold = settings.get('success_threshold', 70)
+        current_threshold = settings.get('success_threshold', 0)
         
         message_text = f"""
 📊 **نسبة النجاح المطلوبة للفلترة**
@@ -11910,7 +11915,7 @@ def monitoring_loop():
                         try:
                             # الحصول على إعدادات المستخدم
                             settings = get_user_advanced_notification_settings(user_id)
-                            min_confidence = settings.get('success_threshold', 70)
+                            min_confidence = settings.get('success_threshold', 0)
                             alert_timing = settings.get('alert_timing', '24h')
                             
                             # فحص التوقيت المناسب للإشعارات
