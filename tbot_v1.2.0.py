@@ -36,7 +36,14 @@ apihelper.READ_TIMEOUT = 60     # زيادة إلى 60 ثانية للاستقر
 apihelper.RETRY_TIMEOUT = 5     # زيادة timeout للمحاولات المتكررة
 import pandas as pd
 import numpy as np
-import MetaTrader5 as mt5
+# استيراد MetaTrader5 (اختياري - متاح على Windows فقط)
+try:
+    import MetaTrader5 as mt5
+    MT5_AVAILABLE = True
+except ImportError:
+    print("[WARNING] MetaTrader5 غير متاح - بعض الوظائف ستكون معطلة")
+    MT5_AVAILABLE = False
+    mt5 = None
 import google.generativeai as genai
 from datetime import datetime, timedelta
 from telebot import types
@@ -12097,13 +12104,24 @@ if __name__ == "__main__":
                 import gc
                 gc.collect()
                 
-                bot.infinity_polling(
-                    none_stop=False,  # معالجة أفضل للأخطاء
-                    interval=2,       # زيادة المدة لتقليل الضغط على الخادم
-                    timeout=90,       # زيادة timeout للاستقرار
-                    long_polling_timeout=45,  # زيادة long polling timeout
-                    restart_on_change=True    # إعادة التشغيل عند تغيير الكود
-                )
+                # محاولة استخدام restart_on_change إذا كانت الحزم متاحة
+                polling_kwargs = {
+                    'none_stop': False,  # معالجة أفضل للأخطاء
+                    'interval': 2,       # زيادة المدة لتقليل الضغط على الخادم
+                    'timeout': 90,       # زيادة timeout للاستقرار
+                    'long_polling_timeout': 45,  # زيادة long polling timeout
+                }
+                
+                # إضافة restart_on_change فقط إذا كانت الحزم متاحة
+                try:
+                    import watchdog
+                    import psutil
+                    polling_kwargs['restart_on_change'] = True
+                    logger.info("[SYSTEM] تم تفعيل إعادة التشغيل التلقائي عند التغيير")
+                except ImportError:
+                    logger.warning("[WARNING] watchdog أو psutil غير مثبتة - إعادة التشغيل التلقائي معطلة")
+                
+                bot.infinity_polling(**polling_kwargs)
                 break  # إذا انتهى بشكل طبيعي
                 
             except telebot.apihelper.ApiException as api_error:

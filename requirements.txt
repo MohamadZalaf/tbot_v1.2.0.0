@@ -1,6 +1,6 @@
 # Trading Bot v1.2.0 Requirements - Cleaned
-# MetaTrader5 Integration
-MetaTrader5>=5.0.45
+# MetaTrader5 Integration (Windows only - commented out for Linux)
+# MetaTrader5>=5.0.45
 numpy>=1.21.0
 pandas>=1.3.0
 
@@ -26,6 +26,8 @@ pytz>=2022.1
 
 # Development & Testing
 colorama>=0.4.5
+watchdog>=3.0.0
+psutil>=5.9.0
 
 # Document Processing for AI Analysis
 PyPDF2>=3.0.1
