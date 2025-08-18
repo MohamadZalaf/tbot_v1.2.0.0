@@ -7219,7 +7219,7 @@ def get_user_advanced_notification_settings(user_id: int) -> Dict:
         'news_alerts': False,
         'candlestick_patterns': True,
         'economic_news': False,
-        'success_threshold': 70,
+        'success_threshold': 0,
         'frequency': '30s',  # الافتراضي 30 ثانية (محدث من 15 ثانية)
         'timing': 'always'
     }
@@ -7954,13 +7954,13 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         if confidence is None or not isinstance(confidence, (int, float)):
             confidence = 0
         
-        # حساب نسبة النجاح
+        # حساب نسبة النجاح - بدون حد أدنى داخلي
         if analysis:
             success_rate = calculate_dynamic_success_rate(analysis, 'trading_signal')
             if success_rate is None or success_rate <= 0:
-                success_rate = max(confidence, 65.0) if confidence > 0 else 65.0
+                success_rate = confidence if confidence > 0 else 0  # استخدام القيمة الفعلية بدون تعديل
         else:
-            success_rate = max(confidence, 65.0) if confidence > 0 else 65.0
+            success_rate = confidence if confidence > 0 else 0  # استخدام القيمة الفعلية بدون تعديل
         
         # التحقق من عتبة النجاح (فلتر الإشعارات)
         min_threshold = settings.get('success_threshold', 70)
@@ -12048,12 +12048,12 @@ def monitoring_loop():
                                 successful_operations += 1  # العملية نجحت لكن ليس الوقت المناسب
                                 continue
                             
-                            # تطبيق فلتر نسبة النجاح من إعدادات المستخدم
+                            # إرسال جميع الإشعارات - الفلترة ستتم داخل دالة send_trading_signal_alert حسب إعدادات المستخدم
                             confidence_value = analysis.get('confidence', 0)
                             
-                            # إرسال التنبيه فقط إذا كانت نسبة النجاح تتجاوز العتبة المطلوبة
-                            if confidence_value is not None and confidence_value > 0 and confidence_value >= min_confidence:
-                                logger.info(f"[MONITORING_FILTER_ACCEPTED] {symbol} للمستخدم {user_id} - نسبة النجاح {confidence_value:.1f}% تتجاوز العتبة {min_confidence}%")
+                            # إرسال التنبيه لجميع الإشارات - الفلتر سيطبق حسب إعدادات المستخدم
+                            if analysis.get('action') and analysis.get('action') != 'HOLD':
+                                logger.info(f"[MONITORING_SIGNAL_SENT] إرسال إشارة {symbol} للمستخدم {user_id} - نسبة النجاح {confidence_value:.1f}% - الفلترة حسب إعدادات المستخدم")
                                 signal = {
                                     'action': analysis.get('action', 'HOLD'),
                                     'confidence': analysis.get('confidence', 0),
@@ -12067,12 +12067,9 @@ def monitoring_loop():
                                     logger.error(f"[ERROR] خطأ في إرسال تنبيه {symbol} للمستخدم {user_id}: {alert_error}")
                                     failed_operations += 1
                             else:
-                                # تسجيل الحالات المرفوضة بسبب الفلتر
-                                if confidence_value is not None and confidence_value > 0:
-                                    logger.info(f"[MONITORING_FILTER_REJECTED] {symbol} للمستخدم {user_id} - نسبة النجاح {confidence_value:.1f}% أقل من العتبة {min_confidence}%")
-                                else:
-                                    logger.debug(f"[MONITORING_NO_SIGNAL] {symbol} للمستخدم {user_id} - لا توجد إشارة صالحة")
-                                successful_operations += 1  # العملية نجحت ولكن لا توجد إشارة قوية
+                                # تسجيل الإشارات المرفوضة (HOLD فقط)
+                                logger.debug(f"[MONITORING_HOLD_SIGNAL] {symbol} للمستخدم {user_id} - إشارة انتظار (HOLD) - لا يتم إرسال تنبيه")
+                                successful_operations += 1  # العملية نجحت ولكن إشارة انتظار
                                 
                         except Exception as user_error:
                             logger.error(f"[ERROR] خطأ في معالجة المستخدم {user_id} للرمز {symbol}: {user_error}")
