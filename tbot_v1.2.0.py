@@ -1145,6 +1145,19 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
         # إذا لم تكن النقاط متوفرة من AI، احسبها يدوياً
         if not (points1 or points2 or stop_points):
             try:
+                # تعريف المتغيرات المفقودة
+                target1 = analysis.get('target1')
+                target2 = analysis.get('target2')
+                stop_loss = analysis.get('stop_loss')
+                
+                # حساب pip_size بناءً على نوع الرمز
+                if any(symbol.endswith(yen) for yen in ['JPY']):
+                    pip_size = 0.01  # أزواج الين
+                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+                    pip_size = 0.01  # المعادن النفيسة
+                else:
+                    pip_size = 0.0001  # الأزواج الرئيسية
+                
                 logger.debug(f"[DEBUG] حساب النقاط يدوياً للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
                 
                 # حساب النقاط للهدف الأول مع منطق محسن
@@ -7928,12 +7941,16 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         else:
             success_rate = max(confidence, 65.0) if confidence > 0 else 65.0
         
-        # التحقق من عتبة النجاح
+        # التحقق من عتبة النجاح (فلتر الإشعارات)
         min_threshold = settings.get('success_threshold', 70)
         logger.debug(f"[DEBUG] نسبة النجاح {success_rate:.1f}% مقابل العتبة {min_threshold}%")
+        
+        # تطبيق الفلتر: إذا كانت العتبة > 0 ونسبة النجاح أقل من العتبة
         if min_threshold > 0 and success_rate < min_threshold:
-            logger.debug(f"[DEBUG] نسبة النجاح أقل من العتبة المطلوبة للمستخدم {user_id}")
+            logger.info(f"[FILTER_REJECTED] تم رفض الإشعار للمستخدم {user_id} - نسبة النجاح {success_rate:.1f}% أقل من العتبة المطلوبة {min_threshold}%")
             return
+        
+        logger.info(f"[FILTER_ACCEPTED] تم قبول الإشعار للمستخدم {user_id} - نسبة النجاح {success_rate:.1f}% تتجاوز العتبة {min_threshold}%")
         
         # جلب معلومات نمط التداول (بدون شروط إضافية - فقط لحساب حجم الصفقة)
         trading_mode = get_user_trading_mode(user_id)
@@ -12010,9 +12027,12 @@ def monitoring_loop():
                                 successful_operations += 1  # العملية نجحت لكن ليس الوقت المناسب
                                 continue
                             
-                            # إرسال التنبيه إذا كانت هناك إشارة قوية - فلترة للقيم فوق 0% فقط
+                            # تطبيق فلتر نسبة النجاح من إعدادات المستخدم
                             confidence_value = analysis.get('confidence', 0)
+                            
+                            # إرسال التنبيه فقط إذا كانت نسبة النجاح تتجاوز العتبة المطلوبة
                             if confidence_value is not None and confidence_value > 0 and confidence_value >= min_confidence:
+                                logger.info(f"[MONITORING_FILTER_ACCEPTED] {symbol} للمستخدم {user_id} - نسبة النجاح {confidence_value:.1f}% تتجاوز العتبة {min_confidence}%")
                                 signal = {
                                     'action': analysis.get('action', 'HOLD'),
                                     'confidence': analysis.get('confidence', 0),
@@ -12026,7 +12046,12 @@ def monitoring_loop():
                                     logger.error(f"[ERROR] خطأ في إرسال تنبيه {symbol} للمستخدم {user_id}: {alert_error}")
                                     failed_operations += 1
                             else:
-                                successful_operations += 1  # لا توجد إشارة قوية ولكن العملية نجحت
+                                # تسجيل الحالات المرفوضة بسبب الفلتر
+                                if confidence_value is not None and confidence_value > 0:
+                                    logger.info(f"[MONITORING_FILTER_REJECTED] {symbol} للمستخدم {user_id} - نسبة النجاح {confidence_value:.1f}% أقل من العتبة {min_confidence}%")
+                                else:
+                                    logger.debug(f"[MONITORING_NO_SIGNAL] {symbol} للمستخدم {user_id} - لا توجد إشارة صالحة")
+                                successful_operations += 1  # العملية نجحت ولكن لا توجد إشارة قوية
                                 
                         except Exception as user_error:
                             logger.error(f"[ERROR] خطأ في معالجة المستخدم {user_id} للرمز {symbol}: {user_error}")
