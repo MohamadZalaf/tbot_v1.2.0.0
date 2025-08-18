@@ -2404,8 +2404,10 @@ class MT5Manager:
                         # تقليل التحذيرات - فقط لليوم الواحد (86400 ثانية)
                         if time_diff.total_seconds() < 86400:
                             logger.debug(f"[DATA_AGE] بيانات {symbol} عمرها {time_diff.total_seconds():.0f} ثانية - مقبولة")
+                        elif time_diff.total_seconds() < 86400 * 7:  # أقل من أسبوع
+                            logger.debug(f"[OLD_DATA] بيانات {symbol} قديمة (عمر: {time_diff}) - لكن قابلة للاستخدام")
                         else:
-                            logger.warning(f"[WARNING] بيانات MT5 قديمة جداً للرمز {symbol} (عمر: {time_diff.total_seconds():.0f} ثانية)")
+                            logger.info(f"[INFO] بيانات {symbol} قديمة جداً (عمر: {time_diff}) - قد تحتاج لتحديث MT5")
                         
                         # محاولة تحديث السعر بطلب جديد فقط للبيانات اللحظية المباشرة
                         if force_fresh:
@@ -9154,6 +9156,10 @@ def handle_single_symbol_analysis(call):
             else:
                 main_message = message_text
             
+            # إضافة طابع زمني لتجنب خطأ "message is not modified"
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            main_message = f"{main_message}\n\n🕒 _محدث: {timestamp}_"
+            
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
@@ -9175,19 +9181,33 @@ def handle_single_symbol_analysis(call):
             
         except Exception as send_error:
             logger.error(f"[ERROR] فشل في إرسال التحليل: {send_error}")
+            
+            # التحقق من نوع الخطأ
+            error_str = str(send_error).lower()
+            if "message is not modified" in error_str:
+                logger.info(f"[INFO] الرسالة لم تتغير للرمز {symbol} - تجاهل الخطأ")
+                # لا حاجة لإعادة الإرسال إذا كان المحتوى نفسه
+                return
+            
             try:
-                # محاولة إرسال رسالة خطأ بسيطة
+                # محاولة إرسال رسالة خطأ بسيطة مع طابع زمني
+                error_timestamp = datetime.now().strftime("%H:%M:%S")
                 bot.edit_message_text(
                     f"❌ **خطأ في عرض التحليل**\n\n"
                     f"حدث خطأ في عرض تحليل {symbol_info['emoji']} {symbol_info['name']}.\n\n"
-                    "يرجى المحاولة مرة أخرى لاحقاً.",
+                    f"يرجى المحاولة مرة أخرى لاحقاً.\n\n"
+                    f"🕒 _خطأ في: {error_timestamp}_",
                     call.message.chat.id,
                     call.message.message_id,
                     parse_mode='Markdown',
                     reply_markup=markup
                 )
-            except:
-                bot.answer_callback_query(call.id, "حدث خطأ في عرض التحليل", show_alert=True)
+            except Exception as final_error:
+                logger.error(f"[ERROR] فشل في إرسال رسالة الخطأ أيضاً: {final_error}")
+                try:
+                    bot.answer_callback_query(call.id, "حدث خطأ في عرض التحليل", show_alert=True)
+                except:
+                    pass
         
     except Exception as e:
         logger.error(f"[ERROR] خطأ عام في تحليل الرمز {call.data}: {e}")
