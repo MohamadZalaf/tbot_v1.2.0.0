@@ -7126,9 +7126,9 @@ def calculate_dynamic_success_rate_v2(analysis: Dict, alert_type: str) -> float:
     return calculate_dynamic_success_rate(analysis, alert_type)
 
 def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
-    """حساب نسبة النجاح المبسط - نفس مبدأ الوضع اليدوي (الاعتماد على AI أولاً)"""
+    """حساب نسبة النجاح باستخدام الذكاء الاصطناعي مع جميع معطيات MT5"""
     try:
-        # الخطوة 1: محاولة الحصول على نسبة النجاح من AI مباشرة (مثل الوضع اليدوي)
+        # إذا كانت نسبة النجاح متوفرة من AI مباشرة، استخدمها مع التحسينات
         ai_confidence = analysis.get('confidence', 0)
         
         if ai_confidence and ai_confidence > 0:
@@ -7157,28 +7157,185 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
             elif final_score < 20:
                 final_score = max(final_score - 3, 2)
             
-            logger.info(f"[SIMPLIFIED_AUTO_SUCCESS] {symbol} - {action}: {final_score:.1f}% (AI: {ai_confidence}%)")
+            logger.info(f"[AI_SUCCESS_DIRECT] {symbol} - {action}: {final_score:.1f}% (AI: {ai_confidence}%)")
             return round(final_score, 1)
         
-        # الخطوة 2: إذا لم نحصل على نسبة من AI، استخدم التحليل الفني كاحتياط (مثل الوضع اليدوي)
+        # إذا لم تكن نسبة النجاح متوفرة، قم بطلبها من AI مع جميع المعطيات
+        logger.info(f"[AI_ENHANCED_CALC] حساب نسبة النجاح بالذكاء الاصطناعي مع جميع معطيات MT5 للرمز {symbol}")
+        enhanced_success_rate = calculate_ai_enhanced_success_rate(analysis, technical_data, symbol, action, user_id)
+        
+        if enhanced_success_rate is not None:
+            logger.info(f"[AI_SUCCESS_ENHANCED] {symbol} - {action}: {enhanced_success_rate:.1f}%")
+            return enhanced_success_rate
+        
+        # الخطوة الاحتياطية: استخدام التحليل الفني
         logger.warning(f"[AUTO_FALLBACK] لا توجد نسبة من AI للرمز {symbol} - استخدام التحليل الفني الاحتياطي")
         if technical_data and technical_data.get('indicators'):
             fallback_rate = calculate_basic_technical_success_rate(technical_data, action)
             logger.info(f"[AUTO_FALLBACK_SUCCESS] {symbol} - {action}: {fallback_rate:.1f}% (تحليل فني احتياطي)")
             return fallback_rate
         
-        # الخطوة 3: فشل كامل - لا نسبة ثابتة (مثل الوضع اليدوي)
+        # فشل كامل
         logger.error(f"[AUTO_ANALYSIS_FAILED] فشل كامل في تحليل الرمز {symbol} - لا توجد بيانات كافية")
         return None
         
     except Exception as e:
-        logger.error(f"خطأ في حساب نسبة النجاح المبسط: {e}")
+        logger.error(f"خطأ في حساب نسبة النجاح المحسن: {e}")
         # في حالة الخطأ، استخدم تحليل AI إذا كان متوفراً
         if analysis and analysis.get('confidence', 0) > 0:
             return min(max(analysis.get('confidence', 50), 10), 90)
         else:
             # كحل أخير، استخدم تحليل فني بسيط
             return calculate_basic_technical_success_rate(technical_data, action) if technical_data else None
+
+def calculate_ai_enhanced_success_rate(analysis: Dict, technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
+    """حساب نسبة النجاح المحسن بإرسال جميع معطيات MT5 للذكاء الاصطناعي"""
+    try:
+        if not GEMINI_AVAILABLE or not gemini_analyzer:
+            logger.warning("[AI_ENHANCED] Gemini AI غير متوفر - استخدام الحساب الأساسي")
+            return None
+        
+        # جمع جميع المعطيات من MT5
+        current_price = 0
+        price_data = {}
+        try:
+            price_data = mt5_manager.get_live_price(symbol)
+            current_price = price_data.get('last', price_data.get('bid', 0))
+        except Exception as e:
+            logger.warning(f"[AI_ENHANCED] فشل في جلب السعر اللحظي: {e}")
+        
+        # إعداد البيانات الشاملة للـ AI
+        comprehensive_data = {
+            "symbol": symbol,
+            "action": action,
+            "current_price": current_price,
+            "price_data": price_data,
+            "technical_indicators": technical_data.get('indicators', {}) if technical_data else {},
+            "market_data": {
+                "spread": price_data.get('spread', 0),
+                "volume": price_data.get('volume', 0),
+                "bid": price_data.get('bid', 0),
+                "ask": price_data.get('ask', 0),
+            },
+            "user_context": {
+                "user_id": user_id,
+                "capital": get_user_capital(user_id) if user_id else 1000,
+                "trading_mode": get_user_trading_mode(user_id) if user_id else 'scalping'
+            }
+        }
+        
+        # إنشاء prompt شامل للـ AI
+        import json
+        ai_prompt = f"""
+تحليل شامل لحساب نسبة النجاح للصفقة:
+
+الرمز: {symbol}
+نوع الصفقة: {action}
+السعر الحالي: {current_price}
+
+البيانات الفنية:
+{json.dumps(technical_data.get('indicators', {}) if technical_data else {}, indent=2, ensure_ascii=False)}
+
+بيانات السوق:
+- Spread: {price_data.get('spread', 0)}
+- Volume: {price_data.get('volume', 0)}
+- Bid: {price_data.get('bid', 0)}
+- Ask: {price_data.get('ask', 0)}
+
+معلومات المستخدم:
+- رأس المال: {get_user_capital(user_id) if user_id else 1000}
+- نمط التداول: {get_user_trading_mode(user_id) if user_id else 'scalping'}
+
+المطلوب:
+1. حساب نسبة النجاح الدقيقة (0-100%) بناءً على جميع المعطيات
+2. حساب النقاط (pip) للهدف الأول والثاني ووقف الخسارة حسب نوع الرمز
+3. تحديد سعر الدخول والأهداف ووقف الخسارة
+
+يجب أن يكون الرد بالتنسيق التالي:
+[success_rate]=X
+[target1_points]=Y
+[target2_points]=Z
+[stop_points]=W
+[entry_price]=E
+[target1]=T1
+[target2]=T2
+[stop_loss]=SL
+[risk_reward]=RR
+"""
+        
+        # إرسال الطلب للـ AI
+        logger.debug(f"[AI_ENHANCED] إرسال البيانات الشاملة لـ AI للرمز {symbol}")
+        ai_response = gemini_analyzer.get_analysis(ai_prompt, symbol, action)
+        
+        if not ai_response:
+            logger.warning(f"[AI_ENHANCED] لم يتم الحصول على رد من AI للرمز {symbol}")
+            return None
+        
+        # استخراج النتائج من رد AI
+        success_rate = extract_value_from_ai_response(ai_response, 'success_rate')
+        target1_points = extract_value_from_ai_response(ai_response, 'target1_points')
+        target2_points = extract_value_from_ai_response(ai_response, 'target2_points')
+        stop_points = extract_value_from_ai_response(ai_response, 'stop_points')
+        entry_price = extract_value_from_ai_response(ai_response, 'entry_price')
+        target1 = extract_value_from_ai_response(ai_response, 'target1')
+        target2 = extract_value_from_ai_response(ai_response, 'target2')
+        stop_loss = extract_value_from_ai_response(ai_response, 'stop_loss')
+        risk_reward = extract_value_from_ai_response(ai_response, 'risk_reward')
+        
+        # حفظ النتائج المحسوبة من AI في analysis للاستخدام لاحقاً
+        if analysis:
+            analysis['ai_calculated'] = True
+            if target1_points: analysis['target1_points'] = target1_points
+            if target2_points: analysis['target2_points'] = target2_points
+            if stop_points: analysis['stop_points'] = stop_points
+            if entry_price: analysis['entry_price'] = entry_price
+            if target1: analysis['target1'] = target1
+            if target2: analysis['target2'] = target2
+            if stop_loss: analysis['stop_loss'] = stop_loss
+            if risk_reward: analysis['risk_reward'] = risk_reward
+        
+        if success_rate and success_rate > 0:
+            # تطبيق تحسينات المستخدم
+            final_rate = success_rate
+            if user_id:
+                ml_adjustment = get_ml_adjustment_for_user(user_id, symbol, action)
+                final_rate += ml_adjustment
+                
+                capital = get_user_capital(user_id)
+                if capital >= 10000:
+                    final_rate += 2
+                elif capital >= 5000:
+                    final_rate += 1
+                elif capital < 1000:
+                    final_rate -= 1
+            
+            # ضمان النطاق 0-100%
+            final_rate = max(0, min(100, final_rate))
+            
+            logger.info(f"[AI_ENHANCED_SUCCESS] {symbol} - {action}: {final_rate:.1f}% (AI الشامل: {success_rate}%)")
+            logger.info(f"[AI_ENHANCED_POINTS] {symbol}: TP1={target1_points}, TP2={target2_points}, SL={stop_points}")
+            
+            return round(final_rate, 1)
+        
+        logger.warning(f"[AI_ENHANCED] لم يتم استخراج نسبة نجاح صحيحة من AI للرمز {symbol}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"[AI_ENHANCED] خطأ في حساب نسبة النجاح المحسن: {e}")
+        return None
+
+def extract_value_from_ai_response(response_text: str, key: str):
+    """استخراج قيمة محددة من رد الذكاء الاصطناعي"""
+    try:
+        import re
+        pattern = rf'\[{key}\]=([0-9\.]+)'
+        match = re.search(pattern, response_text)
+        if match:
+            return float(match.group(1))
+        return None
+    except Exception as e:
+        logger.debug(f"[AI_EXTRACT] فشل في استخراج {key}: {e}")
+        return None
 
 # دالة مساعدة لحساب نسبة نجاح بسيطة من المؤشرات الفنية (نفس ما في اليدوي)
 def calculate_simplified_technical_rate(technical_data: Dict, action: str) -> float:
