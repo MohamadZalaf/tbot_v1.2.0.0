@@ -4116,11 +4116,8 @@ class GeminiAnalyzer:
                 
                 📈 المتوسطات المتحركة والتقاطعات:
                 - MA 9: {indicators.get('ma_9', 'غير متوفر'):.5f}
-                - MA 10: {indicators.get('ma_10', 'غير متوفر'):.5f}
-                - MA 20: {indicators.get('ma_20', 'غير متوفر'):.5f}
                 - MA 21: {indicators.get('ma_21', 'غير متوفر'):.5f}
                 - تقاطع MA9/MA21: {indicators.get('ma_9_21_crossover', 'لا يوجد')}
-                - تقاطع MA9/MA21: {indicators.get('ma_10_20_crossover', 'لا يوجد')}
                 - تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
                 
                 📊 مؤشرات الزخم:
@@ -4345,9 +4342,9 @@ class GeminiAnalyzer:
             - MACD تحت Signal + سالب: نقاط البيع = 8/10
             - تقاطع حديث: نقاط إضافية = +2
             
-            **ج) المتوسطات المتحركة والتقاطعات المتقدمة:**
-            - السعر فوق MA9 > MA21 > MA50: نقاط الشراء = 9/10
-            - السعر تحت MA9 < MA21 < MA50: نقاط البيع = 9/10
+            **ج) المتوسطات المتحركة والتقاطعات (MA9 و MA21 فقط):**
+            - السعر فوق MA9 > MA21: نقاط الشراء = 8/10
+            - السعر تحت MA9 < MA21: نقاط البيع = 8/10
             - تقاطع ذهبي MA9/MA21: نقاط الشراء = 8/10 + نقاط إضافية للقوة
             - تقاطع الموت MA9/MA21: نقاط البيع = 8/10 + نقاط إضافية للقوة
             - تقاطع السعر مع MA9 صعوداً: نقاط الشراء = 7/10
@@ -7590,9 +7587,9 @@ def calculate_dynamic_success_rate_v2(analysis: Dict, alert_type: str) -> float:
     return calculate_dynamic_success_rate(analysis, alert_type)
 
 def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
-    """حساب نسبة النجاح المبسط - نفس مبدأ الوضع اليدوي (الاعتماد على AI أولاً)"""
+    """حساب نسبة النجاح من AI بناءً على جميع المعطيات المتاحة"""
     try:
-        # الخطوة 1: محاولة الحصول على نسبة النجاح من AI مباشرة (مثل الوضع اليدوي)
+        # الخطوة 1: محاولة الحصول على نسبة النجاح من AI مباشرة
         ai_confidence = analysis.get('confidence', 0)
         
         if ai_confidence and ai_confidence > 0:
@@ -7621,17 +7618,94 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
             elif final_score < 20:
                 final_score = max(final_score - 3, 2)
             
-            logger.info(f"[SIMPLIFIED_AUTO_SUCCESS] {symbol} - {action}: {final_score:.1f}% (AI: {ai_confidence}%)")
+            logger.info(f"[AI_SUCCESS_RATE] {symbol} - {action}: {final_score:.1f}% (من AI)")
             return round(final_score, 1)
         
-        # الخطوة 2: إذا لم نحصل على نسبة من AI، هناك مشكلة في البرومت أو الاستخراج
-        logger.error(f"[AUTO_AI_FAILED] فشل AI في إنتاج نسبة النجاح للرمز {symbol} - يجب فحص البرومت والاستخراج")
-        return "--"
+        # الخطوة 2: إذا لم نحصل على نسبة من AI، ارسل البيانات للـ AI لحساب النسبة
+        logger.warning(f"[AI_MISSING_RATE] لم يتم الحصول على نسبة من AI للرمز {symbol} - إرسال البيانات للحساب")
+        return request_ai_success_rate_calculation(technical_data, symbol, action, user_id)
         
     except Exception as e:
-        logger.error(f"خطأ في حساب نسبة النجاح المبسط: {e}")
-        # في حالة الخطأ، عرض -- (لا نسب احتياطية)
-        return "--"
+        logger.error(f"خطأ في حساب نسبة النجاح: {e}")
+        # في حالة الخطأ، ارسل للـ AI كمحاولة أخيرة
+        try:
+            return request_ai_success_rate_calculation(technical_data, symbol, action, user_id)
+        except:
+            return "--"
+
+def request_ai_success_rate_calculation(technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
+    """طلب حساب نسبة النجاح من AI بناءً على جميع المعطيات"""
+    try:
+        # إعداد البيانات للـ AI
+        indicators = technical_data.get('indicators', {}) if technical_data else {}
+        
+        # الحصول على بيانات المستخدم
+        capital = get_user_capital(user_id) if user_id else 1000
+        trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
+        
+        # إعداد prompt مخصص لحساب نسبة النجاح
+        success_rate_prompt = f"""
+        أنت محلل فني خبير. احسب نسبة نجاح الصفقة بدقة بناءً على البيانات التالية:
+
+        **الرمز المالي:** {symbol}
+        **نوع الصفقة:** {action} ({'شراء' if action == 'BUY' else 'بيع' if action == 'SELL' else 'انتظار'})
+        **رأس المال:** ${capital:,.0f}
+        **نمط التداول:** {trading_mode}
+        
+        **المؤشرات الفنية:**
+        - RSI: {indicators.get('rsi', 'غير متوفر')}
+        - MACD: {indicators.get('macd', {}).get('macd', 'غير متوفر')}
+        - MA9: {indicators.get('ma_9', 'غير متوفر')}
+        - MA21: {indicators.get('ma_21', 'غير متوفر')}
+        - ATR: {indicators.get('atr', 'غير متوفر')}
+        - Volume Ratio: {indicators.get('volume_ratio', 'غير متوفر')}
+        - Support: {indicators.get('support', 'غير متوفر')}
+        - Resistance: {indicators.get('resistance', 'غير متوفر')}
+        
+        **المطلوب:**
+        1. حلل المؤشرات الفنية بدقة
+        2. احسب نسبة نجاح الصفقة من 0% إلى 100%
+        3. راعي نوع الصفقة (شراء/بيع) في التحليل
+        4. راعي رأس المال ونمط التداول
+        
+        **يجب أن تجيب بالتنسيق التالي فقط:**
+        نسبة نجاح الصفقة: X%
+        [success_rate]=X
+        
+        حيث X هو الرقم المحسوب بناءً على التحليل الفني.
+        """
+        
+        # إرسال للـ AI
+        try:
+            # استخدام نفس النموذج المستخدم في التحليل
+            if hasattr(gemini_analyzer, 'model') and gemini_analyzer.model:
+                response = gemini_analyzer.model.generate_content(success_rate_prompt)
+                ai_response = response.text.strip()
+                
+                # استخراج نسبة النجاح من الرد
+                import re
+                success_match = re.search(r'\[success_rate\]=(\d+)', ai_response)
+                if success_match:
+                    success_rate = int(success_match.group(1))
+                    logger.info(f"[AI_CALCULATED_RATE] {symbol} - {action}: {success_rate}% (محسوبة من AI)")
+                    return float(success_rate)
+                
+                # محاولة استخراج من النص العادي
+                percentage_match = re.search(r'نسبة نجاح الصفقة[:\s]*(\d+)%', ai_response)
+                if percentage_match:
+                    success_rate = int(percentage_match.group(1))
+                    logger.info(f"[AI_CALCULATED_RATE] {symbol} - {action}: {success_rate}% (من النص)")
+                    return float(success_rate)
+                    
+        except Exception as ai_error:
+            logger.error(f"[AI_RATE_ERROR] خطأ في طلب حساب النسبة من AI: {ai_error}")
+        
+        # إذا فشل AI، استخدم حساب تقني بسيط
+        return calculate_simplified_technical_rate(technical_data, action) or 50.0
+        
+    except Exception as e:
+        logger.error(f"خطأ في طلب حساب نسبة النجاح: {e}")
+        return 50.0
 
 # دالة مساعدة لحساب نسبة نجاح بسيطة من المؤشرات الفنية (نفس ما في اليدوي)
 def calculate_simplified_technical_rate(technical_data: Dict, action: str) -> float:
@@ -9799,7 +9873,7 @@ def handle_add_analysis_rule(call):
 
 مثال على القواعد:
 • "عند كسر مستوى المقاومة بحجم تداول عالي، زد نسبة الثقة بـ 15%"
-• "في حالة تضارب RSI مع MACD، قلل نسبة النجاح بـ 20%"
+• "في حالة تضارب RSI مع MA9/MA21، قلل نسبة النجاح بـ 20%"
 • "عند تداول الذهب أثناء الأحداث الجيوسياسية، زد الحذر وقلل حجم الصفقة"
 
 ⚡ **سيقوم الذكاء الاصطناعي بـ:**
