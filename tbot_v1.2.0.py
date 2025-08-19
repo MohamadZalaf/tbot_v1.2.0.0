@@ -5830,16 +5830,17 @@ class GeminiAnalyzer:
             message += "📰 تحديث إخباري:\n"
             
             # جلب الأخبار المتعلقة بالرمز
-            news = self.get_symbol_news(symbol)
-            message += f"{news}\n\n"
+            try:
+                news = self.get_symbol_news(symbol)
+                message += f"{news}\n\n"
+            except Exception as e:
+                logger.warning(f"[WARNING] فشل في جلب الأخبار للرمز {symbol}: {e}")
+                message += "• لا توجد أخبار متاحة حالياً\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━"
             
             return message
             
-        except Exception as e:
-            logger.error(f"خطأ في تنسيق التحليل الشامل: {e}")
-            return "❌ خطأ في إنشاء التحليل الشامل"
     
     def _fallback_analysis(self, symbol: str, price_data: Dict) -> Dict:
         """تحليل احتياطي محسّن في حالة فشل Gemini - يعتمد على البيانات الأساسية"""
@@ -12057,6 +12058,9 @@ def is_notification_time_allowed(user_id: int, alert_timing: str) -> bool:
 def monitoring_loop():
     """حلقة مراقبة الأسعار وإرسال التنبيهات مع معالجة محسنة للأخطاء"""
     global monitoring_active
+    global analysis_in_progress, active_users, user_selected_symbols, user_monitoring_active
+    global mt5_operation_lock, crossover_tracker
+    global GEMINI_API_KEY, GEMINI_MODEL
     logger.info("[RUNNING] بدء حلقة المراقبة...")
     consecutive_errors = 0
     max_consecutive_errors = 5
@@ -12204,6 +12208,7 @@ def monitoring_loop():
                             else:
                                 successful_operations += 1  # لا توجد إشارة قوية ولكن العملية نجحت
                                 
+                        except Exception as user_error:
                             logger.error(f"[ERROR] خطأ في معالجة المستخدم {user_id} للرمز {symbol}: {user_error}")
                             failed_operations += 1
                             continue
@@ -12272,9 +12277,6 @@ if __name__ == "__main__":
             }
         
         # تعريف المتغيرات العامة المفقودة الأخرى
-        global analysis_in_progress, monitoring_active
-        global active_users, user_selected_symbols, user_monitoring_active
-        global mt5_operation_lock, crossover_tracker
         
         analysis_in_progress = False
         monitoring_active = True
@@ -12299,8 +12301,6 @@ if __name__ == "__main__":
             logger.warning("[WARNING] MetaTrader5 غير متصل - يرجى التحقق من الإعدادات")
         
         # تعريف متغيرات Gemini العامة
-        global GEMINI_API_KEY, GEMINI_MODEL
-        GEMINI_API_KEY = config.GEMINI_API_KEY if hasattr(config, 'GEMINI_API_KEY') else 'AIzaSyDAOp1ARgrkUvPcmGmXddFx8cqkzhy-3O8'
         GEMINI_MODEL = config.GEMINI_MODEL if hasattr(config, 'GEMINI_MODEL') else 'gemini-2.0-flash'
         GEMINI_AVAILABLE = True
         
