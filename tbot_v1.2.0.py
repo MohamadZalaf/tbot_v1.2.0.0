@@ -12399,7 +12399,11 @@ if __name__ == "__main__":
                     monitoring_active = True
                 
                 # معالجة خاصة لأخطاء محددة
-                if "infinity polling" in error_str or "polling exited" in error_str or "break infinity polling" in error_str:
+                if "409" in error_str or "terminated by other getUpdates request" in error_str:
+                    logger.warning("[WARNING] خطأ 409 - يوجد instance آخر من البوت يعمل")
+                    logger.info("[SOLUTION] احرص على إيقاف جميع instances البوت وانتظر دقيقة")
+                    wait_time = 60  # انتظار دقيقة كاملة
+                elif "infinity polling" in error_str or "polling exited" in error_str or "break infinity polling" in error_str:
                     logger.warning("[WARNING] انقطاع في infinity polling - محاولة إعادة الاتصال...")
                     # تنظيف الذاكرة قبل إعادة المحاولة
                     import gc
