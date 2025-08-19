@@ -844,37 +844,92 @@ def handle_renew_api_context_command(message):
 
 # دوال حساب النقاط المحسنة - منسوخة من التحليل الآلي الصحيح
 def get_asset_type_and_pip_size(symbol):
-    """تحديد نوع الأصل وحجم النقطة بطريقة بسيطة ومباشرة"""
-    symbol = symbol.upper()
+    """تحديد نوع الأصل وحجم النقطة حسب النظام المتبع في التداول"""
+    symbol = symbol.upper().replace('/', '')  # إزالة الشرطة المائلة إن وجدت
     
-    # 💱 الفوركس - منطق بسيط للنقاط
-    if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
-        if any(symbol.endswith(yen) for yen in ['JPY']):
-            return 'forex_jpy', 0.01  # أزواج الين: 1 نقطة = 0.01
-        else:
-            return 'forex_major', 0.0001  # الأزواج الرئيسية: 1 نقطة = 0.0001
+    # 💱 أزواج العملات - قيم دقيقة حسب النظام المتبع
+    forex_pairs = {
+        'EURUSD': 0.0001,
+        'USDJPY': 0.01,
+        'USDGBP': 0.0001,
+        'GBPUSD': 0.0001,  # إضافة للتوافق
+        'AUDUSD': 0.0001,
+        'USDCAD': 0.0001,
+        'USDCHF': 0.0001,
+        'NZDUSD': 0.0001,
+        'EURGBP': 0.0001,
+        'EURJPY': 0.01,
+        'GBPJPY': 0.01
+    }
     
-    # 🪙 المعادن النفيسة
-    elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
-        return 'metals', 0.1  # الذهب: 1 نقطة = 0.1 دولار
+    # 🪙 المعادن الثمينة - قيم محدثة
+    metals = {
+        'XAUUSD': 0.01,  # ذهب
+        'XAGUSD': 0.01,  # فضة
+        'XPTUSD': 0.01,  # بلاتين
+        'XPDUSD': 0.01   # بلاديوم
+    }
     
-    # 🪙 العملات الرقمية
-    elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
-        if 'BTC' in symbol:
-            return 'crypto_btc', 100.0  # البيتكوين: 1 نقطة = 100 دولار
-        else:
-            return 'crypto_alt', 1.0  # العملات الأخرى: 1 نقطة = 1 دولار
+    # ₿ العملات الرقمية - قيم دقيقة حسب النظام
+    crypto_currencies = {
+        'BTCUSD': 1.00,    # بيتكوين
+        'ETHUSD': 0.10,    # إيثريوم
+        'BNBUSD': 0.01,    # بينانس كوين
+        'XRPUSD': 0.0001,  # ريبل
+        'ADAUSD': 0.0001,  # كاردانو
+        'SOLUSD': 0.01,    # سولانا
+        'DOTUSD': 0.01,    # بولكادوت
+        'DOGEUSD': 0.0001, # دوجكوين
+        'AVAXUSD': 0.01,   # أفالانش
+        'LINKUSD': 0.01,   # تشين لينك
+        'LTCUSD': 0.10,    # لايتكوين
+        'BCHUSD': 0.10     # بيتكوين كاش
+    }
     
-    # 📈 الأسهم
+    # التحقق من الأصل بالترتيب
+    if symbol in forex_pairs:
+        return 'forex', forex_pairs[symbol]
+    elif symbol in metals:
+        return 'metals', metals[symbol]
+    elif symbol in crypto_currencies:
+        return 'crypto', crypto_currencies[symbol]
+    
+    # 📈 الأسهم (إبقاء الدعم الحالي)
     elif any(symbol.startswith(stock) for stock in ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN']):
-        return 'stocks', 1.0  # الأسهم: 1 نقطة = 1 دولار
+        return 'stocks', 1.0
     
-    # 📉 المؤشرات
+    # 📉 المؤشرات (إبقاء الدعم الحالي)
     elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER', 'SPX']):
-        return 'indices', 1.0  # المؤشرات: 1 نقطة = 1 وحدة
+        return 'indices', 1.0
     
     else:
-        return 'unknown', 0.0001  # افتراضي
+        # محاولة تخمين ذكي للرموز غير المعروفة
+        if 'JPY' in symbol:
+            return 'forex_jpy', 0.01
+        elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB', 'SOL', 'DOT', 'DOGE', 'AVAX', 'LINK', 'BCH']):
+            return 'crypto', 0.01  # افتراضي للعملات الرقمية
+        elif any(metal in symbol for metal in ['XAU', 'XAG', 'XPT', 'XPD', 'GOLD', 'SILVER']):
+            return 'metals', 0.01  # افتراضي للمعادن
+        else:
+            return 'forex', 0.0001  # افتراضي للفوركس
+
+def test_pip_values():
+    """دالة اختبار لتأكيد صحة قيم النقاط الجديدة"""
+    test_symbols = [
+        # أزواج العملات
+        'EURUSD', 'USDJPY', 'GBPUSD', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD',
+        'EURGBP', 'EURJPY', 'GBPJPY',
+        # المعادن الثمينة
+        'XAUUSD', 'XAGUSD', 'XPTUSD', 'XPDUSD',
+        # العملات الرقمية
+        'BTCUSD', 'ETHUSD', 'BNBUSD', 'XRPUSD', 'ADAUSD', 'SOLUSD',
+        'DOTUSD', 'DOGEUSD', 'AVAXUSD', 'LINKUSD', 'LTCUSD', 'BCHUSD'
+    ]
+    
+    logger.info("[PIP_TEST] اختبار قيم النقاط الجديدة:")
+    for symbol in test_symbols:
+        asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+        logger.info(f"[PIP_TEST] {symbol}: {pip_size} ({asset_type})")
 
 def calculate_pip_value(symbol, current_price, contract_size=100000):
     """حساب قيمة النقطة باستخدام المعادلة الصحيحة"""
@@ -5326,37 +5381,74 @@ class GeminiAnalyzer:
             
             # دوال حساب النقاط الصحيحة حسب المعادلات المالية الدقيقة
             def get_asset_type_and_pip_size(symbol):
-                """تحديد نوع الأصل وحجم النقطة بدقة"""
-                symbol = symbol.upper()
+                """تحديد نوع الأصل وحجم النقطة حسب النظام المتبع في التداول"""
+                symbol = symbol.upper().replace('/', '')  # إزالة الشرطة المائلة إن وجدت
                 
-                # 💱 الفوركس
-                if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
-                    if any(symbol.endswith(yen) for yen in ['JPY']):
-                        return 'forex_jpy', 0.01  # أزواج الين
-                    else:
-                        return 'forex_major', 0.0001  # الأزواج الرئيسية
+                # 💱 أزواج العملات - قيم دقيقة حسب النظام المتبع
+                forex_pairs = {
+                    'EURUSD': 0.0001,
+                    'USDJPY': 0.01,
+                    'USDGBP': 0.0001,
+                    'GBPUSD': 0.0001,  # إضافة للتوافق
+                    'AUDUSD': 0.0001,
+                    'USDCAD': 0.0001,
+                    'USDCHF': 0.0001,
+                    'NZDUSD': 0.0001,
+                    'EURGBP': 0.0001,
+                    'EURJPY': 0.01,
+                    'GBPJPY': 0.01
+                }
                 
-                # 🪙 المعادن النفيسة
-                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
-                    return 'metals', 0.01  # النقطة = 0.01
+                # 🪙 المعادن الثمينة - قيم محدثة
+                metals = {
+                    'XAUUSD': 0.01,  # ذهب
+                    'XAGUSD': 0.01,  # فضة
+                    'XPTUSD': 0.01,  # بلاتين
+                    'XPDUSD': 0.01   # بلاديوم
+                }
                 
-                # 🪙 العملات الرقمية
-                elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
-                    if 'BTC' in symbol:
-                        return 'crypto_btc', 1.0  # البيتكوين - نقطة = 1 دولار
-                    else:
-                        return 'crypto_alt', 0.01  # العملات الأخرى
+                # ₿ العملات الرقمية - قيم دقيقة حسب النظام
+                crypto_currencies = {
+                    'BTCUSD': 1.00,    # بيتكوين
+                    'ETHUSD': 0.10,    # إيثريوم
+                    'BNBUSD': 0.01,    # بينانس كوين
+                    'XRPUSD': 0.0001,  # ريبل
+                    'ADAUSD': 0.0001,  # كاردانو
+                    'SOLUSD': 0.01,    # سولانا
+                    'DOTUSD': 0.01,    # بولكادوت
+                    'DOGEUSD': 0.0001, # دوجكوين
+                    'AVAXUSD': 0.01,   # أفالانش
+                    'LINKUSD': 0.01,   # تشين لينك
+                    'LTCUSD': 0.10,    # لايتكوين
+                    'BCHUSD': 0.10     # بيتكوين كاش
+                }
                 
-                # 📈 الأسهم
+                # التحقق من الأصل بالترتيب
+                if symbol in forex_pairs:
+                    return 'forex', forex_pairs[symbol]
+                elif symbol in metals:
+                    return 'metals', metals[symbol]
+                elif symbol in crypto_currencies:
+                    return 'crypto', crypto_currencies[symbol]
+                
+                # 📈 الأسهم (إبقاء الدعم الحالي)
                 elif any(symbol.startswith(stock) for stock in ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN']):
-                    return 'stocks', 1.0  # النقطة = 1 دولار
+                    return 'stocks', 1.0
                 
-                # 📉 المؤشرات
+                # 📉 المؤشرات (إبقاء الدعم الحالي)
                 elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER', 'SPX']):
-                    return 'indices', 1.0  # النقطة = 1 وحدة
+                    return 'indices', 1.0
                 
                 else:
-                    return 'unknown', 0.0001  # افتراضي
+                    # محاولة تخمين ذكي للرموز غير المعروفة
+                    if 'JPY' in symbol:
+                        return 'forex_jpy', 0.01
+                    elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB', 'SOL', 'DOT', 'DOGE', 'AVAX', 'LINK', 'BCH']):
+                        return 'crypto', 0.01  # افتراضي للعملات الرقمية
+                    elif any(metal in symbol for metal in ['XAU', 'XAG', 'XPT', 'XPD', 'GOLD', 'SILVER']):
+                        return 'metals', 0.01  # افتراضي للمعادن
+                    else:
+                        return 'forex', 0.0001  # افتراضي للفوركس
             
             def calculate_pip_value(symbol, current_price, contract_size=100000):
                 """حساب قيمة النقطة باستخدام المعادلة الصحيحة"""
@@ -12363,6 +12455,9 @@ if __name__ == "__main__":
             logger.info("[OK] Gemini AI جاهز للتحليل!")
         else:
             logger.warning("[WARNING] Gemini AI غير متوفر - تأكد من مفتاح API")
+        
+        # اختبار نظام النقاط الجديد
+        test_pip_values()
         
         logger.info("[SYSTEM] نظام التنبيهات: مراقبة لحظية مع تقييم المستخدم")
         logger.info("[SYSTEM] نظام التخزين: تسجيل جميع الصفقات والتقييمات")
