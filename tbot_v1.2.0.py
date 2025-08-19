@@ -1289,31 +1289,18 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                 # حساب النقاط المحسن - خانة واحدة بين 1-9 مع منطق الشراء/البيع
                 import random
                 
-                # حساب النقاط للهدف الأول
+                # حساب النقاط للهدف الأول والثاني (الأول أقل من الثاني دائماً)
                 if action == 'BUY':
-                    # للشراء: الهدف الأول نقاط أقل (3-5)
+                    # للشراء: الهدف الأول أقل من الثاني
+                    points1 = random.randint(3, 5)  # الهدف الأول أقل
+                    points2 = random.randint(6, 8)  # الهدف الثاني أكثر
+                elif action == 'SELL':
+                    # للبيع: الهدف الأول أقل من الثاني أيضاً
+                    points1 = random.randint(3, 5)  # الهدف الأول أقل
+                    points2 = random.randint(6, 8)  # الهدف الثاني أكثر
+                else:
                     points1 = random.randint(3, 5)
-                elif action == 'SELL':
-                    # للبيع: الهدف الأول نقاط أكثر (6-8) 
-                    points1 = random.randint(6, 8)
-                else:
-                    points1 = random.randint(4, 6)
-                
-                # حساب النقاط للهدف الثاني
-                if action == 'BUY':
-                    # للشراء: الهدف الثاني نقاط أكثر (6-9)
-                    points2 = random.randint(6, 9)
-                    # التأكد من أن الثاني أكبر من الأول
-                    while points2 <= points1:
-                        points2 = random.randint(points1 + 1, 9)
-                elif action == 'SELL':
-                    # للبيع: الهدف الثاني نقاط أقل (1-4)
-                    points2 = random.randint(1, 4)
-                    # التأكد من أن الثاني أقل من الأول
-                    while points2 >= points1:
-                        points2 = random.randint(1, points1 - 1)
-                else:
-                    points2 = random.randint(5, 7)
+                    points2 = random.randint(6, 8)
                 
                 # حساب النقاط لوقف الخسارة (3-6 نقاط متوسط)
                 stop_points = random.randint(3, 6)
@@ -2079,6 +2066,26 @@ class GeminiAnalyzer:
             confidence = analysis.get('confidence', 50)
             ai_analysis = analysis.get('ai_analysis', 'تحليل غير متوفر')
             
+            # الحصول على رأس المال المحدد للمستخدم
+            user_capital = get_user_capital(user_id) if user_id else 1000
+            
+            # حساب حجم المركز المناسب لرأس المال
+            def calculate_position_size(capital):
+                if capital >= 100000:
+                    return 0.1  # حسابات كبيرة جداً
+                elif capital >= 50000:
+                    return 0.05  # حسابات كبيرة
+                elif capital >= 10000:
+                    return 0.02  # حسابات متوسطة
+                elif capital >= 5000:
+                    return 0.01  # حسابات صغيرة
+                elif capital >= 1000:
+                    return 0.01  # حسابات صغيرة جداً
+                else:
+                    return 0.01  # الحد الأدنى
+            
+            recommended_lot_size = calculate_position_size(user_capital)
+            
             # تحديد لون التوصية
             if action == 'BUY':
                 action_emoji = '🟢'
@@ -2111,6 +2118,8 @@ class GeminiAnalyzer:
 📊 **تحليل شامل - {symbol_info['emoji']} {symbol_info['name']}**
 
 💰 **السعر الحالي:** `{current_price:.5f}`
+💳 **رأس المال:** ${user_capital:,.0f}
+📊 **حجم المركز المقترح:** {recommended_lot_size} لوت
 📈 **التوصية:** {action_emoji} **{action_text}**
 {confidence_emoji} **مستوى الثقة:** {confidence}% ({confidence_text})
 
@@ -2869,19 +2878,15 @@ class MT5Manager:
                     'time': current_tick.get('time')
                 }
             
-            # المتوسطات المتحركة (محسوبة من أحدث البيانات) - مع التحقق من صحة الدوال
+            # المتوسطات المتحركة (فقط MA9 و MA21) - مع التحقق من صحة الدوال
             try:
                 if len(df) >= 9:
                     indicators['ma_9'] = ta.trend.sma_indicator(df['close'], window=9).iloc[-1]
-                if len(df) >= 10:
-                    indicators['ma_9'] = ta.trend.sma_indicator(df['close'], window=9).iloc[-1]
-                if len(df) >= 20:
-                    indicators['ma_21'] = ta.trend.sma_indicator(df['close'], window=21).iloc[-1]
                 if len(df) >= 21:
                     indicators['ma_21'] = ta.trend.sma_indicator(df['close'], window=21).iloc[-1]
-                if len(df) >= 50:
                     
                 # التحقق من صحة القيم المحسوبة
+                for ma_key in ['ma_9', 'ma_21']:
                     if ma_key in indicators:
                         if pd.isna(indicators[ma_key]) or indicators[ma_key] <= 0:
                             logger.warning(f"[WARNING] قيمة {ma_key} غير صحيحة: {indicators[ma_key]}")
@@ -2893,7 +2898,7 @@ class MT5Manager:
                 logger.error(f"[ERROR] خطأ في حساب المتوسطات المتحركة: {ma_error}")
                 # استخدام حساب بديل يدوي
                 try:
-                    for window in [9, 10, 20, 21, 50]:
+                    for window in [9, 21]:
                         if len(df) >= window:
                             ma_value = df['close'].rolling(window=window).mean().iloc[-1]
                             if not pd.isna(ma_value) and ma_value > 0:
@@ -3404,19 +3409,7 @@ class MT5Manager:
                 else:
                     indicators['ma_9_21_crossover'] = 'none'
             
-            # تقاطعات MA 10 و MA 20
-            if 'ma_10' in indicators and 'ma_20' in indicators and len(df) >= 21:
-                ma_10_prev = ta.trend.sma_indicator(df['close'], window=9).iloc[-2]
-                ma_20_prev = ta.trend.sma_indicator(df['close'], window=21).iloc[-2]
-                
-                if ma_10_prev <= ma_20_prev and indicators['ma_9'] > indicators['ma_21']:
-                    ma_crossovers.append('تقاطع ذهبي MA9/MA21 - إشارة شراء')
-                    indicators['ma_10_20_crossover'] = 'golden'
-                elif ma_10_prev >= ma_20_prev and indicators['ma_9'] < indicators['ma_21']:
-                    ma_crossovers.append('تقاطع الموت MA9/MA21 - إشارة بيع')
-                    indicators['ma_10_20_crossover'] = 'death'
-                else:
-                    indicators['ma_10_20_crossover'] = 'none'
+
             
             # تقاطعات السعر مع المتوسطات
             current_price = indicators['current_price']
@@ -3464,11 +3457,7 @@ class MT5Manager:
                 else:
                     trend_signals.append('هبوط')
             
-            if 'ma_10' in indicators and 'ma_20' in indicators:
-                if indicators['ma_9'] > indicators['ma_21']:
-                    trend_signals.append('صعود')
-                else:
-                    trend_signals.append('هبوط')
+
             
             # إشارات RSI
             if 'rsi' in indicators:
@@ -3517,10 +3506,7 @@ class MT5Manager:
             elif indicators.get('ma_9_21_crossover') == 'death':
                 crossover_tracker.save_crossover_event(symbol, 'ma_death_9_21', indicators, current_price)
             
-            if indicators.get('ma_10_20_crossover') == 'golden':
-                crossover_tracker.save_crossover_event(symbol, 'ma_golden_10_20', indicators, current_price)
-            elif indicators.get('ma_10_20_crossover') == 'death':
-                crossover_tracker.save_crossover_event(symbol, 'ma_death_10_20', indicators, current_price)
+
             
             # كشف وحفظ تقاطعات MACD
             if 'macd_interpretation' in indicators:
@@ -3886,11 +3872,8 @@ class GeminiAnalyzer:
         
         📈 المتوسطات المتحركة والتقاطعات:
         - MA 9: {indicators.get('ma_9', 0):.5f}
-        - MA 10: {indicators.get('ma_10', 0):.5f}
-        - MA 20: {indicators.get('ma_20', 0):.5f}
         - MA 21: {indicators.get('ma_21', 0):.5f}
         - تقاطع MA9/MA21: {indicators.get('ma_9_21_crossover', 'لا يوجد')}
-        - تقاطع MA9/MA21: {indicators.get('ma_10_20_crossover', 'لا يوجد')}
         - تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
         
         📊 المؤشرات الفنية المفصلة:
@@ -3981,7 +3964,7 @@ class GeminiAnalyzer:
         - اتجاه خطوط MACD
 
         **3. المتوسطات المتحركة:**
-        - ترتيب المتوسطات (10، 20، 50)
+        - ترتيب المتوسطات (9، 21)
         - موقع السعر نسبة للمتوسطات
         - تقاطعات المتوسطات
 
@@ -4010,7 +3993,12 @@ class GeminiAnalyzer:
         - نقطة الدخول المثلى
         - الهدف الأول (Risk:Reward 1:1.5)
         - الهدف الثاني (Risk:Reward 1:3)
-        - وقف الخسارة (حد أقصى 2% من رأس المال)
+        - وقف الخسارة (حد أقصى مناسب لرأس المال المحدد)
+        
+        **مراعاة رأس المال في التحليل:**
+        - احسب حجم المركز المناسب لرأس المال
+        - تحديد نسبة المخاطرة المناسبة (1-3% حسب الحساب)
+        - ضبط الأهداف بناءً على إمكانيات رأس المال
 
         ### 🔍 STEP 5: الحساب النهائي لنسبة النجاح (0-100%)
         
