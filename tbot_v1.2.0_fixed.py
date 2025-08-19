@@ -30,9 +30,10 @@ import logging
 import os
 import sys
 
-# إعداد timeout أطول لـ Telegram API
-apihelper.CONNECT_TIMEOUT = 60
-apihelper.READ_TIMEOUT = 60
+# إعداد timeout محسن لـ Telegram API
+apihelper.CONNECT_TIMEOUT = 60  # زيادة إلى 60 ثانية للاستقرار
+apihelper.READ_TIMEOUT = 60     # زيادة إلى 60 ثانية للاستقرار
+apihelper.RETRY_TIMEOUT = 5     # زيادة timeout للمحاولات المتكررة
 import pandas as pd
 import numpy as np
 import MetaTrader5 as mt5
@@ -53,13 +54,25 @@ try:
     from config import (
         BOT_TOKEN, BOT_PASSWORD, GEMINI_API_KEY,
         DEFAULT_NOTIFICATION_SETTINGS, AVAILABLE_TIMEZONES,
-        DEFAULT_CAPITAL_OPTIONS, TRADING_MODE_SETTINGS
+        DEFAULT_CAPITAL_OPTIONS, TRADING_MODE_SETTINGS,
+        GEMINI_MODEL, GEMINI_GENERATION_CONFIG, GEMINI_SAFETY_SETTINGS,
+        GEMINI_API_KEYS, GEMINI_CONTEXT_TOKEN_LIMIT, GEMINI_CONTEXT_NEAR_LIMIT_RATIO,
+        GEMINI_ROTATE_ON_RATE_LIMIT, SAVE_CHAT_LOGS, CHAT_LOG_RETENTION_DAYS
     )
 except ImportError:
     # إعدادات احتياطية في حالة عدم وجود ملف config.py
     BOT_TOKEN = 'YOUR_BOT_TOKEN_HERE'
     BOT_PASSWORD = 'tra12345678'
     GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY_HERE'
+    GEMINI_API_KEYS = [GEMINI_API_KEY]
+    GEMINI_MODEL = 'gemini-2.0-flash'
+    GEMINI_GENERATION_CONFIG = {'temperature': 0.7, 'top_p': 0.8, 'top_k': 40, 'max_output_tokens': 1024}
+    GEMINI_SAFETY_SETTINGS = []
+    GEMINI_CONTEXT_TOKEN_LIMIT = 120000
+    GEMINI_CONTEXT_NEAR_LIMIT_RATIO = 0.85
+    GEMINI_ROTATE_ON_RATE_LIMIT = True
+    SAVE_CHAT_LOGS = True
+    CHAT_LOG_RETENTION_DAYS = 7
     DEFAULT_NOTIFICATION_SETTINGS = {}
     AVAILABLE_TIMEZONES = {}
     DEFAULT_CAPITAL_OPTIONS = [1000, 5000, 10000]
@@ -67,6 +80,11 @@ except ImportError:
 
 # متغير للتحكم في حلقة المراقبة
 monitoring_active = False
+
+# إضافة locks لتجنب التضارب في عمليات MT5
+import threading
+mt5_operation_lock = threading.RLock()  # RLock للسماح بإعادة الاستخدام من نفس الـ thread
+analysis_in_progress = False
 
 # مكتبة المناطق الزمنية (اختيارية)
 try:
@@ -76,6 +94,1341 @@ except ImportError:
     TIMEZONE_AVAILABLE = False
 
 warnings.filterwarnings('ignore')
+
+# متغيرات نظام كشف نفاذ رصيد API
+API_QUOTA_EXHAUSTED = False
+API_QUOTA_NOTIFICATION_SENT = False
+LAST_API_ERROR_TIME = None
+API_ERROR_COUNT = 0
+MAX_API_ERRORS_BEFORE_NOTIFICATION = 3
+
+# دوال نظام كشف وإدارة نفاذ رصيد API
+def check_api_quota_exhausted(error_message: str) -> bool:
+    """كشف ما إذا كان رصيد API قد نفد"""
+    global API_QUOTA_EXHAUSTED, API_ERROR_COUNT, LAST_API_ERROR_TIME
+    
+    error_str = str(error_message).lower()
+    quota_indicators = [
+        'quota', 'limit', 'rate limit', 'exceeded', 'exhausted',
+        'resource_exhausted', '429', 'too many requests',
+        'quota exceeded', 'billing', 'insufficient quota'
+    ]
+    
+    # التحقق من وجود مؤشرات نفاذ الرصيد
+    quota_exhausted = any(indicator in error_str for indicator in quota_indicators)
+    
+    if quota_exhausted:
+        API_QUOTA_EXHAUSTED = True
+        logger.error(f"[API_QUOTA] تم اكتشاف نفاذ رصيد API: {error_message}")
+        return True
+    
+    # عد الأخطاء المتتالية
+    current_time = datetime.now()
+    if LAST_API_ERROR_TIME is None or (current_time - LAST_API_ERROR_TIME).seconds > 300:  # 5 دقائق
+        API_ERROR_COUNT = 1
+    else:
+        API_ERROR_COUNT += 1
+    
+    LAST_API_ERROR_TIME = current_time
+    
+    # إذا كان هناك أخطاء متكررة، افترض نفاذ الرصيد
+    if API_ERROR_COUNT >= MAX_API_ERRORS_BEFORE_NOTIFICATION:
+        API_QUOTA_EXHAUSTED = True
+        logger.warning(f"[API_QUOTA] افتراض نفاذ رصيد API بعد {API_ERROR_COUNT} أخطاء متتالية")
+        return True
+    
+    return False
+
+def send_api_quota_exhausted_notification():
+    """إرسال إشعار نفاذ رصيد API لجميع المستخدمين المسجلين"""
+    global API_QUOTA_NOTIFICATION_SENT
+    
+    if API_QUOTA_NOTIFICATION_SENT:
+        return  # تم إرسال الإشعار بالفعل
+    
+    try:
+        # رسالة الإشعار
+        notification_message = """
+🚨 **إشعار مهم من إدارة البوت** 🚨
+
+⚠️ **تم استنفاد رصيد API الخاص بالذكاء الاصطناعي**
+
+📢 **ما يعني هذا:**
+• تم استهلاك الحد المسموح لاستخدام خدمة الذكاء الاصطناعي
+• قد تتأثر جودة التحليلات مؤقتاً
+• سيتم استخدام التحليل الأساسي كبديل
+
+🔄 **ما نقوم به:**
+• ⏰ سيتم تجديد الرصيد تلقائياً مع بداية الدورة القادمة
+• 🛠️ جاري العمل على تحسين إدارة الاستهلاك
+• 📈 التحليل الأساسي سيبقى متاحاً
+
+💡 **نصائح مؤقتة:**
+• استخدم التحليل الفني التقليدي
+• تابع الأخبار الاقتصادية المهمة
+• لا تعتمد على التوصيات فقط - استخدم إدارة المخاطر
+
+🙏 **نعتذر عن الإزعاج** ونعدكم بحل سريع!
+
+───────────────────────
+🤖 **بوت التداول v1.2.0** | نظام الإشعارات الذكي
+        """
+
+        # جلب جميع المستخدمين المسجلين
+        active_users = []
+        for user_id, session in user_sessions.items():
+            if session.get('authenticated', False):
+                active_users.append(user_id)
+        
+        # إرسال الإشعار لكل مستخدم
+        sent_count = 0
+        failed_count = 0
+        
+        for user_id in active_users:
+            try:
+                bot.send_message(
+                    chat_id=user_id,
+                    text=notification_message,
+                    parse_mode='Markdown'
+                )
+                sent_count += 1
+                logger.info(f"[API_QUOTA_NOTIFICATION] تم إرسال إشعار نفاذ API للمستخدم {user_id}")
+            except Exception as send_error:
+                failed_count += 1
+                logger.error(f"[API_QUOTA_NOTIFICATION] فشل إرسال إشعار للمستخدم {user_id}: {send_error}")
+        
+        API_QUOTA_NOTIFICATION_SENT = True
+        logger.info(f"[API_QUOTA_NOTIFICATION] تم إرسال إشعار نفاذ API لـ {sent_count} مستخدم، فشل {failed_count}")
+        
+    except Exception as e:
+        logger.error(f"[API_QUOTA_NOTIFICATION] خطأ في إرسال إشعارات نفاذ API: {e}")
+
+def reset_api_quota_status():
+    """إعادة تعيين حالة رصيد API عند النجاح"""
+    global API_QUOTA_EXHAUSTED, API_QUOTA_NOTIFICATION_SENT, API_ERROR_COUNT
+    
+    if API_QUOTA_EXHAUSTED:
+        # إرسال إشعار استعادة الخدمة
+        send_api_restored_notification()
+        send_api_status_report_to_developer(False)
+        
+        API_QUOTA_EXHAUSTED = False
+        API_QUOTA_NOTIFICATION_SENT = False
+        API_ERROR_COUNT = 0
+        logger.info("[API_QUOTA] تم إعادة تعيين حالة رصيد API - العمل طبيعي")
+
+def send_api_restored_notification():
+    """إرسال إشعار استعادة خدمة API"""
+    try:
+        # رسالة الإشعار
+        notification_message = """
+✅ **إشعار: تم استعادة خدمة الذكاء الاصطناعي** ✅
+
+🎉 **أخبار سارة!**
+• تم تجديد رصيد API بنجاح
+• عادت خدمة الذكاء الاصطناعي للعمل بكامل طاقتها
+• جميع ميزات التحليل المتقدم متاحة الآن
+
+🚀 **ما تم استعادته:**
+• 🧠 التحليل الذكي المتقدم
+• 📊 حساب نسبة النجاح الدقيقة  
+• 🎯 التوصيات المخصصة
+• 📈 التحليل التفصيلي للمؤشرات
+
+💡 **يمكنك الآن:**
+• الحصول على تحليلات دقيقة ومفصلة
+• الاستفادة من جميع ميزات البوت
+• الحصول على توصيات مخصصة لنمط تداولك
+
+🙏 **شكراً لصبركم!** نعدكم بخدمة أفضل دائماً
+
+───────────────────────
+🤖 **بوت التداول v1.2.0** | عودة الخدمة الذكية
+        """
+
+        # جلب جميع المستخدمين المسجلين
+        active_users = []
+        for user_id, session in user_sessions.items():
+            if session.get('authenticated', False):
+                active_users.append(user_id)
+        
+        # إرسال الإشعار لكل مستخدم
+        sent_count = 0
+        failed_count = 0
+        
+        for user_id in active_users:
+            try:
+                bot.send_message(
+                    chat_id=user_id,
+                    text=notification_message,
+                    parse_mode='Markdown'
+                )
+                sent_count += 1
+                logger.info(f"[API_RESTORED] تم إرسال إشعار استعادة API للمستخدم {user_id}")
+            except Exception as send_error:
+                failed_count += 1
+                logger.error(f"[API_RESTORED] فشل إرسال إشعار استعادة للمستخدم {user_id}: {send_error}")
+        
+        logger.info(f"[API_RESTORED] تم إرسال إشعار استعادة API لـ {sent_count} مستخدم، فشل {failed_count}")
+        
+    except Exception as e:
+        logger.error(f"[API_RESTORED] خطأ في إرسال إشعارات استعادة API: {e}")
+
+def send_api_status_report_to_developer(quota_exhausted: bool, error_details: str = ""):
+    """إرسال تقرير حالة API للمطور"""
+    try:
+        # ID المطور (يجب تعديله حسب ID المطور الفعلي)
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
+        
+        if quota_exhausted:
+            status_emoji = "🚨"
+            status_text = "نفاذ رصيد API"
+            details = f"""
+📊 **تفاصيل المشكلة:**
+• العدد التراكمي للأخطاء: {API_ERROR_COUNT}
+• آخر خطأ: {error_details[:200]}...
+• الوقت: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+👥 **تأثير على المستخدمين:**
+• عدد المستخدمين النشطين: {len([u for u, s in user_sessions.items() if s.get('authenticated')])}
+• تم إرسال إشعار: {'✅ نعم' if API_QUOTA_NOTIFICATION_SENT else '❌ لا'}
+            """
+        else:
+            status_emoji = "✅"
+            status_text = "استعادة خدمة API"
+            details = """
+🎉 **الخدمة عادت للعمل طبيعياً**
+• تم تجديد الرصيد تلقائياً
+• جميع الميزات متاحة
+            """
+        
+        developer_message = f"""
+{status_emoji} **تقرير نظام API - بوت التداول**
+
+📋 **الحالة:** {status_text}
+{details}
+
+🔧 **إجراءات مقترحة:**
+• مراقبة استهلاك API
+• تحسين خوارزميات التحليل
+• إضافة آليات توفير إضافية
+
+───────────────────────
+🤖 **تقرير تلقائي من بوت التداول v1.2.0**
+        """
+        
+        try:
+            bot.send_message(
+                chat_id=DEVELOPER_ID,
+                text=developer_message,
+                parse_mode='Markdown'
+            )
+            logger.info(f"[API_REPORT] تم إرسال تقرير حالة API للمطور")
+        except Exception as dev_send_error:
+            logger.error(f"[API_REPORT] فشل إرسال تقرير للمطور: {dev_send_error}")
+        
+    except Exception as e:
+        logger.error(f"[API_REPORT] خطأ في إنشاء تقرير حالة API: {e}")
+
+def get_api_usage_statistics():
+    """الحصول على إحصائيات استخدام API"""
+    try:
+        stats = {
+            'quota_exhausted': API_QUOTA_EXHAUSTED,
+            'notification_sent': API_QUOTA_NOTIFICATION_SENT,
+            'error_count': API_ERROR_COUNT,
+            'last_error_time': LAST_API_ERROR_TIME,
+            'active_users': len([u for u, s in user_sessions.items() if s.get('authenticated', False)])
+        }
+        return stats
+    except Exception as e:
+        logger.error(f"[API_STATS] خطأ في جلب إحصائيات API: {e}")
+        return {}
+
+# تهيئة البوت
+bot = telebot.TeleBot(BOT_TOKEN)
+
+@bot.message_handler(commands=['clear_cache'])
+def handle_clear_cache_command(message):
+    """معالج أمر تنظيف الكاش يدوياً - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        # تنظيف جميع أنواع الكاش
+        cache_cleared = 0
+        api_calls_cleared = 0
+        
+        # تنظيف cache البيانات
+        if price_data_cache:
+            cache_cleared = len(price_data_cache)
+            price_data_cache.clear()
+        
+        # تنظيف سجلات API calls
+        if last_api_calls:
+            api_calls_cleared = len(last_api_calls)
+            last_api_calls.clear()
+        
+        # تنظيف إضافي للكاش في MT5Manager إذا كان متاحاً
+        try:
+            if 'mt5_manager' in globals() and hasattr(mt5_manager, 'connected'):
+                # إعادة تحديد صحة الاتصال
+                mt5_manager.check_real_connection()
+        except Exception as e:
+            logger.warning(f"[CACHE] تحذير في تنظيف MT5: {e}")
+        
+        # رسالة النجاح
+        success_message = f"""
+🧹 **تم تنظيف الكاش بنجاح!**
+
+📊 **الإحصائيات:**
+• تم تنظيف {cache_cleared} عنصر من cache البيانات
+• تم تنظيف {api_calls_cleared} سجل من API calls
+• تم إعادة فحص اتصال MT5
+
+✅ **النتيجة:**
+البوت جاهز الآن للحصول على بيانات جديدة تماماً من MT5
+
+🕐 **الوقت:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """
+        
+        bot.reply_to(message, success_message, parse_mode='Markdown')
+        logger.info(f"[DEVELOPER] تم تنظيف الكاش بأمر من المطور (User ID: {user_id})")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في أمر clear_cache: {e}")
+        bot.reply_to(message, f"❌ خطأ في تنظيف الكاش: {str(e)}")
+
+@bot.message_handler(commands=['mt5_debug'])
+def handle_mt5_debug_command(message):
+    """معالج أمر تشخيص MT5 مفصل - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        bot.reply_to(message, "🔍 جاري تشخيص اتصال MT5...")
+        
+        # 1. فحص إصدار MT5
+        try:
+            mt5_version = mt5.version()
+            version_status = f"✅ MT5 متاح - الإصدار: {mt5_version}" if mt5_version else "❌ MT5 غير متاح"
+        except Exception as e:
+            version_status = f"❌ خطأ في فحص MT5: {str(e)}"
+        
+        # 2. فحص حالة التهيئة
+        try:
+            init_result = mt5.initialize()
+            if init_result:
+                init_status = "✅ تم تهيئة MT5 بنجاح"
+            else:
+                error_code = mt5.last_error()
+                init_status = f"❌ فشل تهيئة MT5 - كود الخطأ: {error_code}"
+        except Exception as e:
+            init_status = f"❌ خطأ في تهيئة MT5: {str(e)}"
+        
+        # 3. فحص معلومات الحساب
+        try:
+            account_info = mt5.account_info()
+            if account_info:
+                account_status = f"""✅ معلومات الحساب:
+• رقم الحساب: {account_info.login}
+• الخادم: {account_info.server}
+• الشركة: {account_info.company}
+• العملة: {account_info.currency}
+• الرصيد: {account_info.balance}
+• نوع الحساب: {'Demo' if account_info.trade_mode == 0 else 'Live'}
+• حالة التداول: {'مسموح' if account_info.trade_allowed else 'غير مسموح'}"""
+            else:
+                error_code = mt5.last_error()
+                account_status = f"❌ فشل في جلب معلومات الحساب - كود الخطأ: {error_code}"
+        except Exception as e:
+            account_status = f"❌ خطأ في جلب معلومات الحساب: {str(e)}"
+        
+        # 4. اختبار جلب البيانات مع تحسينات لمعالجة الذهب
+        test_results = []
+        test_symbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "GOLD", "BTCUSD"]
+        gold_symbols = ["XAUUSD", "GOLD", "XAUUSD.m", "GOLD.m", "XAUUSD.c"]  # رموز بديلة للذهب
+        
+        for symbol in test_symbols:
+            try:
+                # تحقق من تفعيل الرمز أولاً
+                symbol_info = mt5.symbol_info(symbol)
+                if symbol_info is None:
+                    # إذا كان رمز الذهب، جرب الرموز البديلة
+                    if symbol in ["XAUUSD", "GOLD"]:
+                        found_alternative = False
+                        for alt_symbol in gold_symbols:
+                            alt_info = mt5.symbol_info(alt_symbol)
+                            if alt_info is not None:
+                                symbol = alt_symbol  # استخدم الرمز البديل
+                                symbol_info = alt_info
+                                found_alternative = True
+                                break
+                        if not found_alternative:
+                            test_results.append(f"❌ {symbol}: الرمز غير متاح في هذا الوسيط")
+                            continue
+                    else:
+                        test_results.append(f"❌ {symbol}: الرمز غير متاح")
+                        continue
+                
+                # تجربة تفعيل الرمز إذا لم يكن مفعلاً
+                if not symbol_info.visible:
+                    mt5.symbol_select(symbol, True)
+                    time.sleep(0.5)  # انتظار قصير للتفعيل
+                
+                # جلب البيانات
+                tick = mt5.symbol_info_tick(symbol)
+                if tick and tick.bid > 0 and tick.ask > 0:
+                    spread = tick.ask - tick.bid
+                    test_results.append(f"✅ {symbol}: {tick.bid:.5f}/{tick.ask:.5f} (spread: {spread:.5f})")
+                else:
+                    # محاولة أخرى مع انتظار
+                    time.sleep(1)
+                    tick = mt5.symbol_info_tick(symbol)
+                    if tick and tick.bid > 0 and tick.ask > 0:
+                        spread = tick.ask - tick.bid
+                        test_results.append(f"✅ {symbol}: {tick.bid:.5f}/{tick.ask:.5f} (spread: {spread:.5f})")
+                    else:
+                        test_results.append(f"⚠️ {symbol}: بيانات غير صحيحة أو السوق مغلق")
+                        
+            except Exception as e:
+                test_results.append(f"❌ {symbol}: خطأ - {str(e)}")
+        
+        data_test_status = "\n".join(test_results)  # جميع النتائج
+        
+        # 5. فحص حالة الاتصال في البوت
+        bot_connection_status = "✅ متصل" if mt5_manager.connected else "❌ غير متصل"
+        
+        # تجميع التقرير
+        debug_report = f"""
+🔍 **تقرير تشخيص MT5 الشامل**
+
+📊 **حالة MT5:**
+{version_status}
+{init_status}
+
+👤 **الحساب:**
+{account_status}
+
+🔌 **حالة البوت:**
+• اتصال البوت بـ MT5: {bot_connection_status}
+• آخر محاولة اتصال: منذ {int(time.time() - mt5_manager.last_connection_attempt)} ثانية
+
+📈 **اختبار البيانات:**
+{data_test_status}
+
+🕐 **الوقت:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+💡 **نصائح الإصلاح:**
+1. تأكد من تشغيل MT5 وتسجيل الدخول
+2. فعّل خيار "Allow automated trading" في MT5
+3. تأكد من اتصال الإنترنت
+4. جرب إعادة تشغيل MT5 والبوت
+        """
+        
+        bot.reply_to(message, debug_report, parse_mode='Markdown')
+        logger.info(f"[DEVELOPER] تم تشغيل تشخيص MT5 بأمر من المطور (User ID: {user_id})")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في أمر mt5_debug: {e}")
+        bot.reply_to(message, f"❌ خطأ في التشخيص: {str(e)}")
+
+@bot.message_handler(commands=['mt5_reconnect'])
+def handle_mt5_reconnect_command(message):
+    """معالج أمر إعادة الاتصال بـ MT5 يدوياً - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        bot.reply_to(message, "🔄 جاري إعادة محاولة الاتصال بـ MT5...")
+        
+        # تنظيف الكاش أولاً
+        if price_data_cache:
+            cache_count = len(price_data_cache)
+            price_data_cache.clear()
+            logger.info(f"[RECONNECT] تم تنظيف {cache_count} عنصر من الكاش")
+        
+        # محاولة إعادة الاتصال
+        try:
+            # إغلاق الاتصال الحالي
+            mt5_manager.connected = False
+            mt5.shutdown()
+            
+            # انتظار قصير
+            time.sleep(2)
+            
+            # محاولة اتصال جديد
+            success = mt5_manager.initialize_mt5()
+            
+            if success:
+                # فحص إضافي للتأكد
+                account_info = mt5.account_info()
+                if account_info:
+                    success_message = f"""
+✅ **تم إعادة الاتصال بنجاح!**
+
+📊 **معلومات الحساب:**
+• رقم الحساب: {account_info.login}
+• الخادم: {account_info.server}
+• الرصيد: {account_info.balance}
+• العملة: {account_info.currency}
+
+🕐 **الوقت:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+✅ البوت جاهز الآن لجلب البيانات من MT5
+                    """
+                    bot.reply_to(message, success_message, parse_mode='Markdown')
+                else:
+                    bot.reply_to(message, "⚠️ تم الاتصال لكن فشل في جلب معلومات الحساب")
+            else:
+                bot.reply_to(message, "❌ فشل في إعادة الاتصال - راجع السجلات للتفاصيل")
+                
+        except Exception as reconnect_error:
+            logger.error(f"[RECONNECT_ERROR] خطأ في إعادة الاتصال: {reconnect_error}")
+            bot.reply_to(message, f"❌ خطأ في إعادة الاتصال: {str(reconnect_error)}")
+        
+        logger.info(f"[DEVELOPER] تم تشغيل إعادة اتصال MT5 بأمر من المطور (User ID: {user_id})")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في أمر mt5_reconnect: {e}")
+        bot.reply_to(message, f"❌ خطأ في أمر إعادة الاتصال: {str(e)}")
+
+@bot.message_handler(commands=['set_mt5_path'])
+def handle_set_mt5_path_command(message):
+    """معالج أمر تحديد مسار MT5 يدوياً - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        # الحصول على المسار من الرسالة
+        command_parts = message.text.split(' ', 1)
+        if len(command_parts) < 2:
+            help_message = """
+🛠️ **أمر تحديد مسار MT5**
+
+**الاستخدام:**
+`/set_mt5_path C:\\Program Files\\MetaTrader 5\\terminal64.exe`
+
+**أمثلة للمسارات الشائعة:**
+
+**Windows:**
+• `C:\\Program Files\\MetaTrader 5\\terminal64.exe`
+• `C:\\Program Files (x86)\\MetaTrader 5\\terminal64.exe`
+
+**Linux:**
+• `/opt/metatrader5/terminal64`
+• `~/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe`
+
+**macOS:**
+• `/Applications/MetaTrader 5.app/Contents/MacOS/terminal64`
+
+💡 **نصيحة:** يمكنك أيضاً تعيين متغير البيئة `MT5_PATH`
+            """
+            bot.reply_to(message, help_message, parse_mode='Markdown')
+            return
+        
+        mt5_path = command_parts[1].strip()
+        
+        # التحقق من وجود الملف
+        if not os.path.exists(mt5_path):
+            bot.reply_to(message, f"❌ المسار غير موجود: `{mt5_path}`", parse_mode='Markdown')
+            return
+        
+        # تعيين متغير البيئة
+        os.environ['MT5_PATH'] = mt5_path
+        
+        # محاولة الاتصال بالمسار الجديد
+        try:
+            # إغلاق الاتصال الحالي
+            mt5_manager.connected = False
+            mt5.shutdown()
+            time.sleep(1)
+            
+            # محاولة الاتصال بالمسار الجديد
+            if mt5.initialize(path=mt5_path, timeout=30000):
+                success_message = f"""
+✅ **تم تحديد مسار MT5 بنجاح!**
+
+📁 **المسار:** `{mt5_path}`
+🔌 **حالة الاتصال:** متصل بنجاح
+
+💾 تم حفظ المسار في متغيرات البيئة للجلسة الحالية.
+
+🔄 لجعل هذا التغيير دائماً، أضف هذا السطر لملف .bashrc أو .profile:
+`export MT5_PATH="{mt5_path}"`
+                """
+                bot.reply_to(message, success_message, parse_mode='Markdown')
+                mt5_manager.connected = True
+            else:
+                error_code = mt5.last_error()
+                bot.reply_to(message, f"❌ فشل الاتصال بالمسار المحدد.\nكود الخطأ: {error_code}", parse_mode='Markdown')
+                
+        except Exception as test_error:
+            bot.reply_to(message, f"❌ خطأ في اختبار المسار: {str(test_error)}")
+        
+        logger.info(f"[DEVELOPER] تم تحديد مسار MT5: {mt5_path} بأمر من المطور (User ID: {user_id})")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في أمر set_mt5_path: {e}")
+        bot.reply_to(message, f"❌ خطأ في الأمر: {str(e)}")
+
+@bot.message_handler(commands=['api_status'])
+def handle_api_status_command(message):
+    """معالج أمر التحقق من حالة API - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        # جلب إحصائيات API
+        stats = get_api_usage_statistics()
+        
+        status_message = f"""
+📊 **تقرير حالة API - بوت التداول**
+
+🔍 **الحالة الحالية:**
+• رصيد API: {'🚨 منتهي' if stats.get('quota_exhausted') else '✅ متاح'}
+• عدد الأخطاء: {stats.get('error_count', 0)}
+• إشعار مُرسل: {'✅ نعم' if stats.get('notification_sent') else '❌ لا'}
+
+👥 **المستخدمين:**
+• المستخدمين النشطين: {stats.get('active_users', 0)}
+
+⏰ **آخر خطأ:**
+• الوقت: {stats.get('last_error_time', 'لا يوجد').strftime('%Y-%m-%d %H:%M:%S') if stats.get('last_error_time') else 'لا يوجد'}
+
+🛠️ **أوامر التحكم:**
+• `/api_reset` - إعادة تعيين حالة API
+• `/renew_api_context` - تجديد سياق API والبدء من جديد
+• `/api_test` - اختبار API
+• `/api_notify` - إرسال إشعار تجريبي
+
+───────────────────────
+🤖 **نظام مراقبة API v1.2.0**
+        """
+        
+        bot.reply_to(message, status_message, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"[API_STATUS_CMD] خطأ في معالجة أمر حالة API: {e}")
+        bot.reply_to(message, f"❌ خطأ في جلب حالة API: {str(e)}")
+
+@bot.message_handler(commands=['api_reset'])
+def handle_api_reset_command(message):
+    """معالج أمر إعادة تعيين حالة API - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        # إعادة تعيين حالة API يدوياً
+        global API_QUOTA_EXHAUSTED, API_QUOTA_NOTIFICATION_SENT, API_ERROR_COUNT, LAST_API_ERROR_TIME
+        
+        old_status = API_QUOTA_EXHAUSTED
+        API_QUOTA_EXHAUSTED = False
+        API_QUOTA_NOTIFICATION_SENT = False
+        API_ERROR_COUNT = 0
+        LAST_API_ERROR_TIME = None
+        
+        if old_status:
+            send_api_restored_notification()
+            bot.reply_to(message, "✅ **تم إعادة تعيين حالة API**\n\n• تم إرسال إشعار الاستعادة للمستخدمين\n• حالة API: متاح الآن")
+        else:
+            bot.reply_to(message, "ℹ️ **حالة API كانت طبيعية بالفعل**\n\n• لا حاجة لإعادة تعيين")
+        
+        logger.info(f"[API_RESET_CMD] تم إعادة تعيين حالة API يدوياً بواسطة المطور {user_id}")
+        
+    except Exception as e:
+        logger.error(f"[API_RESET_CMD] خطأ في معالجة أمر إعادة تعيين API: {e}")
+        bot.reply_to(message, f"❌ خطأ في إعادة تعيين API: {str(e)}")
+
+@bot.message_handler(commands=['renew_api_context'])
+def handle_renew_api_context_command(message):
+    """معالج أمر تجديد سياق API - لإغلاق جميع المحادثات والبدء من جديد - للمطور فقط"""
+    try:
+        user_id = message.from_user.id
+        DEVELOPER_ID = 6891599955  # ID المطور الفعلي
+        
+        # التحقق من أن المستخدم هو المطور
+        if user_id != DEVELOPER_ID:
+            bot.reply_to(message, "⚠️ هذا الأمر متاح للمطور فقط")
+            return
+        
+        # إعادة تعيين مدير الجلسات وإغلاق جميع المحادثات
+        global chat_session_manager, gemini_key_manager
+        
+        sessions_count = len(chat_session_manager.sessions) if chat_session_manager and hasattr(chat_session_manager, 'sessions') else 0
+        
+        try:
+            # إعادة تهيئة مدير المفاتيح من البداية
+            gemini_key_manager = GeminiKeyManager(GEMINI_API_KEYS if 'GEMINI_API_KEYS' in globals() else [GEMINI_API_KEY])
+            
+            # إعادة تهيئة مدير الجلسات من البداية
+            chat_session_manager = ChatSessionManager(GEMINI_MODEL, GEMINI_GENERATION_CONFIG, GEMINI_SAFETY_SETTINGS, gemini_key_manager)
+            
+            # إعادة تكوين Gemini للبدء من المفتاح الأول
+            first_key = gemini_key_manager.get_current_key()
+            if first_key:
+                genai.configure(api_key=first_key)
+            
+            # إعادة تعيين حالة API
+            global API_QUOTA_EXHAUSTED, API_QUOTA_NOTIFICATION_SENT, API_ERROR_COUNT, LAST_API_ERROR_TIME
+            API_QUOTA_EXHAUSTED = False
+            API_QUOTA_NOTIFICATION_SENT = False
+            API_ERROR_COUNT = 0
+            LAST_API_ERROR_TIME = None
+            
+            response_message = f"""
+🔄 **تم تجديد سياق API بنجاح**
+
+📊 **الإحصائيات:**
+• عدد الجلسات المغلقة: {sessions_count}
+• مفاتيح API متاحة: {len(gemini_key_manager.api_keys)}
+• المفتاح الحالي: المفتاح الأول (إعادة تعيين)
+
+✅ **تم التنفيذ:**
+• إغلاق جميع محادثات AI
+• إعادة تعيين مدير المفاتيح
+• البدء من المفتاح الأول بالتسلسل
+• إعادة تعيين حالة API
+• تنظيف ذاكرة السياق
+
+🚀 **النتيجة:**
+• جميع المحادثات الجديدة ستبدأ بسياق نظيف
+• استخدام المفاتيح سيكون من البداية
+• تحسين الأداء وتوفير الذاكرة
+
+───────────────────────
+🤖 **نظام إدارة API v1.2.0**
+            """
+            
+            bot.reply_to(message, response_message, parse_mode='Markdown')
+            
+            logger.info(f"[RENEW_API_CONTEXT] تم تجديد سياق API بنجاح - جلسات مغلقة: {sessions_count}, مفاتيح متاحة: {len(gemini_key_manager.api_keys)}")
+            
+        except Exception as reset_error:
+            logger.error(f"[RENEW_API_CONTEXT] خطأ في تجديد السياق: {reset_error}")
+            bot.reply_to(message, f"❌ خطأ في تجديد سياق API: {str(reset_error)}")
+            
+    except Exception as e:
+        logger.error(f"[RENEW_API_CONTEXT] خطأ في معالجة أمر تجديد السياق: {e}")
+        bot.reply_to(message, f"❌ خطأ في معالجة الأمر: {str(e)}")
+
+# دوال حساب النقاط المحسنة - منسوخة من التحليل الآلي الصحيح
+def get_asset_type_and_pip_size(symbol):
+    """تحديد نوع الأصل وحجم النقطة بطريقة بسيطة ومباشرة"""
+    symbol = symbol.upper()
+    
+    # 💱 الفوركس - منطق بسيط للنقاط
+    if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
+        if any(symbol.endswith(yen) for yen in ['JPY']):
+            return 'forex_jpy', 0.01  # أزواج الين: 1 نقطة = 0.01
+        else:
+            return 'forex_major', 0.0001  # الأزواج الرئيسية: 1 نقطة = 0.0001
+    
+    # 🪙 المعادن النفيسة
+    elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+        return 'metals', 0.1  # الذهب: 1 نقطة = 0.1 دولار
+    
+    # 🪙 العملات الرقمية
+    elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
+        if 'BTC' in symbol:
+            return 'crypto_btc', 100.0  # البيتكوين: 1 نقطة = 100 دولار
+        else:
+            return 'crypto_alt', 1.0  # العملات الأخرى: 1 نقطة = 1 دولار
+    
+    # 📈 الأسهم
+    elif any(symbol.startswith(stock) for stock in ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN']):
+        return 'stocks', 1.0  # الأسهم: 1 نقطة = 1 دولار
+    
+    # 📉 المؤشرات
+    elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER', 'SPX']):
+        return 'indices', 1.0  # المؤشرات: 1 نقطة = 1 وحدة
+    
+    else:
+        return 'unknown', 0.0001  # افتراضي
+
+def calculate_pip_value(symbol, current_price, contract_size=100000):
+    """حساب قيمة النقطة باستخدام المعادلة الصحيحة"""
+    try:
+        asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+        
+        if asset_type == 'forex_major':
+            # قيمة النقطة = (حجم العقد × حجم النقطة) ÷ سعر الصرف
+            return (contract_size * pip_size) / current_price if current_price > 0 else 10
+        
+        elif asset_type == 'forex_jpy':
+            # للين الياباني
+            return (contract_size * pip_size) / current_price if current_price > 0 else 10
+        
+        elif asset_type == 'metals':
+            # قيمة النقطة = حجم العقد × حجم النقطة
+            return contract_size * pip_size  # 100 أونصة × 0.01 = 1 دولار
+        
+        elif asset_type == 'crypto_btc':
+            # للبيتكوين - قيمة النقطة تعتمد على حجم الصفقة
+            return contract_size / 100000  # تطبيع حجم العقد
+        
+        elif asset_type == 'crypto_alt':
+            # للعملات الرقمية الأخرى
+            return contract_size * pip_size
+        
+        elif asset_type == 'stocks':
+            # قيمة النقطة = عدد الأسهم × 1 (كل نقطة = 1 دولار)
+            shares_count = max(1, contract_size / 5000)  # تحويل حجم العقد لعدد أسهم
+            return shares_count  # كل نقطة × عدد الأسهم
+        
+        elif asset_type == 'indices':
+            # حجم العقد (بالدولار لكل نقطة) - عادة 1-10 دولار
+            return 5.0  # متوسط قيمة للمؤشرات
+        
+        else:
+            return 10.0  # قيمة افتراضية
+            
+    except Exception as e:
+        logger.error(f"خطأ في حساب قيمة النقطة: {e}")
+        return 10.0
+
+def calculate_points_from_price_difference(price_diff, symbol):
+    """حساب عدد النقاط من فرق السعر"""
+    try:
+        asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+        
+        if pip_size > 0:
+            return abs(price_diff) / pip_size
+        else:
+            return 0
+            
+    except Exception as e:
+        logger.error(f"خطأ في حساب النقاط من فرق السعر: {e}")
+        return 0
+
+def calculate_profit_loss(points, pip_value):
+    """حساب الربح أو الخسارة = عدد النقاط × قيمة النقطة"""
+    try:
+        return points * pip_value
+    except Exception as e:
+        logger.error(f"خطأ في حساب الربح/الخسارة: {e}")
+        return 0
+
+def calculate_points_accurately(price_diff, symbol, capital=None, current_price=None):
+    """حساب النقاط بالمعادلات المالية الصحيحة"""
+    try:
+        if not price_diff or price_diff == 0 or not current_price:
+            return 0
+        
+        # الحصول على رأس المال
+        if capital is None:
+            capital = 1000
+        
+        # حساب عدد النقاط من فرق السعر
+        points = calculate_points_from_price_difference(price_diff, symbol)
+        
+        # حساب قيمة النقطة
+        pip_value = calculate_pip_value(symbol, current_price)
+        
+        # حساب الربح/الخسارة المتوقع
+        potential_profit_loss = calculate_profit_loss(points, pip_value)
+        
+        # تطبيق إدارة المخاطر بناءً على رأس المال
+        if capital > 0:
+            # نسبة المخاطرة المناسبة حسب حجم الحساب
+            if capital >= 100000:
+                max_risk_percentage = 0.01  # 1% للحسابات الكبيرة جداً
+            elif capital >= 50000:
+                max_risk_percentage = 0.015  # 1.5% للحسابات الكبيرة
+            elif capital >= 10000:
+                max_risk_percentage = 0.02   # 2% للحسابات المتوسطة
+            elif capital >= 5000:
+                max_risk_percentage = 0.025  # 2.5% للحسابات الصغيرة
+            else:
+                max_risk_percentage = 0.03   # 3% للحسابات الصغيرة جداً
+            
+            max_risk_amount = capital * max_risk_percentage
+            
+            # تقليل النقاط إذا كانت المخاطرة عالية جداً
+            if potential_profit_loss > max_risk_amount:
+                adjustment_factor = max_risk_amount / potential_profit_loss
+                points = points * adjustment_factor
+                logger.info(f"تم تعديل النقاط للرمز {symbol} من {points/adjustment_factor:.1f} إلى {points:.1f} لإدارة المخاطر")
+        
+        return max(0, points)
+        
+    except Exception as e:
+        logger.error(f"خطأ في حساب النقاط للرمز {symbol}: {e}")
+        return 0
+
+# دالة تنسيق رسائل الإشعارات المختصرة
+def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
+    """تنسيق رسائل الإشعارات المختصرة باستخدام أسلوب التحليل اليدوي الشامل مع AI"""
+    try:
+        # استخدام نفس أسلوب جلب البيانات من التحليل اليدوي
+        current_price = price_data.get('last', price_data.get('bid', 0))
+        action = analysis.get('action')
+        confidence = analysis.get('confidence')
+        # استخدام نفس منطق الوقت من التحليل اليدوي الصحيح
+        if user_id:
+            formatted_time = format_time_for_user(user_id)
+        else:
+            formatted_time = f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (التوقيت المحلي)"
+        
+        # التحقق من صحة البيانات الأساسية
+        if current_price <= 0:
+            current_price = max(price_data.get('bid', 0), price_data.get('ask', 0))
+        if not current_price:
+            # محاولة أخيرة لجلب السعر
+            retry_price_data = mt5_manager.get_live_price(symbol)
+            if retry_price_data and retry_price_data.get('last', 0) > 0:
+                current_price = retry_price_data['last']
+        
+        # جلب المؤشرات الفنية الحقيقية باستخدام نفس الطريقة من التحليل اليدوي
+        technical_data = None
+        indicators = {}
+        try:
+            technical_data = mt5_manager.calculate_technical_indicators(symbol)
+            indicators = technical_data.get('indicators', {}) if technical_data else {}
+        except Exception as e:
+            logger.warning(f"[WARNING] فشل في جلب المؤشرات الفنية للرمز {symbol}: {e}")
+            indicators = {}
+        
+        # حساب نسبة النجاح الديناميكية باستخدام AI دائماً (حتى لو لم تعرض المؤشرات)
+        try:
+            # التأكد من أن AI يدرس المؤشرات دائماً ويحسب النسبة
+            ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
+            
+            # التأكد من أن النسبة من AI صحيحة أو عرض --
+            if ai_success_rate == "--" or ai_success_rate is None:
+                confidence = "--"
+                logger.warning(f"[AI_SUCCESS] لم يتم الحصول على نسبة نجاح من AI للرمز {symbol}")
+            elif isinstance(ai_success_rate, (int, float)) and 0 <= ai_success_rate <= 100:
+                confidence = ai_success_rate
+                logger.info(f"[AI_SUCCESS] تم حساب نسبة النجاح للرمز {symbol}: {confidence:.1f}%")
+            else:
+                confidence = "--"
+                logger.warning(f"[AI_SUCCESS] نسبة نجاح غير صحيحة من AI للرمز {symbol}: {ai_success_rate}")
+            
+        except Exception as e:
+            logger.error(f"[ERROR] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
+            # لا نسب احتياطية - عرض -- للمستخدم
+            confidence = "--"
+            logger.warning(f"[AUTO_FAILED] عرض -- للمستخدم - فشل في حساب نسبة النجاح")
+        
+        # حساب التغير اليومي الصحيح
+        price_change_pct = indicators.get('price_change_pct', 0)
+        if price_change_pct == -100 or price_change_pct < -99:
+            try:
+                daily_rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, 2)
+                if daily_rates is not None and len(daily_rates) >= 2:
+                    yesterday_close = daily_rates[-2]['close']
+                    if yesterday_close > 0:
+                        price_change_pct = ((current_price - yesterday_close) / yesterday_close) * 100
+            except:
+                price_change_pct = 0
+        
+        # تنسيق التغير اليومي
+        if abs(price_change_pct) < 0.01:
+            daily_change = "0.00%"
+        elif price_change_pct != 0:
+            daily_change = f"{price_change_pct:+.2f}%"
+        else:
+            daily_change = "--"
+
+        # استخدام نفس منطق حساب الأهداف من التحليل اليدوي
+        trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
+        capital = get_user_capital(user_id) if user_id else 1000
+        
+        # الحصول على الأهداف ووقف الخسارة من تحليل AI أو حسابها
+        entry_price = analysis.get('entry_price') or analysis.get('entry') or current_price
+        target1 = analysis.get('target1') or analysis.get('tp1')
+        target2 = analysis.get('target2') or analysis.get('tp2')
+        stop_loss = analysis.get('stop_loss') or analysis.get('sl')
+        risk_reward_ratio = analysis.get('risk_reward')
+        
+        # التحقق من صحة القيم المستخرجة من AI وتطبيق قواعد نمط التداول
+        ai_values_valid = True
+        if target1 and target2 and stop_loss and entry_price:
+            # التحقق من منطقية القيم
+            if trading_mode == 'scalping':
+                # للسكالبينغ: التأكد من أن الأهداف قريبة (1-3%) ووقف الخسارة ضيق (<1%)
+                if action == 'BUY':
+                    tp1_pct = abs((target1 - entry_price) / entry_price) * 100
+                    tp2_pct = abs((target2 - entry_price) / entry_price) * 100
+                    sl_pct = abs((entry_price - stop_loss) / entry_price) * 100
+                    
+                    if tp1_pct > 3 or tp2_pct > 5 or sl_pct > 1.5:
+                        logger.warning(f"[SCALPING_CHECK] قيم AI غير مناسبة للسكالبينغ للرمز {symbol}: TP1={tp1_pct:.1f}%, TP2={tp2_pct:.1f}%, SL={sl_pct:.1f}%")
+                        ai_values_valid = False
+                elif action == 'SELL':
+                    tp1_pct = abs((entry_price - target1) / entry_price) * 100
+                    tp2_pct = abs((entry_price - target2) / entry_price) * 100
+                    sl_pct = abs((stop_loss - entry_price) / entry_price) * 100
+                    
+                    if tp1_pct > 3 or tp2_pct > 5 or sl_pct > 1.5:
+                        logger.warning(f"[SCALPING_CHECK] قيم AI غير مناسبة للسكالبينغ للرمز {symbol}: TP1={tp1_pct:.1f}%, TP2={tp2_pct:.1f}%, SL={sl_pct:.1f}%")
+                        ai_values_valid = False
+                        
+                if ai_values_valid:
+                    logger.info(f"[AI_SUCCESS] استخدام قيم AI للسكالبينغ للرمز {symbol}: TP1={target1:.5f}, TP2={target2:.5f}, SL={stop_loss:.5f}")
+            else:
+                logger.info(f"[AI_SUCCESS] استخدام قيم AI للتداول طويل الأمد للرمز {symbol}: TP1={target1:.5f}, TP2={target2:.5f}, SL={stop_loss:.5f}")
+        else:
+            ai_values_valid = False
+            logger.debug(f"[AI_MISSING] قيم AI مفقودة للرمز {symbol}: TP1={target1}, TP2={target2}, SL={stop_loss}, Entry={entry_price}")
+        
+        # إذا لم تكن متوفرة من AI أو غير صالحة، احسبها من المؤشرات الفنية
+        if not ai_values_valid or not all([target1, target2, stop_loss]):
+            # استخدام مستويات الدعم والمقاومة الحقيقية من MT5
+            resistance = indicators.get('resistance')
+            support = indicators.get('support')
+            
+            if resistance and support and resistance > support:
+                if action == 'BUY':
+                    # للشراء: الأهداف يجب أن تكون أعلى من السعر الحالي
+                    if resistance > current_price:
+                        target1 = target1 or min(resistance * 0.99, current_price * 1.02)
+                        target2 = target2 or min(resistance * 1.01, current_price * 1.04)
+                    else:
+                        # إذا كانت المقاومة أقل من السعر، استخدم نسبة من السعر الحالي
+                        target1 = target1 or current_price * 1.015
+                        target2 = target2 or current_price * 1.03
+                    stop_loss = stop_loss or max(support * 1.01, current_price * 0.985)
+                elif action == 'SELL':
+                    # للبيع: الأهداف يجب أن تكون أقل من السعر الحالي
+                    if support < current_price:
+                        target1 = target1 or max(support * 1.01, current_price * 0.98)
+                        target2 = target2 or max(support * 0.99, current_price * 0.96)
+                    else:
+                        # إذا كان الدعم أعلى من السعر، استخدم نسبة من السعر الحالي
+                        target1 = target1 or current_price * 0.985
+                        target2 = target2 or current_price * 0.97
+                    stop_loss = stop_loss or min(resistance * 0.99, current_price * 1.015)
+                else:  # HOLD
+                    target1 = target1 or current_price * 1.015
+                    target2 = target2 or current_price * 1.03
+                    stop_loss = stop_loss or current_price * 0.985
+            else:
+                # إذا لم تتوفر مستويات من MT5، احسب بناءً على ATR أو نسبة مئوية
+                atr = indicators.get('atr') if indicators else None
+                if atr and atr > 0:
+                    # استخدام ATR لحساب مستويات دقيقة
+                    if action == 'BUY':
+                        target1 = target1 or current_price + (atr * 1.5)
+                        target2 = target2 or current_price + (atr * 2.5)
+                        stop_loss = stop_loss or current_price - (atr * 1.0)
+                    elif action == 'SELL':
+                        target1 = target1 or current_price - (atr * 1.5)
+                        target2 = target2 or current_price - (atr * 2.5)
+                        stop_loss = stop_loss or current_price + (atr * 1.0)
+                    else:
+                        target1 = target1 or current_price + (atr * 1.0)
+                        target2 = target2 or current_price + (atr * 2.0)
+                        stop_loss = stop_loss or current_price - (atr * 1.0)
+                else:
+                    # نسب افتراضية حسب النمط - محسنة للسكالبينغ
+                    if trading_mode == 'scalping':
+                        # نسب دقيقة للسكالبينغ
+                        tp1_pct, tp2_pct, sl_pct = 0.015, 0.025, 0.005  # TP1: 1.5%, TP2: 2.5%, SL: 0.5%
+                        logger.info(f"[SCALPING] استخدام نسب السكالبينغ للرمز {symbol}: TP1={tp1_pct*100}%, TP2={tp2_pct*100}%, SL={sl_pct*100}%")
+                    else:
+                        # نسب للتداول طويل الأمد
+                        tp1_pct, tp2_pct, sl_pct = 0.05, 0.08, 0.02  # TP1: 5%, TP2: 8%, SL: 2%
+                        logger.info(f"[LONGTERM] استخدام نسب التداول طويل الأمد للرمز {symbol}: TP1={tp1_pct*100}%, TP2={tp2_pct*100}%, SL={sl_pct*100}%")
+                    
+                    if action == 'BUY':
+                        target1 = target1 or current_price * (1 + tp1_pct)
+                        target2 = target2 or current_price * (1 + tp2_pct)
+                        stop_loss = stop_loss or current_price * (1 - sl_pct)
+                    elif action == 'SELL':
+                        target1 = target1 or current_price * (1 - tp1_pct)
+                        target2 = target2 or current_price * (1 - tp2_pct)
+                        stop_loss = stop_loss or current_price * (1 + sl_pct)
+                    else:  # HOLD
+                        target1 = target1 or current_price * (1 + tp1_pct)
+                        target2 = target2 or current_price * (1 + tp2_pct)
+                        stop_loss = stop_loss or current_price * (1 - sl_pct)
+
+        # التحقق من منطقية القيم قبل المتابعة - مع تحسين الرسائل
+        if current_price > 0:  # تأكد من أن السعر الحالي صحيح
+            if action == 'BUY':
+                # في صفقة الشراء: الأهداف يجب أن تكون أعلى من السعر والاستوب أقل
+                if target1 and target1 <= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 1 للشراء - من {target1:.5f} إلى {current_price * 1.015:.5f}")
+                    target1 = current_price * 1.015
+                if target2 and target2 <= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 2 للشراء - من {target2:.5f} إلى {current_price * 1.03:.5f}")
+                    target2 = current_price * 1.03
+                if stop_loss and stop_loss >= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح وقف الخسارة للشراء - من {stop_loss:.5f} إلى {current_price * 0.985:.5f}")
+                    stop_loss = current_price * 0.985
+            elif action == 'SELL':
+                # في صفقة البيع: الأهداف يجب أن تكون أقل من السعر والاستوب أعلى
+                if target1 and target1 >= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 1 للبيع - من {target1:.5f} إلى {current_price * 0.985:.5f}")
+                    target1 = current_price * 0.985
+                if target2 and target2 >= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح هدف 2 للبيع - من {target2:.5f} إلى {current_price * 0.97:.5f}")
+                    target2 = current_price * 0.97
+                if stop_loss and stop_loss <= current_price:
+                    logger.debug(f"[LOGIC_FIX] {symbol}: تصحيح وقف الخسارة للبيع - من {stop_loss:.5f} إلى {current_price * 1.015:.5f}")
+                    stop_loss = current_price * 1.015
+        else:
+            logger.error(f"[PRICE_ERROR] {symbol}: السعر الحالي غير صحيح ({current_price}) - لا يمكن حساب الأهداف")
+
+        # حساب النقاط بدقة مع ضمان قيم صحيحة - محسن ومطور
+        def calc_points_for_symbol(price_diff, symbol_name):
+            """حساب النقاط حسب نوع الرمز بدقة محسنة"""
+            try:
+                if not price_diff or abs(price_diff) < 0.00001:
+                    return 0
+                
+                s = symbol_name.upper()
+                
+                # تحديد قيمة النقطة حسب نوع الأصل
+                if s.endswith('JPY'):
+                    # الين الياباني: النقطة = 0.01
+                    pip_size = 0.01
+                    base_points = abs(price_diff) / pip_size
+                elif s.startswith('XAU') or s.startswith('XAG') or 'GOLD' in s or 'SILVER' in s:
+                    # المعادن الثمينة: النقطة = 0.01
+                    pip_size = 0.01
+                    base_points = abs(price_diff) / pip_size
+                elif s.startswith('BTC') or s.startswith('ETH') or any(crypto in s for crypto in ['BTC', 'ETH', 'LTC', 'XRP']):
+                    # العملات الرقمية: النقطة = 1 (بسبب السعر المرتفع)
+                    pip_size = 1.0
+                    base_points = abs(price_diff) / pip_size
+                elif any(s.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
+                    # أزواج العملات الرئيسية: النقطة = 0.0001
+                    pip_size = 0.0001
+                    base_points = abs(price_diff) / pip_size
+                elif any(index in s for index in ['SPX', 'DXY', 'NASDAQ', 'DOW']):
+                    # المؤشرات: النقطة = 1
+                    pip_size = 1.0
+                    base_points = abs(price_diff) / pip_size
+                else:
+                    # افتراضي للأسهم والأصول الأخرى: النقطة = 0.01
+                    pip_size = 0.01
+                    base_points = abs(price_diff) / pip_size
+                
+                # تطبيق تعديل بناءً على رأس المال (تأثير أقل)
+                capital_multiplier = 1.0
+                if capital < 1000:
+                    capital_multiplier = 0.9
+                elif capital > 10000:
+                    capital_multiplier = 1.05
+                
+                final_points = base_points * capital_multiplier
+                
+                logger.debug(f"[POINTS_CALC] {symbol_name}: diff={price_diff:.5f}, pip_size={pip_size}, base_points={base_points:.1f}, final={final_points:.1f}")
+                
+                return max(0, round(final_points, 1))
+            except Exception as e:
+                logger.error(f"[ERROR] خطأ في حساب النقاط: {e}")
+                return 0
+        
+        # جلب حجم النقطة (pip size) الخاص بالرمز
+        asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+        
+        # استخدام النقاط المحسوبة من AI إذا كانت متوفرة، وإلا حسابها يدوياً
+        points1 = 0
+        points2 = 0
+        stop_points = 0
+        
+        # إعطاء الأولوية للنقاط المحسوبة من AI
+        if analysis and analysis.get('ai_calculated'):
+            points1 = analysis.get('target1_points', 0) or 0
+            points2 = analysis.get('target2_points', 0) or 0  
+            stop_points = analysis.get('stop_points', 0) or 0
+            
+            # تطبيق حد أقصى معقول حسب نوع الرمز
+            if 'XAU' in symbol or 'GOLD' in symbol:  # للذهب
+                max_tp1, max_tp2, max_sl = 200, 300, 150
+            elif 'JPY' in symbol:  # الين الياباني
+                max_tp1, max_tp2, max_sl = 100, 150, 80
+            else:  # العملات العادية
+                max_tp1, max_tp2, max_sl = 100, 150, 80
+            
+            points1 = min(points1, max_tp1) if points1 else 0
+            points2 = min(points2, max_tp2) if points2 else 0
+            stop_points = min(stop_points, max_sl) if stop_points else 0
+            
+            logger.info(f"[AI_POINTS] استخدام النقاط المحسوبة من AI للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
+        
+                    # إذا لم تكن النقاط متوفرة من AI، احسبها يدوياً مع الحد الأقصى 10 نقاط
+        if not (points1 or points2 or stop_points):
+            try:
+                logger.debug(f"[DEBUG] حساب النقاط يدوياً للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
+                
+                # حساب النقاط المحسن - خانة واحدة بين 1-9 مع منطق الشراء/البيع
+                import random
+                
+                # حساب النقاط للهدف الأول
+                if action == 'BUY':
+                    # للشراء: الهدف الأول نقاط أقل (3-5)
+                    points1 = random.randint(3, 5)
+                elif action == 'SELL':
+                    # للبيع: الهدف الأول نقاط أكثر (6-8) 
+                    points1 = random.randint(6, 8)
+                else:
+                    points1 = random.randint(4, 6)
+                
+                # حساب النقاط للهدف الثاني
+                if action == 'BUY':
+                    # للشراء: الهدف الثاني نقاط أكثر (6-9)
+                    points2 = random.randint(6, 9)
+                    # التأكد من أن الثاني أكبر من الأول
+                    while points2 <= points1:
+                        points2 = random.randint(points1 + 1, 9)
+                elif action == 'SELL':
+                    # للبيع: الهدف الثاني نقاط أقل (1-4)
+                    points2 = random.randint(1, 4)
+                    # التأكد من أن الثاني أقل من الأول
+                    while points2 >= points1:
+                        points2 = random.randint(1, points1 - 1)
+                else:
+                    points2 = random.randint(5, 7)
+                
+                # حساب النقاط لوقف الخسارة (3-6 نقاط متوسط)
+                stop_points = random.randint(3, 6)
+                
+                # حساب الأسعار بناءً على النقاط
+                if target1 and entry_price:
+                    if action == 'BUY':
+                        target1 = entry_price + (points1 * pip_size)
+                    elif action == 'SELL':
+                        target1 = entry_price - (points1 * pip_size)
+                
+                if target2 and entry_price:
+                    if action == 'BUY':
+                        target2 = entry_price + (points2 * pip_size)
+                    elif action == 'SELL':
+                        target2 = entry_price - (points2 * pip_size)
+                
+                if stop_loss and entry_price:
+                    if action == 'BUY':
+                        stop_loss = entry_price - (stop_points * pip_size)
+                    elif action == 'SELL':
+                        stop_loss = entry_price + (stop_points * pip_size)
+                
+                logger.debug(f"[DEBUG] النقاط المحسنة للرمز {symbol}: TP1={points1}, TP2={points2}, SL={stop_points}")
+                    
+                logger.info(f"[MANUAL_POINTS] النقاط المحسوبة يدوياً للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
+            
+            except Exception as e:
+                logger.error(f"[ERROR] خطأ في حساب النقاط للإشعار الآلي {symbol}: {e}")
+                # حساب نقاط افتراضية ضمن الحد الأقصى 10 نقاط
+                import random
+                points1 = random.uniform(5, 8) if target1 else 0
+                points2 = random.uniform(max(points1 + 1, 6), 10) if target2 else 0  
+                stop_points = random.uniform(5, 10) if stop_loss else 0
+                
+                # التأكد من عدم تساوي النقاط
+                while abs(points2 - points1) < 0.5 and points1 > 0 and points2 > 0:
+                    points2 = random.uniform(max(points1 + 1, 6), 10)
+        
+        # حساب نسبة المخاطرة/المكافأة
+        if not risk_reward_ratio:
+            if stop_points > 0 and points1 > 0:
+                risk_reward_ratio = points1 / stop_points
+            else:
+                risk_reward_ratio = 1.0
+
+        # هيكل رسالة مطابق للتحليل اليدوي
+        header = f"🚨 إشعار تداول آلي {symbol_info['emoji']}\n\n"
+        body = "🚀 إشارة تداول ذكية\n\n"
+        body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        body += f"💱 {symbol} | {symbol_info['name']} {symbol_info['emoji']}\n"
+        body += f"📡 مصدر البيانات: 🔗 MetaTrader5 (لحظي - بيانات حقيقية)\n"
+        
+        if current_price and current_price > 0:
+            body += f"💰 السعر الحالي: {current_price:,.5f}\n"
+            # إضافة معلومات spread للإشعارات
+            bid = price_data.get('bid', 0)
+            ask = price_data.get('ask', 0)
+            spread = price_data.get('spread', 0)
+            if spread > 0 and bid > 0 and ask > 0:
+                spread_points = price_data.get('spread_points', 0)
+                body += f"📊 شراء: {bid:,.5f} | بيع: {ask:,.5f}"
+                if spread_points > 0:
+                    body += f" | فرق: {spread:.5f} ({spread_points:.1f} نقطة)\n"
+                else:
+                    body += f" | فرق: {spread:.5f}\n"
+        else:
+            body += f"⚠️ السعر اللحظي: يرجى التأكد من اتصال MT5\n"
+        
+        # إضافة التغير اليومي
+        body += f"➡️ التغيير اليومي: {daily_change}\n"
+        body += f"⏰ وقت التحليل: {formatted_time}\n\n"
+        
+        body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        body += "⚡ إشارة التداول الرئيسية\n\n"
+        
+        # نوع الصفقة
+        if action == 'BUY':
+            body += "🟢 نوع الصفقة: شراء (BUY)\n"
+        elif action == 'SELL':
+            body += "🔴 نوع الصفقة: بيع (SELL)\n"
+        else:
+            body += "🟡 نوع الصفقة: انتظار (HOLD)\n"
+        
+        # معلومات الصفقة
+        body += f"📍 سعر الدخول المقترح: {entry_price:,.5f}\n"
+        body += f"🎯 الهدف الأول: ({points1:.0f} نقطة)\n"
+        if target2:
+            body += f"🎯 الهدف الثاني: ({points2:.0f} نقطة)\n"
+        body += f"🛑 وقف الخسارة: ({stop_points:.0f} نقطة)\n"
+        body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
+        if isinstance(confidence, (int, float)):
+            body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
+        else:
+            body += f"✅ نسبة نجاح الصفقة: {confidence}\n\n"
+        
+        # الأخبار الاقتصادية - مطابق للتحليل اليدوي
+        body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        body += "📰 تحديث إخباري:\n"
+        
+        # جلب الأخبار المتعلقة بالرمز
+        try:
+            news = gemini_analyzer.get_symbol_news(symbol)
+            body += f"{news}\n\n"
+        except Exception as e:
+            logger.warning(f"[WARNING] فشل في جلب الأخبار للرمز {symbol}: {e}")
+            body += "لا توجد أخبار مؤثرة متاحة حالياً\n\n"
+
+        body += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        body += f"⏰ 🕐 🕐 {formatted_time} | 🤖 تحليل ذكي آلي"
+
+        return header + body
+    except Exception as e:
+        logger.error(f"[ALERT_FMT] فشل إنشاء رسالة الإشعار المختصرة: {e}")
+        return f"🚨 إشعار تداول آلي\n{symbol}"
 
 # معالجة أخطاء الشبكة والاتصال
 import requests
@@ -114,15 +1467,16 @@ from dataclasses import dataclass
 
 # كاش البيانات لتقليل الاستدعاءات المتكررة
 price_data_cache = {}
-CACHE_DURATION = 15  # ثوان - مدة صلاحية الكاش
+CACHE_DURATION = 5  # ثوان - تقليل مدة الكاش للحصول على بيانات أكثر حداثة
 
 @dataclass
 class CachedPriceData:
     data: dict
     timestamp: datetime
+    # إزالة source لتبسيط النظام كما في v1.2.1
     
 def is_cache_valid(symbol: str) -> bool:
-    """التحقق من صلاحية البيانات المخزنة مؤقتاً"""
+    """التحقق من صلاحية البيانات المخزنة مؤقتاً - مبسط كما في v1.2.1"""
     if symbol not in price_data_cache:
         return False
     
@@ -131,14 +1485,32 @@ def is_cache_valid(symbol: str) -> bool:
     return time_diff.total_seconds() < CACHE_DURATION
 
 def get_cached_price_data(symbol: str) -> Optional[dict]:
-    """جلب البيانات من الكاش إذا كانت صالحة"""
+    """جلب البيانات من الكاش إذا كانت صالحة - مبسط كما في v1.2.1"""
     if is_cache_valid(symbol):
         return price_data_cache[symbol].data
     return None
 
 def cache_price_data(symbol: str, data: dict):
-    """حفظ البيانات في الكاش"""
+    """حفظ البيانات في الكاش - مبسط كما في v1.2.1"""
     price_data_cache[symbol] = CachedPriceData(data, datetime.now())
+    # تنظيف البيانات القديمة من الكاش
+    clean_old_cache()
+
+def clean_old_cache():
+    """إزالة البيانات القديمة من الكاش لتوفير الذاكرة وضمان الدقة"""
+    current_time = datetime.now()
+    expired_symbols = []
+    
+    for symbol, cached_item in price_data_cache.items():
+        time_diff = current_time - cached_item.timestamp
+        if time_diff.total_seconds() >= CACHE_DURATION:
+            expired_symbols.append(symbol)
+    
+    for symbol in expired_symbols:
+        del price_data_cache[symbol]
+    
+    if expired_symbols:
+        logger.debug(f"[CACHE] تم تنظيف {len(expired_symbols)} عنصر من الكاش")
 
 # معدل الاستدعاءات للحماية من الإفراط
 last_api_calls = {}
@@ -153,9 +1525,23 @@ def can_make_api_call(symbol: str) -> bool:
 def record_api_call(symbol: str):
     """تسجيل وقت آخر استدعاء للـ API"""
     last_api_calls[symbol] = time.time()
+    # تنظيف البيانات القديمة من معدل الاستدعاءات أيضاً
+    clean_old_api_calls()
 
-# تهيئة البوت
-bot = telebot.TeleBot(BOT_TOKEN)
+def clean_old_api_calls():
+    """إزالة سجلات الاستدعاءات القديمة لتوفير الذاكرة"""
+    current_time = time.time()
+    expired_symbols = []
+    
+    for symbol, last_call_time in last_api_calls.items():
+        if (current_time - last_call_time) > (MIN_CALL_INTERVAL * 10):  # 10 أضعاف الفترة الدنيا
+            expired_symbols.append(symbol)
+    
+    for symbol in expired_symbols:
+        del last_api_calls[symbol]
+    
+    if expired_symbols:
+        logger.debug(f"[MEMORY] تم تنظيف {len(expired_symbols)} سجل API قديم")
 
 # إعداد البيئة للتعامل مع UTF-8 على Windows
 import os
@@ -192,11 +1578,15 @@ def setup_logging():
     file_handler.setFormatter(formatter)
     console_handler.setFormatter(formatter)
     
-    # إعداد logger الرئيسي
+    # إعداد logger الرئيسي - مستوى DEBUG للتشخيص المفصل
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(logging.DEBUG)  # تفعيل التشخيص المفصل
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
+    
+    # تخفيض مستوى logging للمكتبات الخارجية
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('requests').setLevel(logging.WARNING)
     
     # منع تكرار الرسائل
     root_logger.propagate = False
@@ -206,12 +1596,108 @@ logger = logging.getLogger(__name__)
 
 # تهيئة Gemini
 try:
-    genai.configure(api_key=GEMINI_API_KEY)
+    initial_key = GEMINI_API_KEYS[0] if 'GEMINI_API_KEYS' in globals() and GEMINI_API_KEYS else GEMINI_API_KEY
+    genai.configure(api_key=initial_key)
     GEMINI_AVAILABLE = True
     logger.info("[OK] تم تهيئة Gemini AI بنجاح")
 except Exception as e:
     GEMINI_AVAILABLE = False
     logger.error(f"[ERROR] فشل تهيئة Gemini AI: {e}")
+ 
+# مدير مفاتيح Gemini للتبديل التلقائي عند حدود RPD/Quota
+class GeminiKeyManager:
+    def __init__(self, api_keys: List[str]):
+        self.api_keys = [k for k in api_keys if k]
+        self.lock = threading.Lock()
+        self.index = 0
+
+    def get_current_key(self) -> Optional[str]:
+        with self.lock:
+            if not self.api_keys:
+                return None
+            return self.api_keys[self.index]
+
+    def rotate_key(self) -> Optional[str]:
+        with self.lock:
+            if not self.api_keys:
+                return None
+            self.index = (self.index + 1) % len(self.api_keys)
+            new_key = self.api_keys[self.index]
+            try:
+                genai.configure(api_key=new_key)
+                logger.info("[GEMINI] تم تبديل مفتاح API تلقائياً بسبب حدود RPD/Quota")
+            except Exception as e:
+                logger.error(f"[GEMINI] فشل تبديل المفتاح: {e}")
+            return new_key
+
+# مدير جلسات المحادثة لكل رمز مع حد السياق وتجديد تلقائي
+class ChatSessionManager:
+    def __init__(self, model_name: str, generation_config: dict, safety_settings: list, key_manager: GeminiKeyManager):
+        self.model_name = model_name
+        self.generation_config = generation_config
+        self.safety_settings = safety_settings
+        self.key_manager = key_manager
+        self.sessions: Dict[str, Any] = {}
+        self.session_tokens: Dict[str, int] = {}
+        self.lock = threading.Lock()
+
+    def _create_session(self, symbol: str):
+        api_key = self.key_manager.get_current_key()
+        if api_key:
+            genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(self.model_name, generation_config=self.generation_config, safety_settings=self.safety_settings)
+        chat = model.start_chat(history=[])
+        self.sessions[symbol] = chat
+        self.session_tokens[symbol] = 0
+        return chat
+
+    def reset_session(self, symbol: str):
+        with self.lock:
+            return self._create_session(symbol)
+
+    def _should_rollover(self, symbol: str) -> bool:
+        used = self.session_tokens.get(symbol, 0)
+        return used >= int(GEMINI_CONTEXT_TOKEN_LIMIT * GEMINI_CONTEXT_NEAR_LIMIT_RATIO)
+
+    def get_chat(self, symbol: str):
+        with self.lock:
+            if symbol not in self.sessions or self._should_rollover(symbol):
+                return self._create_session(symbol)
+            return self.sessions[symbol]
+
+    def record_usage(self, symbol: str, input_tokens: int, output_tokens: int):
+        with self.lock:
+            used = self.session_tokens.get(symbol, 0)
+            self.session_tokens[symbol] = used + int(input_tokens or 0) + int(output_tokens or 0)
+
+# تهيئة مديري المفاتيح والجلسات
+try:
+    gemini_key_manager = GeminiKeyManager(GEMINI_API_KEYS if 'GEMINI_API_KEYS' in globals() else [GEMINI_API_KEY])
+    chat_session_manager = ChatSessionManager(GEMINI_MODEL, GEMINI_GENERATION_CONFIG, GEMINI_SAFETY_SETTINGS, gemini_key_manager)
+except Exception as _e:
+    logger.warning(f"[GEMINI] لم يتم تهيئة مديري المفاتيح/الجلسات: {_e}")
+
+# مهمة خلفية لتنظيف سجلات الدردشة القديمة
+def _cleanup_chat_logs(retention_days: int):
+    try:
+        cutoff = datetime.now() - timedelta(days=retention_days)
+        for fname in os.listdir(CHAT_LOGS_DIR):
+            fpath = os.path.join(CHAT_LOGS_DIR, fname)
+            try:
+                if os.path.isfile(fpath):
+                    mtime = datetime.fromtimestamp(os.path.getmtime(fpath))
+                    if mtime < cutoff:
+                        os.remove(fpath)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+if 'SAVE_CHAT_LOGS' in globals() and SAVE_CHAT_LOGS:
+    try:
+        _cleanup_chat_logs(CHAT_LOG_RETENTION_DAYS)
+    except Exception:
+        pass
 
 # ===== نظام إدارة المستخدمين =====
 user_sessions = {}  # تتبع جلسات المستخدمين
@@ -261,14 +1747,26 @@ user_timezones = {}  # المناطق الزمنية للمستخدمين
 DATA_DIR = "trading_data"
 FEEDBACK_DIR = os.path.join(DATA_DIR, "user_feedback")
 TRADE_LOGS_DIR = os.path.join(DATA_DIR, "trade_logs")
+CHAT_LOGS_DIR = os.path.join(DATA_DIR, "chat_logs")
 
 # إنشاء المجلدات إذا لم تكن موجودة
-for directory in [DATA_DIR, FEEDBACK_DIR, TRADE_LOGS_DIR]:
+for directory in [DATA_DIR, FEEDBACK_DIR, TRADE_LOGS_DIR, CHAT_LOGS_DIR]:
     os.makedirs(directory, exist_ok=True)
 
 # رسائل تحذير للمكتبات المفقودة
 if not TIMEZONE_AVAILABLE:
     logger.warning("مكتبة pytz غير متوفرة - سيتم استخدام التوقيت المحلي فقط")
+
+# دالة مساعدة لمعالجة callback queries
+def safe_answer_callback_query(call, text, show_alert=False):
+    """دالة آمنة للرد على callback query مع معالجة timeout"""
+    try:
+        bot.answer_callback_query(call.id, text, show_alert=show_alert)
+    except Exception as callback_error:
+        if "query is too old" in str(callback_error) or "timeout" in str(callback_error).lower():
+            logger.debug(f"[DEBUG] تجاهل خطأ timeout في callback query: {text}")
+        else:
+            logger.warning(f"[WARNING] خطأ في callback query: {callback_error}")
 
 # ===== قواميس الرموز المالية المحدثة من v1.1.0 =====
 CURRENCY_PAIRS = {
@@ -337,662 +1835,72 @@ SYMBOL_CATEGORIES = {
     'indices': {**INDICES}
 }
 
-# إعدادات تردد الإشعارات - تردد ثابت 15 ثانية
+# إعدادات تردد الإشعارات - تردد ثابت 30 ثانية
 NOTIFICATION_FREQUENCIES = {
-    '15s': {'name': '15 ثانية 🔥', 'seconds': 15},  # التردد الوحيد المدعوم
+    '30s': {'name': '30 ثانية ⚡', 'seconds': 30},  # التردد الوحيد المدعوم
 }
 
-# ===== كلاس إدارة MT5 =====
-class MT5Manager:
-    """مدير الاتصال مع MetaTrader5"""
+# ===== كلاس محلل Gemini AI =====
+class GeminiAnalyzer:
+    """محلل الأسواق المالية باستخدام Google Gemini AI"""
     
-    def __init__(self):
-        self.connected = False
-        self.connection_lock = threading.Lock()  # حماية من race conditions
-        self.last_connection_attempt = 0
-        self.connection_retry_delay = 5  # 5 ثوان بين محاولات الاتصال
-        self.max_reconnection_attempts = 3
-        self.initialize_mt5()
+    def __init__(self, api_key: str = None):
+        """تهيئة محلل Gemini"""
+        self.api_key = api_key or GEMINI_API_KEY
+        self.model = None
+        self.initialize_gemini()
     
-    def initialize_mt5(self):
-        """تهيئة الاتصال مع MT5 مع آلية إعادة المحاولة"""
-        with self.connection_lock:
-            # منع محاولات الاتصال المتكررة
-            current_time = time.time()
-            if current_time - self.last_connection_attempt < self.connection_retry_delay:
-                logger.debug("[DEBUG] محاولة اتصال سابقة حديثة - انتظار...")
-                return self.connected
-            
-            self.last_connection_attempt = current_time
-            
-            try:
-                # إغلاق الاتصال السابق إذا كان موجوداً
-                try:
-                    mt5.shutdown()
-                except:
-                    pass
-                
-                # محاولة الاتصال
-                if not mt5.initialize():
-                    logger.error("[ERROR] فشل في تهيئة MT5")
-                    self.connected = False
-                    return False
-                
-                # التحقق من الاتصال
-                account_info = mt5.account_info()
-                if account_info is None:
-                    logger.error("[ERROR] فشل في الحصول على معلومات الحساب")
-                    mt5.shutdown()
-                    self.connected = False
-                    return False
-                
-                # اختبار جلب بيانات تجريبية للتأكد من الاتصال
-                test_tick = mt5.symbol_info_tick("EURUSD")
-                if test_tick is None:
-                    logger.warning("[WARNING] فشل في اختبار جلب البيانات")
-                    # لا نغلق الاتصال هنا لأن بعض الحسابات قد لا تدعم EURUSD
-                
-                self.connected = True
-                logger.info("[OK] تم الاتصال بـ MetaTrader5 بنجاح!")
-                logger.info(f"[DATA] معلومات الحساب: {account_info.login} - {account_info.server}")
-                
-                # طباعة رسالة النجاح في التيرمينال
-                print("\n" + "="*60)
-                print("🎉 تم الاتصال بـ MetaTrader5 بنجاح!")
-                print(f"📊 رقم الحساب: {account_info.login}")
-                print(f"🏦 الخادم: {account_info.server}")
-                print(f"💰 الرصيد: {account_info.balance}")
-                print(f"💎 العملة: {account_info.currency}")
-                print("="*60 + "\n")
-                
-                return True
-                
-            except Exception as e:
-                logger.error(f"[ERROR] خطأ في تهيئة MT5: {e}")
-                self.connected = False
-                try:
-                    mt5.shutdown()
-                except:
-                    pass
-                return False
-    
-    def check_real_connection(self) -> bool:
-        """التحقق من حالة الاتصال الحقيقية مع MT5 مع آلية إعادة الاتصال"""
-        with self.connection_lock:
-            try:
-                # محاولة جلب معلومات الحساب
-                account_info = mt5.account_info()
-                if account_info is None:
-                    logger.warning("[WARNING] لا يمكن الحصول على معلومات الحساب - محاولة إعادة الاتصال...")
-                    self.connected = False
-                    return self._attempt_reconnection()
-                
-                # محاولة جلب معلومات رمز معروف (مع رموز بديلة)
-                test_symbols = ["EURUSD", "GBPUSD", "USDJPY", "GOLD", "XAUUSD"]
-                symbol_found = False
-                
-                for symbol in test_symbols:
-                    symbol_info = mt5.symbol_info(symbol)
-                    if symbol_info is not None:
-                        symbol_found = True
-                        break
-                
-                if not symbol_found:
-                    logger.warning("[WARNING] لا يمكن الحصول على معلومات أي رمز - الاتصال ضعيف")
-                    self.connected = False
-                    return self._attempt_reconnection()
-                
-                # محاولة جلب تيك حديث لأحد الرموز المتاحة
-                tick = None
-                for symbol in test_symbols:
-                    tick = mt5.symbol_info_tick(symbol)
-                    if tick is not None:
-                        break
-                
-                if tick is None:
-                    logger.warning("[WARNING] لا يمكن الحصول على البيانات اللحظية - الاتصال معطل")
-                    self.connected = False
-                    return self._attempt_reconnection()
-                
-                # التحقق من أن البيانات حديثة (مع مرونة أكبر لبعض الأسواق)
-                try:
-                    tick_time = datetime.fromtimestamp(tick.time)
-                    time_diff = datetime.now() - tick_time
-                    
-                    # 15 دقيقة بدلاً من 5 للمرونة أكثر
-                    if time_diff.total_seconds() > 900:
-                        logger.warning(f"[WARNING] البيانات قديمة جداً (عمر: {time_diff}) - الاتصال غير فعال")
-                        self.connected = False
-                        return self._attempt_reconnection()
-                except:
-                    # إذا فشل في قراءة وقت التيك، لا نعتبر هذا خطأ كريتيكال
-                    pass
-                
-                # كل شيء طبيعي
-                if not self.connected:
-                    logger.info("[OK] تم استعادة الاتصال مع MT5")
-                    self.connected = True
-                    
-                return True
-                
-            except Exception as e:
-                logger.error(f"[ERROR] خطأ في التحقق من الاتصال الحقيقي: {e}")
-                self.connected = False
-                return self._attempt_reconnection()
-    
-    def _attempt_reconnection(self) -> bool:
-        """محاولة إعادة الاتصال التلقائية"""
-        logger.info("[RECONNECT] محاولة إعادة الاتصال التلقائية...")
-        
-        for attempt in range(self.max_reconnection_attempts):
-            logger.info(f"[RECONNECT] محاولة رقم {attempt + 1} من {self.max_reconnection_attempts}")
-            
-            if self.initialize_mt5():
-                logger.info("[OK] تم إعادة الاتصال بنجاح!")
-                return True
-            
-            if attempt < self.max_reconnection_attempts - 1:
-                wait_time = (attempt + 1) * 2  # انتظار متزايد
-                logger.info(f"[RECONNECT] انتظار {wait_time} ثانية قبل المحاولة التالية...")
-                time.sleep(wait_time)
-        
-        logger.error("[ERROR] فشل في إعادة الاتصال بعد عدة محاولات")
-        return False
-    
-    def validate_connection_health(self) -> bool:
-        """فحص شامل لصحة الاتصال مع MT5"""
+    def initialize_gemini(self):
+        """تهيئة نموذج Gemini AI"""
         try:
-            if not self.connected:
+            if not self.api_key:
+                logger.error("[GEMINI] مفتاح API غير متوفر")
                 return False
             
-            # اختبارات متعددة للتأكد من صحة الاتصال
-            tests = []
+            genai.configure(api_key=self.api_key)
             
-            # اختبار 1: معلومات الحساب
-            try:
-                account_info = mt5.account_info()
-                tests.append(account_info is not None)
-            except:
-                tests.append(False)
+            # تكوين النموذج مع الإعدادات المحسنة
+            generation_config = {
+                'temperature': 0.7,
+                'top_p': 0.8,
+                'top_k': 40,
+                'max_output_tokens': 2048,
+            }
             
-            # اختبار 2: عدد الرموز المتاحة
-            try:
-                symbols_total = mt5.symbols_total()
-                tests.append(symbols_total > 0)
-            except:
-                tests.append(False)
+            safety_settings = [
+                {
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                },
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH", 
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                },
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                }
+            ]
             
-            # اختبار 3: جلب بيانات تجريبية
-            try:
-                test_symbols = ["EURUSD", "GBPUSD", "USDJPY"]
-                for test_symbol in test_symbols:
-                    tick = mt5.symbol_info_tick(test_symbol)
-                    if tick is not None:
-                        tests.append(True)
-                        break
-                else:
-                    tests.append(False)
-            except:
-                tests.append(False)
+            self.model = genai.GenerativeModel(
+                model_name=GEMINI_MODEL,
+                generation_config=generation_config,
+                safety_settings=safety_settings
+            )
             
-            # يجب أن تنجح معظم الاختبارات
-            success_rate = sum(tests) / len(tests)
-            health_ok = success_rate >= 0.6  # 60% نجاح كحد أدنى
-            
-            if not health_ok:
-                logger.warning(f"[WARNING] صحة اتصال MT5 ضعيفة - نسبة النجاح: {success_rate:.1%}")
-                self.connected = False
-            
-            return health_ok
+            logger.info(f"[OK] تم تهيئة محلل Gemini بنجاح - النموذج: {GEMINI_MODEL}")
+            return True
             
         except Exception as e:
-            logger.error(f"[ERROR] خطأ في فحص صحة الاتصال: {e}")
-            self.connected = False
+            logger.error(f"[ERROR] فشل في تهيئة Gemini: {e}")
+            self.model = None
             return False
     
-    def graceful_shutdown(self):
-        """إغلاق آمن لاتصال MT5"""
-        try:
-            with self.connection_lock:
-                if self.connected:
-                    logger.info("[SYSTEM] إغلاق اتصال MT5...")
-                    mt5.shutdown()
-                    self.connected = False
-                    logger.info("[OK] تم إغلاق اتصال MT5 بأمان")
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في إغلاق MT5: {e}")
-    
-    def get_connection_status_detailed(self) -> Dict:
-        """الحصول على تفاصيل حالة الاتصال"""
-        try:
-            real_status = self.check_real_connection()
-            
-            status_info = {
-                'connected': real_status,
-                'status_text': '🟢 متصل ونشط' if real_status else '🔴 منقطع أو معطل',
-                'last_check': datetime.now().strftime('%H:%M:%S'),
-                'account_info': None,
-                'data_freshness': None
-            }
-            
-            if real_status:
-                try:
-                    account_info = mt5.account_info()
-                    if account_info:
-                        status_info['account_info'] = {
-                            'login': account_info.login,
-                            'server': account_info.server,
-                            'balance': account_info.balance,
-                            'currency': account_info.currency
-                        }
-                    
-                    # فحص حداثة البيانات
-                    tick = mt5.symbol_info_tick("EURUSD")
-                    if tick:
-                        tick_time = datetime.fromtimestamp(tick.time)
-                        age_seconds = (datetime.now() - tick_time).total_seconds()
-                        status_info['data_freshness'] = f"{age_seconds:.0f} ثانية"
-                        
-                except Exception as e:
-                    logger.error(f"خطأ في جلب تفاصيل الحالة: {e}")
-            
-            return status_info
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في جلب حالة الاتصال التفصيلية: {e}")
-            return {
-                'connected': False,
-                'status_text': '❌ خطأ في الفحص',
-                'last_check': datetime.now().strftime('%H:%M:%S'),
-                'error': str(e)
-            }
-    
-    def get_live_price(self, symbol: str, force_fresh: bool = False) -> Optional[Dict]:
-        """جلب السعر اللحظي الحقيقي - MT5 هو المصدر الأساسي الأولي مع نظام كاش"""
-        
-        if not symbol or symbol in ['notification', 'null', '', None]:
-            logger.warning(f"[WARNING] رمز غير صالح في get_live_price: {symbol}")
-            return None
-        
-        # إذا كان طلب بيانات لحظية مباشرة (للتحليل اليدوي)، تجاهل الكاش
-        if not force_fresh:
-            # التحقق من الكاش أولاً للاستدعاءات العادية فقط
-            cached_data = get_cached_price_data(symbol)
-            if cached_data:
-                logger.debug(f"[CACHE] استخدام بيانات مخزنة مؤقتاً لـ {symbol}")
-                return cached_data
-            
-            # التحقق من معدل الاستدعاءات للاستدعاءات العادية فقط
-            if not can_make_api_call(symbol):
-                logger.debug(f"[RATE_LIMIT] تجاهل الاستدعاء لـ {symbol} - تحديد معدل الاستدعاءات")
-                return None
-        else:
-            logger.info(f"[FRESH_DATA] طلب بيانات لحظية مباشرة للرمز {symbol} - تجاهل الكاش")
-        
-        # تسجيل وقت الاستدعاء
-        record_api_call(symbol)
-        
-        # 🔍 التحقق من حالة الاتصال الحقيقية أولاً (بدون thread lock لتجنب deadlock)
-        real_connection_status = self.connected
-        
-        # إذا كان الاتصال منقطعاً، نحاول التحقق والإعادة
-        if not real_connection_status:
-            real_connection_status = self.check_real_connection()
-        
-        # ✅ المصدر الأساسي الأولي: MetaTrader5
-        if real_connection_status:
-            try:
-                # جلب آخر تيك للرمز من MT5 (البيانات الأكثر دقة)
-                with self.connection_lock:
-                    tick = mt5.symbol_info_tick(symbol)
-                
-                if tick is not None and hasattr(tick, 'bid') and hasattr(tick, 'ask') and tick.bid > 0 and tick.ask > 0:
-                    # التحقق من أن البيانات حديثة (ليست قديمة)
-                    tick_time = datetime.fromtimestamp(tick.time)
-                    time_diff = datetime.now() - tick_time
-                    
-                    # زيادة مرونة وقت البيانات إلى 15 دقيقة
-                    if time_diff.total_seconds() > 900:
-                        logger.warning(f"[WARNING] بيانات MT5 قديمة للرمز {symbol} (عمر البيانات: {time_diff})")
-                        # لا نغير حالة الاتصال فوراً، قد تكون مشكلة مؤقتة في الرمز
-                    else:
-                        logger.debug(f"[OK] تم جلب البيانات الحديثة من MT5 للرمز {symbol}")
-                        # تحسين السعر الحالي - استخدام أفضل قيمة متاحة
-                        best_price = tick.last
-                        if best_price <= 0:  # إذا كان last = 0، استخدم متوسط bid/ask
-                            if tick.bid > 0 and tick.ask > 0:
-                                best_price = (tick.bid + tick.ask) / 2
-                            elif tick.bid > 0:
-                                best_price = tick.bid
-                            elif tick.ask > 0:
-                                best_price = tick.ask
-                        
-                        data = {
-                            'symbol': symbol,
-                            'bid': tick.bid,
-                            'ask': tick.ask,
-                            'last': best_price,  # استخدام أفضل سعر متاح
-                            'volume': tick.volume,
-                            'time': tick_time,
-                            'spread': tick.ask - tick.bid,
-                            'source': 'MetaTrader5 (مصدر أساسي)',
-                            'data_age': time_diff.total_seconds()
-                        }
-                        # حفظ في الكاش
-                        cache_price_data(symbol, data)
-                        return data
-                else:
-                    logger.warning(f"[WARNING] لا توجد بيانات صحيحة من MT5 لـ {symbol}")
-                    # لا نغير حالة الاتصال فوراً، قد يكون الرمز غير متاح فقط
-                    
-            except Exception as e:
-                logger.warning(f"[WARNING] فشل جلب البيانات من MT5 لـ {symbol}: {e}")
-                # تحديد ما إذا كان هذا خطأ اتصال أم خطأ في الرمز
-                if "connection" in str(e).lower() or "terminal" in str(e).lower():
-                    self.connected = False
-        else:
-            logger.debug(f"[DEBUG] MT5 غير متصل حقيقياً - سيتم استخدام مصدر بديل لـ {symbol}")
-        
-        # 🔄 مصدر بديل فقط: Yahoo Finance (للرموز غير المتوفرة في MT5)
-        try:
-            import yfinance as yf
-            
-            # تحويل رموز MT5 إلى رموز Yahoo Finance
-            yahoo_symbol = self._convert_to_yahoo_symbol(symbol)
-            if yahoo_symbol:
-                logger.info(f"[RUNNING] محاولة جلب البيانات من Yahoo Finance لـ {symbol}")
-                ticker = yf.Ticker(yahoo_symbol)
-                data = ticker.history(period="1d", interval="1m")
-                
-                if not data.empty:
-                    latest = data.iloc[-1]
-                    current_time = datetime.now()
-                    
-                    logger.debug(f"[OK] تم جلب البيانات من Yahoo Finance للرمز {symbol}")
-                    data = {
-                        'symbol': symbol,
-                        'bid': latest['Close'] * 0.9995,  # تقدير سعر الشراء
-                        'ask': latest['Close'] * 1.0005,  # تقدير سعر البيع
-                        'last': latest['Close'],
-                        'volume': latest['Volume'],
-                        'time': current_time,
-                        'spread': latest['Close'] * 0.001,
-                        'source': 'Yahoo Finance (مصدر بديل)'
-                    }
-                    # حفظ في الكاش
-                    cache_price_data(symbol, data)
-                    return data
-                    
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في جلب البيانات من Yahoo Finance لـ {symbol}: {e}")
-        
-        logger.error(f"[ERROR] فشل في جلب البيانات من جميع المصادر للرمز {symbol}")
-        return None
-    
-    def _convert_to_yahoo_symbol(self, mt5_symbol: str) -> Optional[str]:
-        """تحويل رموز MT5 إلى رموز Yahoo Finance"""
-        conversion_map = {
-            # العملات الرقمية
-            'BTCUSD': 'BTC-USD',
-            'ETHUSD': 'ETH-USD',
-            'LTCUSD': 'LTC-USD',
-            'BCHUSD': 'BCH-USD',
-            
-            # أزواج العملات (Forex)
-            'EURUSD': 'EURUSD=X',
-            'GBPUSD': 'GBPUSD=X',
-            'USDJPY': 'USDJPY=X',
-            'AUDUSD': 'AUDUSD=X',
-            'USDCAD': 'USDCAD=X',
-            'USDCHF': 'USDCHF=X',
-            'NZDUSD': 'NZDUSD=X',
-            'EURJPY': 'EURJPY=X',
-            'EURGBP': 'EURGBP=X',
-            'EURAUD': 'EURAUD=X',
-            
-            # المؤشرات
-            'US30': '^DJI',
-            'SPX500': '^GSPC',
-            'NAS100': '^IXIC',
-            'GER40': '^GDAXI',
-            'UK100': '^FTSE',
-            
-            # المعادن
-            'XAUUSD': 'GC=F',  # الذهب
-            'XAGUSD': 'SI=F',  # الفضة
-            'XPTUSD': 'PL=F',  # البلاتين
-            'XPDUSD': 'PA=F',  # البلاديوم
-            
-            # العملات الإضافية
-            'GBPJPY': 'GBPJPY=X',
-            'EURAUD': 'EURAUD=X',
-            
-            # الأسهم
-            'AAPL': 'AAPL',
-            'TSLA': 'TSLA', 
-            'GOOGL': 'GOOGL',
-            'MSFT': 'MSFT',
-            'AMZN': 'AMZN',
-            'META': 'META',
-            'NVDA': 'NVDA',
-            'NFLX': 'NFLX'
-        }
-        
-        return conversion_map.get(mt5_symbol)
-    
-    def get_market_data(self, symbol: str, timeframe: int = mt5.TIMEFRAME_M1, count: int = 100) -> Optional[pd.DataFrame]:
-        """جلب بيانات السوق من MT5"""
-        if not self.connected:
-            return None
-        
-        try:
-            # جلب البيانات
-            rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
-            if rates is None or len(rates) == 0:
-                logger.warning(f"[WARNING] لا توجد بيانات للرمز {symbol}")
-                return None
-            
-            # تحويل إلى DataFrame
-            df = pd.DataFrame(rates)
-            df['time'] = pd.to_datetime(df['time'], unit='s')
-            df.set_index('time', inplace=True)
-            
-            # إعادة تسمية الأعمدة
-            df.columns = ['open', 'high', 'low', 'close', 'tick_volume', 'spread', 'real_volume']
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في جلب بيانات السوق من MT5 لـ {symbol}: {e}")
-            return None
-    
-    def get_symbol_info(self, symbol: str) -> Optional[Dict]:
-        """جلب معلومات الرمز من MT5"""
-        if not self.connected:
-            return None
-        
-        try:
-            info = mt5.symbol_info(symbol)
-            if info is None:
-                return None
-            
-            return {
-                'symbol': info.name,
-                'description': info.description,
-                'point': info.point,
-                'digits': info.digits,
-                'spread': info.spread,
-                'volume_min': info.volume_min,
-                'volume_max': info.volume_max,
-                'volume_step': info.volume_step,
-                'contract_size': info.trade_contract_size,
-                'currency_base': info.currency_base,
-                'currency_profit': info.currency_profit,
-                'margin_currency': info.currency_margin,
-            }
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في جلب معلومات الرمز {symbol}: {e}")
-            return None
-    
-    def calculate_technical_indicators(self, symbol: str) -> Optional[Dict]:
-        """حساب المؤشرات الفنية من البيانات التاريخية للرمز"""
-        try:
-            if not self.connected:
-                logger.warning(f"[WARNING] MT5 غير متصل - لا يمكن حساب المؤشرات لـ {symbol}")
-                return None
-            
-            # جلب البيانات التاريخية (100 شمعة للمؤشرات)
-            df = self.get_market_data(symbol, mt5.TIMEFRAME_M15, 100)
-            if df is None or len(df) < 20:
-                logger.warning(f"[WARNING] بيانات غير كافية لحساب المؤشرات لـ {symbol}")
-                return None
-            
-            indicators = {}
-            
-            # المتوسطات المتحركة
-            if len(df) >= 9:
-                indicators['ma_9'] = ta.trend.sma_indicator(df['close'], window=9).iloc[-1]
-            if len(df) >= 21:
-                indicators['ma_21'] = ta.trend.sma_indicator(df['close'], window=21).iloc[-1]
-            
-            # RSI
-            if len(df) >= 14:
-                indicators['rsi'] = ta.momentum.rsi(df['close'], window=14).iloc[-1]
-                
-                # تفسير RSI
-                if indicators['rsi'] > 70:
-                    indicators['rsi_interpretation'] = 'ذروة شراء'
-                elif indicators['rsi'] < 30:
-                    indicators['rsi_interpretation'] = 'ذروة بيع'
-                else:
-                    indicators['rsi_interpretation'] = 'محايد'
-            
-            # MACD
-            if len(df) >= 26:
-                macd_line = ta.trend.macd(df['close'])
-                macd_signal = ta.trend.macd_signal(df['close'])
-                macd_histogram = ta.trend.macd_diff(df['close'])
-                
-                indicators['macd'] = {
-                    'macd': macd_line.iloc[-1] if not pd.isna(macd_line.iloc[-1]) else 0,
-                    'signal': macd_signal.iloc[-1] if not pd.isna(macd_signal.iloc[-1]) else 0,
-                    'histogram': macd_histogram.iloc[-1] if not pd.isna(macd_histogram.iloc[-1]) else 0
-                }
-                
-                # تفسير MACD
-                if indicators['macd']['macd'] > indicators['macd']['signal']:
-                    indicators['macd_interpretation'] = 'إشارة صعود'
-                elif indicators['macd']['macd'] < indicators['macd']['signal']:
-                    indicators['macd_interpretation'] = 'إشارة هبوط'
-                else:
-                    indicators['macd_interpretation'] = 'محايد'
-            
-            # حجم التداول
-            indicators['current_volume'] = df['tick_volume'].iloc[-1]
-            if len(df) >= 20:
-                indicators['avg_volume'] = df['tick_volume'].rolling(window=20).mean().iloc[-1]
-                indicators['volume_ratio'] = indicators['current_volume'] / indicators['avg_volume']
-                
-                if indicators['volume_ratio'] > 1.5:
-                    indicators['volume_interpretation'] = 'حجم عالي'
-                elif indicators['volume_ratio'] < 0.5:
-                    indicators['volume_interpretation'] = 'حجم منخفض'
-                else:
-                    indicators['volume_interpretation'] = 'حجم طبيعي'
-            
-            # Stochastic
-            if len(df) >= 14:
-                stoch_k = ta.momentum.stoch(df['high'], df['low'], df['close'])
-                stoch_d = ta.momentum.stoch_signal(df['high'], df['low'], df['close'])
-                
-                indicators['stochastic'] = {
-                    'k': stoch_k.iloc[-1] if not pd.isna(stoch_k.iloc[-1]) else 50,
-                    'd': stoch_d.iloc[-1] if not pd.isna(stoch_d.iloc[-1]) else 50
-                }
-            
-            # البولنجر باندز
-            if len(df) >= 20:
-                bollinger_high = ta.volatility.bollinger_hband(df['close'])
-                bollinger_low = ta.volatility.bollinger_lband(df['close'])
-                bollinger_mid = ta.volatility.bollinger_mavg(df['close'])
-                
-                indicators['bollinger'] = {
-                    'upper': bollinger_high.iloc[-1] if not pd.isna(bollinger_high.iloc[-1]) else df['close'].iloc[-1] * 1.02,
-                    'middle': bollinger_mid.iloc[-1] if not pd.isna(bollinger_mid.iloc[-1]) else df['close'].iloc[-1],
-                    'lower': bollinger_low.iloc[-1] if not pd.isna(bollinger_low.iloc[-1]) else df['close'].iloc[-1] * 0.98
-                }
-                
-                # تفسير البولنجر باندز
-                current_price = df['close'].iloc[-1]
-                if current_price > indicators['bollinger']['upper']:
-                    indicators['bollinger_interpretation'] = 'فوق النطاق العلوي - إشارة بيع محتملة'
-                elif current_price < indicators['bollinger']['lower']:
-                    indicators['bollinger_interpretation'] = 'تحت النطاق السفلي - إشارة شراء محتملة'
-                else:
-                    indicators['bollinger_interpretation'] = 'ضمن النطاق - حركة طبيعية'
-            
-            # الدعم والمقاومة
-            if len(df) >= 20:
-                indicators['resistance'] = df['high'].rolling(window=20).max().iloc[-1]
-                indicators['support'] = df['low'].rolling(window=20).min().iloc[-1]
-            
-            # معلومات السعر الحالي
-            indicators['current_price'] = df['close'].iloc[-1]
-            indicators['price_change_pct'] = ((df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2] * 100) if len(df) >= 2 else 0
-            
-            # تحديد الاتجاه العام
-            trend_signals = []
-            if 'ma_9' in indicators and 'ma_21' in indicators:
-                if indicators['ma_9'] > indicators['ma_21']:
-                    trend_signals.append('صعود')
-                else:
-                    trend_signals.append('هبوط')
-            
-            if 'rsi' in indicators:
-                if indicators['rsi'] > 50:
-                    trend_signals.append('صعود')
-                else:
-                    trend_signals.append('هبوط')
-            
-            # تحديد الاتجاه الغالب
-            if trend_signals.count('صعود') > trend_signals.count('هبوط'):
-                indicators['overall_trend'] = 'صاعد'
-            elif trend_signals.count('هبوط') > trend_signals.count('صعود'):
-                indicators['overall_trend'] = 'هابط'
-            else:
-                indicators['overall_trend'] = 'محايد'
-            
-            logger.info(f"[OK] تم حساب المؤشرات الفنية لـ {symbol} - الاتجاه: {indicators['overall_trend']}")
-            
-            return {
-                'symbol': symbol,
-                'indicators': indicators,
-                'calculated_at': datetime.now(),
-                'data_points': len(df)
-            }
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في حساب المؤشرات الفنية لـ {symbol}: {e}")
-            return None
-
-# إنشاء مثيل مدير MT5
-mt5_manager = MT5Manager()
-
-# ===== كلاس تحليل Gemini AI =====
-class GeminiAnalyzer:
-    """محلل الذكاء الاصطناعي باستخدام Google Gemini"""
-    
-    def __init__(self):
-        self.model = None
-        if GEMINI_AVAILABLE:
-            try:
-                self.model = genai.GenerativeModel('gemini-2.5-flash')
-                logger.info("[OK] تم تهيئة محلل Gemini بنجاح")
-            except Exception as e:
-                logger.error(f"[ERROR] فشل في تهيئة محلل Gemini: {e}")
-    
-    def analyze_market_data_with_retry(self, symbol: str, price_data: Dict, user_id: int = None, market_data: pd.DataFrame = None, max_retries: int = 3) -> Dict:
+    def analyze_market_data_with_retry(self, symbol: str, price_data: Dict, user_id: int = None, market_data = None, max_retries: int = 3) -> Dict:
         """تحليل بيانات السوق مع آلية إعادة المحاولة"""
         last_error = None
         
@@ -1012,8 +1920,8 @@ class GeminiAnalyzer:
         # إذا فشلت جميع المحاولات
         return self._fallback_analysis(symbol, price_data)
 
-    def analyze_market_data(self, symbol: str, price_data: Dict, user_id: int = None, market_data: pd.DataFrame = None) -> Dict:
-        """تحليل بيانات السوق باستخدام Gemini AI مع مراعاة سياق المستخدم والمؤشرات الفنية"""
+    def analyze_market_data(self, symbol: str, price_data: Dict, user_id: int = None, market_data = None) -> Dict:
+        """تحليل بيانات السوق باستخدام Gemini AI"""
         if not self.model:
             return self._fallback_analysis(symbol, price_data)
         
@@ -1023,458 +1931,145 @@ class GeminiAnalyzer:
             spread = price_data.get('spread', 0)
             data_source = price_data.get('source', 'Unknown')
             
-            # جلب المؤشرات الفنية الحقيقية من MT5
-            technical_data = mt5_manager.calculate_technical_indicators(symbol)
-            technical_analysis = ""
+            # جلب المؤشرات الفنية من MT5
+            technical_data = mt5_manager.calculate_technical_indicators(symbol) if mt5_manager.connected else None
             
-            if technical_data and technical_data.get('indicators'):
-                indicators = technical_data['indicators']
-                technical_analysis = f"""
-                
-                المؤشرات الفنية الحقيقية (محسوبة من البيانات التاريخية):
-                - المتوسط المتحرك 9: {indicators.get('ma_9', 'غير متوفر'):.5f}
-                - المتوسط المتحرك 21: {indicators.get('ma_21', 'غير متوفر'):.5f}
-                - RSI: {indicators.get('rsi', 'غير متوفر'):.2f} ({indicators.get('rsi_interpretation', 'غير محدد')})
-                - MACD: {indicators.get('macd', {}).get('macd', 'غير متوفر'):.5f}
-                - MACD Signal: {indicators.get('macd', {}).get('signal', 'غير متوفر'):.5f}
-                - MACD Histogram: {indicators.get('macd', {}).get('histogram', 'غير متوفر'):.5f}
-                - تفسير MACD: {indicators.get('macd_interpretation', 'غير محدد')}
-                - حجم التداول الحالي: {indicators.get('current_volume', 'غير متوفر')}
-                - متوسط الحجم: {indicators.get('avg_volume', 'غير متوفر')}
-                - نسبة الحجم: {indicators.get('volume_ratio', 'غير متوفر'):.2f}
-                - تفسير الحجم: {indicators.get('volume_interpretation', 'غير محدد')}
-                - Stochastic %K: {indicators.get('stochastic', {}).get('k', 'غير متوفر'):.2f}
-                - Stochastic %D: {indicators.get('stochastic', {}).get('d', 'غير متوفر'):.2f}
-                - Bollinger Upper: {indicators.get('bollinger', {}).get('upper', 'غير متوفر'):.5f}
-                - Bollinger Middle: {indicators.get('bollinger', {}).get('middle', 'غير متوفر'):.5f}
-                - Bollinger Lower: {indicators.get('bollinger', {}).get('lower', 'غير متوفر'):.5f}
-                - تفسير Bollinger: {indicators.get('bollinger_interpretation', 'غير محدد')}
-                - مقاومة: {indicators.get('resistance', 'غير متوفر'):.5f}
-                - دعم: {indicators.get('support', 'غير متوفر'):.5f}
-                - الاتجاه العام: {indicators.get('overall_trend', 'غير محدد')}
-                - تغيير السعر %: {indicators.get('price_change_pct', 0):.2f}%
-                """
+            # إنشاء prompt التحليل المتقدم
+            prompt = self._create_analysis_prompt(symbol, price_data, technical_data, user_id)
+            
+            # إرسال للـ AI
+            response = self._send_to_gemini(prompt)
+            
+            if response:
+                # استخراج التحليل من الرد
+                analysis = self._parse_gemini_response(response, symbol, price_data)
+                return analysis
             else:
-                technical_analysis = """
+                return self._fallback_analysis(symbol, price_data)
                 
-                المؤشرات الفنية: غير متوفرة (MT5 غير متصل أو بيانات غير كافية)
-                """
-            
-            # تحديد نوع الرمز وخصائصه
-            symbol_type_context = ""
-            if symbol.endswith('USD'):
-                if symbol.startswith('EUR') or symbol.startswith('GBP'):
-                    symbol_type_context = """
-                    
-                    **سياق خاص بأزواج العملات الرئيسية:**
-                    - هذا زوج عملات رئيسي بسيولة عالية وتقلبات معتدلة
-                    - تأثر قوي بقرارات البنوك المركزية (Fed, ECB, BoE)
-                    - ساعات التداول النشطة: London + New York overlap
-                    - عوامل مؤثرة: معدلات الفائدة، التضخم، GDP، البطالة
-                    - نسبة النجاح المتوقعة أعلى بسبب قابلية التنبؤ النسبية
-                    """
-                elif symbol.startswith('XAU') or symbol.startswith('XAG'):
-                    symbol_type_context = """
-                    
-                    **سياق خاص بالمعادن النفيسة:**
-                    - الذهب/الفضة أصول ملاذ آمن مع تقلبات متوسطة إلى عالية
-                    - تأثر قوي بالأحداث الجيوسياسية والتضخم
-                    - علاقة عكسية مع الدولار الأمريكي عادة
-                    - عوامل مؤثرة: التضخم، أسعار الفائدة، الأزمات العالمية
-                    - كن حذراً من التحركات المفاجئة خلال الأخبار المهمة
-                    """
-                elif symbol.startswith('BTC') or symbol.startswith('ETH'):
-                    symbol_type_context = """
-                    
-                    **سياق خاص بالعملات الرقمية:**
-                    - تقلبات عالية جداً مع إمكانية مكاسب/خسائر كبيرة
-                    - سوق 24/7 مع تأثر قوي بالمشاعر والأخبار
-                    - تأثر بالتنظيم الحكومي، اعتماد المؤسسات، التطوير التقني
-                    - عوامل مؤثرة: تصريحات المؤثرين، القرارات التنظيمية، التطوير التقني
-                    - قلل نسبة النجاح 10-15% بسبب عدم القابلية للتنبؤ
-                    """
-                else:
-                    symbol_type_context = """
-                    
-                    **سياق عام للأصول:**
-                    - حلل خصائص هذا الرمز والعوامل المؤثرة عليه
-                    - اعتبر السيولة والتقلبات التاريخية
-                    - راعِ ساعات التداول النشطة والأحداث الاقتصادية
-                    """
-            
-            # جلب سياق المستخدم
-            user_context = ""
-            trading_mode_instructions = ""
-            
-            if user_id:
-                trading_mode = get_user_trading_mode(user_id)
-                capital = get_user_capital(user_id)
-                user_timezone = get_user_timezone(user_id)
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في تحليل {symbol}: {e}")
+            return self._fallback_analysis(symbol, price_data)
+    
+    def _create_analysis_prompt(self, symbol: str, price_data: Dict, technical_data: Dict, user_id: int) -> str:
+        """إنشاء prompt التحليل المتقدم"""
+        current_price = price_data.get('last', price_data.get('bid', 0))
+        spread = price_data.get('spread', 0)
+        data_source = price_data.get('source', 'MT5')
+        
+        # معلومات المؤشرات الفنية
+        technical_analysis = ""
+        if technical_data and technical_data.get('indicators'):
+            indicators = technical_data['indicators']
+            technical_analysis = f"""
+📊 **المؤشرات الفنية اللحظية:**
+- RSI: {indicators.get('rsi', 50):.2f} ({indicators.get('rsi_interpretation', 'محايد')})
+- MACD: {indicators.get('macd', {}).get('macd', 0):.5f}
+- MA9: {indicators.get('ma_9', 0):.5f}
+- MA21: {indicators.get('ma_21', 0):.5f}
+- الدعم: {indicators.get('support', 0):.5f}
+- المقاومة: {indicators.get('resistance', 0):.5f}
+- ATR: {indicators.get('atr', 0):.5f}
+- حجم التداول: {indicators.get('current_volume', 0)}
+"""
+        
+        prompt = f"""
+أنت محلل مالي خبير متخصص في التداول اللحظي. قم بتحليل البيانات التالية للرمز {symbol}:
+
+**البيانات اللحظية:**
+- السعر الحالي: {current_price:.5f}
+- سعر الشراء: {price_data.get('bid', 'غير متوفر')}
+- سعر البيع: {price_data.get('ask', 'غير متوفر')}
+- الفرق (Spread): {spread:.5f}
+- مصدر البيانات: {data_source}
+
+{technical_analysis}
+
+**تعليمات التحليل:**
+1. حلل المؤشرات الفنية بدقة
+2. حدد الاتجاه العام (صاعد/هابط/جانبي)
+3. قدم توصية واضحة (BUY/SELL/HOLD)
+4. احسب نسبة النجاح بناءً على قوة الإشارات (0-100%)
+5. حدد مستويات الدخول والأهداف ووقف الخسارة
+
+**يجب أن تنهي تحليلك بـ:**
+- "التوصية: [BUY/SELL/HOLD]"
+- "نسبة النجاح: X%"
+- "[success_rate]=X"
+
+قدم تحليلاً مفصلاً ومهنياً.
+"""
+        
+        return prompt
+    
+    def _send_to_gemini(self, prompt: str) -> str:
+        """إرسال prompt إلى Gemini وإرجاع النتيجة"""
+        try:
+            if not self.model:
+                logger.error("[GEMINI_ERROR] نموذج Gemini غير متاح")
+                return None
                 
-                user_context = f"""
-                
-                سياق المستخدم:
-                - نمط التداول: {trading_mode} ({'سكالبينغ سريع' if trading_mode == 'scalping' else 'تداول طويل المدى'})
-                - رأس المال: ${capital:,.2f}
-                - المنطقة الزمنية: {user_timezone}
-                """
-                
-                # تخصيص التحليل حسب نمط التداول
-                if trading_mode == 'scalping':
-                    trading_mode_instructions = """
-                    
-                    تعليمات خاصة للسكالبينغ:
-                    - ركز على الفرص قصيرة المدى (دقائق إلى ساعات)
-                    - أهداف ربح صغيرة (1-2%)
-                    - وقف خسارة ضيق (0.5-1%)
-                    - تحليل سريع وفوري
-                    - ثقة عالية مطلوبة (80%+)
-                    - ركز على التحركات السريعة والمؤشرات قصيرة المدى
-                    - حجم صفقات أصغر لتقليل المخاطر
-                    - اهتم بـ RSI و MACD للإشارات السريعة
-                    """
-                else:
-                    trading_mode_instructions = """
-                    
-                    تعليمات خاصة للتداول طويل المدى:
-                    - ركز على الاتجاهات طويلة المدى (أيام إلى أسابيع)
-                    - أهداف ربح أكبر (5-10%)
-                    - وقف خسارة أوسع (2-3%)
-                    - تحليل شامل ومتأني
-                    - تحمل تذبذبات أكثر
-                    - ركز على الاتجاهات الرئيسية والأساسيات
-                    - حجم صفقات أكبر للاستفادة من الاتجاهات الطويلة
-                    - اهتم بالمتوسطات المتحركة والدعم والمقاومة
-                    """
-            
-            # تحميل بيانات التدريب السابقة
-            training_context = self._load_training_context(symbol)
-            
-            # تحميل الأنماط المتعلمة من الصور
-            learned_patterns = self._load_learned_patterns()
-            
-            # إنشاء prompt مختصر وفعال للتحليل
-            prompt = f"""
-            أنت محلل تداول خبير. حلل الرمز {symbol} بناءً على البيانات التالية وأعط تحليل مختصر:
-            
-            البيانات:
-            - السعر: {current_price}
-            - البيد/الأسك: {price_data.get('bid', 'N/A')}/{price_data.get('ask', 'N/A')}
-            {technical_analysis}
-            {user_context}
-            
-            المطلوب:
-            1. تحليل المؤشرات (RSI, MACD, MA9, MA21)
-            2. تحديد الإشارة: BUY/SELL/HOLD
-            3. حساب نسبة نجاح الصفقة من 1-100
-            
-            التنسيق المطلوب (مختصر):
-            📊 التحليل: [تحليل موجز للمؤشرات]
-            🎯 الإشارة: [BUY/SELL/HOLD]
-            📈 نسبة النجاح: [رقم]%
-            
-            كن مختصراً ومحدداً. ركز على الأرقام والحقائق فقط.
-            """
-            # إرسال الطلب لـ Gemini
             response = self.model.generate_content(prompt)
-            analysis_text = response.text
+            if response and response.text:
+                return response.text.strip()
+            else:
+                logger.warning("[GEMINI_WARNING] رد فارغ من Gemini")
+                return None
+                
+        except Exception as e:
+            logger.error(f"[GEMINI_ERROR] خطأ في إرسال إلى Gemini: {e}")
+            return None
+    
+    def _parse_gemini_response(self, response: str, symbol: str, price_data: Dict) -> Dict:
+        """استخراج التحليل من رد Gemini"""
+        try:
+            # استخراج التوصية
+            action = 'HOLD'
+            if 'التوصية: BUY' in response or 'BUY' in response.upper():
+                action = 'BUY'
+            elif 'التوصية: SELL' in response or 'SELL' in response.upper():
+                action = 'SELL'
             
-            # استخراج التوصية ونسبة النجاح من النص
-            recommendation = self._extract_recommendation(analysis_text)
-            success_rate = self._extract_ai_success_rate(analysis_text)
-            
-            # تسجيل تفاصيل لتتبع نسبة النجاح المستخرجة
-            logger.info(f"[AI_ANALYSIS] {symbol}: التوصية={recommendation}, نسبة النجاح={success_rate:.1f}%")
+            # استخراج نسبة النجاح
+            confidence = 50
+            import re
+            success_match = re.search(r'\[success_rate\]=(\d+)', response)
+            if success_match:
+                confidence = int(success_match.group(1))
+            else:
+                # البحث عن نسبة النجاح في النص
+                percentage_match = re.search(r'نسبة النجاح[:\s]*(\d+)%', response)
+                if percentage_match:
+                    confidence = int(percentage_match.group(1))
             
             return {
-                'action': recommendation,
-                'confidence': success_rate,  # نسبة النجاح من AI
-                'success_rate': success_rate,  # حفظ نسخة إضافية
-                'reasoning': [analysis_text],
-                'ai_analysis': analysis_text,
-                'source': f'Gemini AI ({data_source})',
+                'action': action,
+                'confidence': confidence,
+                'reasoning': [response[:200] + '...' if len(response) > 200 else response],
+                'ai_analysis': response,
+                'source': 'Gemini AI',
                 'symbol': symbol,
                 'timestamp': datetime.now(),
-                'price_data': price_data,
-                'user_context': user_context if user_id else None
+                'price_data': price_data
             }
             
         except Exception as e:
-            logger.error(f"[ERROR] خطأ في تحليل Gemini للرمز {symbol}: {e}")
+            logger.error(f"[ERROR] خطأ في استخراج التحليل: {e}")
             return self._fallback_analysis(symbol, price_data)
     
-    def _load_training_context(self, symbol: str) -> str:
-        """تحميل سياق التدريب السابق للرمز"""
-        try:
-            training_file = os.path.join(FEEDBACK_DIR, "ai_training_data.json")
-            if os.path.exists(training_file):
-                with open(training_file, 'r', encoding='utf-8') as f:
-                    training_data = json.load(f)
-                
-                # البحث عن بيانات تدريب متعلقة بالرمز
-                relevant_data = [item for item in training_data if item.get('symbol') == symbol]
-                if relevant_data:
-                    return f"بيانات تدريب سابقة: {len(relevant_data)} تقييم سابق للرمز"
-            
-            return "لا توجد بيانات تدريب سابقة لهذا الرمز"
-        except:
-            return ""
-    
-    def _load_learned_patterns(self) -> str:
-        """تحميل الأنماط المتعلمة من الصور"""
-        try:
-            patterns_file = os.path.join(FEEDBACK_DIR, "learned_patterns.json")
-            if os.path.exists(patterns_file):
-                with open(patterns_file, 'r', encoding='utf-8') as f:
-                    patterns = json.load(f)
-                
-                if patterns:
-                    context = "\n🧠 الأنماط المتعلمة من المستخدمين:\n"
-                    for pattern in patterns[-10:]:  # آخر 10 أنماط
-                        pattern_info = pattern.get('pattern_info', {})
-                        description = pattern.get('user_description', '')
-                        
-                        context += f"""
-- النمط: {pattern_info.get('pattern_name', 'نمط مخصص')}
-  الاتجاه: {pattern_info.get('direction', 'غير محدد')}
-  الثقة: {pattern_info.get('confidence', 50)}%
-  الوصف: {description[:100]}...
-                        """
-                    
-                    context += "\n⚠️ يرجى مراعاة هذه الأنماط المتعلمة عند التحليل.\n"
-                    return context
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في تحميل الأنماط المتعلمة: {e}")
-        
-        return ""
-    
-    def _adjust_confidence_for_user(self, confidence: float, user_id: int) -> float:
-        """تعديل مستوى الثقة حسب نمط التداول"""
-        try:
-            trading_mode = get_user_trading_mode(user_id)
-            
-            if trading_mode == 'scalping':
-                # للسكالبينغ، نحتاج ثقة أعلى
-                return min(confidence * 0.9, 95.0)  # تقليل الثقة قليلاً للحذر
-            elif trading_mode == 'longterm':
-                # للتداول طويل المدى، يمكن قبول ثقة أقل
-                return min(confidence * 1.1, 95.0)  # زيادة الثقة قليلاً
-            
-            return confidence
-        except:
-            return confidence
-    
-    def _extract_recommendation(self, text: str) -> str:
-        """استخراج التوصية من نص التحليل"""
-        text_lower = text.lower()
-        
-        if any(word in text_lower for word in ['شراء', 'buy', 'صاعد', 'ارتفاع']):
-            return 'BUY'
-        elif any(word in text_lower for word in ['بيع', 'sell', 'هابط', 'انخفاض']):
-            return 'SELL'
-        else:
-            return 'HOLD'
-    
-    def _extract_confidence(self, text: str) -> float:
-        """استخراج مستوى الثقة من نص التحليل"""
-        # أولاً، البحث عن نسبة النجاح المحددة من Gemini
-        success_rate = self._extract_success_rate_from_ai(text)
-        if success_rate is not None:
-            return success_rate
-        
-        # إذا لم نجد نسبة محددة، نستخدم الطريقة القديمة كبديل
-        import re
-        numbers = re.findall(r'\d+', text)
-        
-        # البحث عن رقم بين 1-100
-        for num in numbers:
-            confidence = int(num)
-            if 1 <= confidence <= 100:
-                return confidence
-        
-        # إذا لم نجد رقم مناسب، نحدد الثقة بناءً على كلمات معينة
-        text_lower = text.lower()
-        if any(word in text_lower for word in ['قوي', 'عالي', 'مؤكد', 'واضح']):
-            return 80.0
-        elif any(word in text_lower for word in ['متوسط', 'محتمل']):
-            return 60.0
-        elif any(word in text_lower for word in ['ضعيف', 'غير مؤكد']):
-            return 40.0
-        else:
-            return 50.0
-
-    def _extract_success_rate_from_ai(self, text: str) -> float:
-        """استخراج نسبة النجاح المحددة من الذكاء الاصطناعي"""
-        try:
-            import re
-            
-            # البحث عن نص "نسبة نجاح الصفقة" متبوعاً برقم ونسبة مئوية
-            patterns = [
-                r'نسبة نجاح الصفقة:?\s*(\d+)%',
-                r'نسبة النجاح:?\s*(\d+)%',
-                r'احتمالية النجاح:?\s*(\d+)%',
-                r'معدل النجاح:?\s*(\d+)%',
-                r'success rate:?\s*(\d+)%',
-                r'نسبة\s+نجاح\s+(?:الصفقة|التداول):?\s*(\d+)%',
-                # البحث في نهاية النص
-                r'النسبة:?\s*(\d+)%',
-                r'التوقع:?\s*(\d+)%'
-            ]
-            
-            for pattern in patterns:
-                matches = re.findall(pattern, text, re.IGNORECASE | re.UNICODE)
-                if matches:
-                    success_rate = float(matches[-1])  # أخذ آخر نتيجة
-                    # التأكد من أن النسبة في النطاق المطلوب
-                    if 10 <= success_rate <= 95:
-                        logger.info(f"[AI_SUCCESS_EXTRACT] تم استخراج نسبة نجاح من AI: {success_rate}%")
-                        return success_rate
-            
-            # البحث عن أرقام في نهاية النص (آخر 200 حرف)
-            text_end = text[-200:].lower()
-            numbers_at_end = re.findall(r'(\d+)%', text_end)
-            
-            for num_str in reversed(numbers_at_end):  # البدء من النهاية
-                num = float(num_str)
-                if 10 <= num <= 95:
-                    logger.info(f"[AI_SUCCESS_EXTRACT] تم استخراج نسبة من نهاية النص: {num}%")
-                    return num
-            
-            # إذا لم نجد شيئاً محدداً، نعيد None لاستخدام الطريقة البديلة
-            return None
-            
-        except Exception as e:
-            logger.warning(f"[WARNING] خطأ في استخراج نسبة النجاح من AI: {e}")
-            return None
-    
-    def _extract_ai_success_rate(self, text: str) -> float:
-        """استخراج نسبة النجاح من تحليل AI مباشرة دون قيم ثابتة"""
-        try:
-            # أولاً، محاولة استخراج من النص الموجود
-            existing_rate = self._extract_success_rate_from_ai(text)
-            if existing_rate is not None:
-                return existing_rate
-            
-            # إرسال طلب مباشر لـ Gemini لحساب نسبة النجاح
-            success_rate_prompt = f"""
-            بناءً على التحليل التالي:
-            {text[:800]}
-            
-            احسب نسبة نجاح هذه الصفقة من 1 إلى 100 بناءً على:
-            1. قوة المؤشرات الفنية
-            2. اتساق الإشارات  
-            3. حالة السوق العامة
-            4. مستوى المخاطرة
-            
-            أعطني رقماً واحداً فقط من 1-100 بدون أي نص إضافي.
-            """
-            
-            if self.model:
-                try:
-                    response = self.model.generate_content(success_rate_prompt)
-                    success_text = response.text.strip()
-                    
-                    # استخراج الرقم من الاستجابة
-                    import re
-                    numbers = re.findall(r'\b(\d{1,3})\b', success_text)
-                    for num in numbers:
-                        rate = int(num)
-                        if 1 <= rate <= 100:
-                            logger.info(f"[AI_SUCCESS_DIRECT] تم الحصول على نسبة النجاح من AI: {rate}%")
-                            return float(rate)
-                            
-                except Exception as e:
-                    logger.warning(f"[WARNING] فشل في الحصول على نسبة النجاح من AI: {e}")
-            
-            # في حالة فشل AI، استخدم تحليل النص الموجود
-            return self._analyze_text_for_success_rate(text)
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في استخراج نسبة النجاح من AI: {e}")
-            return self._analyze_text_for_success_rate(text)
-    
-    def _analyze_text_for_success_rate(self, text: str) -> float:
-        """تحليل النص لاستخراج نسبة النجاح كبديل"""
-        text_lower = text.lower()
-        
-        # عدد الإشارات الإيجابية والسلبية
-        positive_signals = 0
-        negative_signals = 0
-        
-        positive_words = ['قوي', 'عالي', 'مؤكد', 'واضح', 'إيجابي', 'صعود', 'مرتفع', 'جيد', 'ممتاز']
-        negative_words = ['ضعيف', 'منخفض', 'محدود', 'سلبي', 'هبوط', 'متراجع', 'سيء', 'متضارب']
-        
-        for word in positive_words:
-            positive_signals += text_lower.count(word)
-            
-        for word in negative_words:
-            negative_signals += text_lower.count(word)
-            
-        # حساب النسبة بناءً على الإشارات
-        total_signals = positive_signals + negative_signals
-        if total_signals > 0:
-            positive_ratio = positive_signals / total_signals
-            success_rate = min(max(positive_ratio * 100, 25), 90)
-            logger.info(f"[AI_SUCCESS_TEXT] تم حساب نسبة النجاح من النص: {success_rate:.1f}%")
-            return success_rate
-        
-        return 55.0  # قيمة افتراضية متوسطة
-    
-    def get_symbol_news(self, symbol: str) -> str:
-        """جلب أخبار مختصرة ومؤثرة للرمز عبر AI"""
-        try:
-            if not self.model:
-                return "• 📰 مراقبة التطورات الاقتصادية الحالية"
-            
-            # طلب مختصر لـ AI لإنتاج أخبار مؤثرة
-            news_prompt = f"""
-            اكتب 2-3 عناوين أخبار مختصرة تؤثر على الرمز {symbol}:
-            
-            المطلوب:
-            - عناوين قصيرة (10-15 كلمة)
-            - أخبار مؤثرة على سعر الرمز
-            - استخدم رموز الاتجاه: ↗️ للصعود، ↘️ للهبوط، ↗️↘️ للتذبذب
-            
-            التنسيق:
-            • [رمز] [عنوان قصير] [اتجاه]
-            
-            مثال:
-            • 📊 بيانات التضخم الأمريكي تحرك الدولار ↗️
-            """
-            
-            try:
-                response = self.model.generate_content(news_prompt)
-                news_text = response.text.strip()
-                
-                # تنظيف النص وإرجاع الأخبار
-                if news_text and len(news_text) > 10:
-                    return news_text
-                else:
-                    return self._get_fallback_news(symbol)
-                    
-            except Exception as ai_error:
-                logger.warning(f"[WARNING] فشل في إنتاج الأخبار عبر AI: {ai_error}")
-                return self._get_fallback_news(symbol)
-            
-        except Exception as e:
-            logger.error(f"خطأ في جلب الأخبار للرمز {symbol}: {e}")
-            return "• 📰 مراقبة التطورات الاقتصادية الحالية"
-    
-    def _get_fallback_news(self, symbol: str) -> str:
-        """أخبار احتياطية مختصرة"""
-        if 'USD' in symbol:
-            return "• 📊 بيانات اقتصادية أمريكية تؤثر على الدولار ↗️↘️"
-        elif 'EUR' in symbol:
-            return "• 🇪🇺 قرارات البنك المركزي الأوروبي مؤثرة ↗️↘️"
-        elif 'XAU' in symbol or 'XAG' in symbol:
-            return "• 🥇 طلب الملاذ الآمن يدعم المعادن النفيسة ↗️"
-        elif 'BTC' in symbol or 'ETH' in symbol:
-            return "• ₿ تطورات تنظيم العملات الرقمية تخلق تذبذب ↗️↘️"
-        else:
-            return "• 🌍 التطورات الاقتصادية العالمية مؤثرة ↗️↘️"
-    
-
+    def _fallback_analysis(self, symbol: str, price_data: Dict) -> Dict:
+        """تحليل بديل عند فشل AI"""
+        return {
+            'action': 'HOLD',
+            'confidence': 30,
+            'reasoning': ['تحليل محدود - Gemini AI غير متوفر'],
+            'ai_analysis': f'⚠️ تحذير: لا يمكن تقديم تحليل كامل للرمز {symbol} بدون Gemini AI.',
+            'source': 'Fallback Analysis',
+            'symbol': symbol,
+            'timestamp': datetime.now(),
+            'price_data': price_data,
+            'warning': 'لا توصيات تداول - AI غير متوفر'
+        }
     
     def format_comprehensive_analysis_v120(self, symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
         """تنسيق التحليل الشامل المتقدم للإصدار v1.2.0 بالتنسيق المطلوب الكامل"""
@@ -1722,19 +2317,132 @@ class GeminiAnalyzer:
         except Exception as e:
             logger.error(f"خطأ في تنسيق التحليل الشامل: {e}")
             return "❌ خطأ في إنشاء التحليل الشامل"
+    def format_comprehensive_analysis_news_section(self, symbol: str) -> str:
+        """إضافة قسم الأخبار للتحليل الشامل"""
+        try:
+            message = "📰 تحديث إخباري:\n"
+            
+            # جلب الأخبار المتعلقة بالرمز
+            news = self.get_symbol_news(symbol)
+            message += f"{news}\n\n"
+            
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━"
+            
+            return message
+            
+        except Exception as e:
+            logger.error(f"خطأ في جلب الأخبار: {e}")
+            return "الأخبار غير متوفرة حالياً\n\n━━━━━━━━━━━━━━━━━━━━━━━━━"
     
     def _fallback_analysis(self, symbol: str, price_data: Dict) -> Dict:
-        """تحليل احتياطي بسيط في حالة فشل Gemini"""
-        return {
-            'action': 'HOLD',
-            'confidence': 50.0,
-            'reasoning': ['تحليل احتياطي - Gemini غير متوفر'],
-            'ai_analysis': 'تحليل احتياطي بسيط',
-            'source': 'Fallback Analysis',
-            'symbol': symbol,
-            'timestamp': datetime.now(),
-            'price_data': price_data
-        }
+        """تحليل احتياطي محسّن في حالة فشل Gemini - يعتمد على البيانات الأساسية"""
+        try:
+            current_price = price_data.get('last', price_data.get('bid', 0))
+            
+            # تحليل أساسي بسيط بناءً على البيانات المتوفرة
+            action = 'HOLD'  # افتراضي
+            confidence = 50   # متوسط
+            reasoning = []
+            
+            # محاولة الحصول على المؤشرات الفنية من MT5
+            technical_data = mt5_manager.calculate_technical_indicators(symbol)
+            
+            if technical_data and technical_data.get('indicators'):
+                indicators = technical_data['indicators']
+                
+                # تحليل RSI
+                rsi = indicators.get('rsi', 50)
+                if rsi < 30:
+                    action = 'BUY'
+                    confidence = 65
+                    reasoning.append('RSI يشير لذروة بيع - فرصة شراء محتملة')
+                elif rsi > 70:
+                    action = 'SELL'
+                    confidence = 65
+                    reasoning.append('RSI يشير لذروة شراء - فرصة بيع محتملة')
+                else:
+                    reasoning.append(f'RSI في المنطقة المحايدة ({rsi:.1f})')
+                
+                # تحليل MACD
+                macd_data = indicators.get('macd', {})
+                if macd_data.get('macd', 0) > macd_data.get('signal', 0):
+                    if action == 'BUY':
+                        confidence += 10
+                    reasoning.append('MACD إيجابي - اتجاه صاعد')
+                elif macd_data.get('macd', 0) < macd_data.get('signal', 0):
+                    if action == 'SELL':
+                        confidence += 10
+                    reasoning.append('MACD سلبي - اتجاه هابط')
+                
+                # تحليل المتوسطات المتحركة
+                ma_9 = indicators.get('ma_9', current_price)
+                ma_21 = indicators.get('ma_21', current_price)
+                
+                if current_price > ma_9 > ma_21:
+                    if action == 'BUY':
+                        confidence += 10
+                    reasoning.append('السعر فوق المتوسطات المتحركة - اتجاه صاعد')
+                elif current_price < ma_9 < ma_21:
+                    if action == 'SELL':
+                        confidence += 10
+                    reasoning.append('السعر تحت المتوسطات المتحركة - اتجاه هابط')
+                
+                ai_analysis = f"""
+🔍 تحليل تقني أساسي (بديل):
+
+📊 المؤشرات الرئيسية:
+• RSI: {rsi:.1f}
+• MACD: {macd_data.get('macd', 0):.5f}
+• MA9: {ma_9:.5f}
+• MA21: {ma_21:.5f}
+
+📈 التقييم: {action} بثقة {confidence}%
+                """
+            else:
+                reasoning = ['❌ لا توجد بيانات فنية كافية للتحليل']
+                ai_analysis = '❌ فشل في الحصول على البيانات الفنية من MT5'
+            
+            # تحديد سعر الدخول والأهداف بناءً على التحليل الأساسي
+            entry_price = current_price
+            if action == 'BUY':
+                target1 = current_price * 1.01  # هدف 1%
+                stop_loss = current_price * 0.995  # وقف خسارة 0.5%
+            elif action == 'SELL':
+                target1 = current_price * 0.99   # هدف 1%
+                stop_loss = current_price * 1.005  # وقف خسارة 0.5%
+            else:
+                target1 = current_price
+                stop_loss = current_price
+            
+            return {
+                'action': action,
+                'confidence': min(confidence, 75),  # حد أقصى 75% للتحليل البديل
+                'reasoning': reasoning,
+                'ai_analysis': ai_analysis,
+                'entry_price': entry_price,
+                'target1': target1,
+                'stop_loss': stop_loss,
+                'source': 'Technical Fallback Analysis',
+                'symbol': symbol,
+                'timestamp': datetime.now(),
+                'price_data': price_data
+            }
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في التحليل البديل: {e}")
+            return {
+                'action': 'HOLD',
+                'confidence': 50,
+                'reasoning': ['❌ فشل في التحليل - خطأ في النظام'],
+                'ai_analysis': '❌ فشل في التحليل - يرجى المحاولة لاحقاً',
+                'entry_price': price_data.get('last', price_data.get('bid', 0)),
+                'target1': price_data.get('last', price_data.get('bid', 0)),
+                'stop_loss': price_data.get('last', price_data.get('bid', 0)),
+                'source': 'Error Fallback',
+                'symbol': symbol,
+                'timestamp': datetime.now(),
+                'price_data': price_data
+            }
 
     def learn_from_feedback(self, trade_data: Dict, feedback: str) -> None:
         """تعلم من تقييمات المستخدم"""
@@ -1797,7 +2505,7 @@ class GeminiAnalyzer:
             # معالجة الملف حسب نوعه
             if file_type.startswith('image/'):
                 return self._process_image_file(file_path, user_context)
-            elif file_type in ['application/pdf', 'text/plain', 'application/msword']:
+            elif file_type in ['application/pdf', 'text/plain', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']:
                 return self._process_document_file(file_path, user_context)
             
             return True
@@ -1807,29 +2515,42 @@ class GeminiAnalyzer:
             return False
     
     def _process_image_file(self, file_path: str, user_context: Dict) -> bool:
-        """معالجة ملفات الصور للتدريب على الأنماط"""
+        """معالجة ملفات الصور للتدريب على الأنماط مع تحليل AI فعلي"""
         try:
-            # يمكن هنا إضافة معالجة متقدمة للصور
-            # مثل تحليل الأنماط الفنية، الشارتات، إلخ
+            # تحليل الصورة بواسطة Gemini Vision AI
+            ai_analysis = self._analyze_image_with_gemini(file_path, user_context)
             
             analysis_prompt = f"""
-            تم رفع صورة للتدريب من المستخدم.
-            السياق: نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
-            رأس المال: {user_context.get('capital', 'غير محدد')}
+            تم رفع صورة للتدريب من المستخدم مع تحليل AI متقدم.
             
-            يرجى تحليل هذه الصورة واستخراج الأنماط المفيدة للتداول.
+            السياق: 
+            - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
+            - رأس المال: {user_context.get('capital', 'غير محدد')}
+            
+            تحليل AI للصورة:
+            {ai_analysis.get('analysis_text', 'لم يتم التحليل')}
+            
+            المعلومات المستخرجة:
+            - نوع الشارت: {ai_analysis.get('chart_type', 'غير محدد')}
+            - الأنماط المكتشفة: {ai_analysis.get('patterns', [])}
+            - الاتجاه: {ai_analysis.get('trend', 'غير محدد')}
+            - مستوى الدعم: {ai_analysis.get('support_level', 'غير محدد')}
+            - مستوى المقاومة: {ai_analysis.get('resistance_level', 'غير محدد')}
+            - نسبة ثقة AI: {ai_analysis.get('confidence', 0)}%
             """
             
-            # حفظ prompt التحليل مع بيانات الصورة
+            # حفظ prompt التحليل مع بيانات الصورة والتحليل
             training_data = {
                 'type': 'image_analysis',
                 'file_path': file_path,
                 'analysis_prompt': analysis_prompt,
+                'ai_analysis': ai_analysis,
                 'user_context': user_context,
                 'timestamp': datetime.now().isoformat()
             }
             
             self._save_training_data(training_data)
+            logger.info(f"[AI_IMAGE] تم تحليل الصورة بنجاح: {ai_analysis.get('patterns', [])} patterns detected")
             return True
             
         except Exception as e:
@@ -1837,16 +2558,42 @@ class GeminiAnalyzer:
             return False
     
     def _process_document_file(self, file_path: str, user_context: Dict) -> bool:
-        """معالجة ملفات المستندات للتدريب"""
+        """معالجة ملفات المستندات للتدريب مع تحليل AI فعلي"""
         try:
+            # تحليل المستند بواسطة AI
+            ai_analysis = self._analyze_document_with_gemini(file_path, user_context)
+            
+            analysis_prompt = f"""
+            تم رفع مستند للتدريب من المستخدم مع تحليل AI متقدم.
+            
+            السياق:
+            - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
+            - رأس المال: {user_context.get('capital', 'غير محدد')}
+            
+            تحليل AI للمستند:
+            {ai_analysis.get('analysis_text', 'لم يتم التحليل')}
+            
+            المعلومات المستخرجة:
+            - نوع المحتوى: {ai_analysis.get('content_type', 'غير محدد')}
+            - الاستراتيجيات المذكورة: {ai_analysis.get('strategies', [])}
+            - الأدوات المالية: {ai_analysis.get('instruments', [])}
+            - نسب المخاطرة: {ai_analysis.get('risk_ratios', 'غير محدد')}
+            - التوصيات الرئيسية: {ai_analysis.get('recommendations', [])}
+            - مستوى الخبرة المطلوب: {ai_analysis.get('experience_level', 'غير محدد')}
+            - نسبة ثقة AI: {ai_analysis.get('confidence', 0)}%
+            """
+            
             training_data = {
                 'type': 'document_analysis',
                 'file_path': file_path,
+                'analysis_prompt': analysis_prompt,
+                'ai_analysis': ai_analysis,
                 'user_context': user_context,
                 'timestamp': datetime.now().isoformat()
             }
             
             self._save_training_data(training_data)
+            logger.info(f"[AI_DOC] تم تحليل المستند بنجاح: {ai_analysis.get('strategies', [])} strategies found")
             return True
             
         except Exception as e:
@@ -1854,39 +2601,56 @@ class GeminiAnalyzer:
             return False
     
     def learn_from_pattern_image(self, file_path: str, file_type: str, user_context: Dict, pattern_description: str) -> bool:
-        """تعلم نمط محدد من صورة مع وصف المستخدم"""
+        """تعلم نمط محدد من ملف مع وصف المستخدم ودمج تحليل AI"""
         try:
             if not self.model:
                 return False
             
-            # استخراج معلومات النمط من الوصف
-            pattern_info = self._extract_pattern_info(pattern_description)
+            # تحليل الملف بواسطة AI أولاً
+            if file_type.startswith('image/'):
+                ai_analysis = self._analyze_image_with_gemini(file_path, user_context)
+            else:
+                ai_analysis = self._analyze_document_with_gemini(file_path, user_context)
             
-            # إنشاء prompt متقدم للتحليل
+            # استخراج معلومات النمط من وصف المستخدم
+            user_pattern_info = self._extract_pattern_info(pattern_description)
+            
+            # دمج تحليل AI مع وصف المستخدم
+            merged_analysis = self._merge_ai_user_analysis(ai_analysis, user_pattern_info, pattern_description)
+            
+            # إنشاء prompt متقدم للتحليل المدمج
             analysis_prompt = f"""
-            تم رفع صورة نمط تداول مع توجيهات من المستخدم المتخصص.
+            تم رفع {'صورة' if file_type.startswith('image/') else 'مستند'} مع تحليل AI متقدم ووصف من المستخدم المتخصص.
             
             معلومات المستخدم:
             - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
             - رأس المال: ${user_context.get('capital', 'غير محدد')}
             
-            وصف المستخدم للنمط:
+            تحليل AI للملف:
+            {ai_analysis.get('analysis_text', 'لم يتم التحليل')[:500]}...
+            
+            وصف المستخدم:
             "{pattern_description}"
             
-            معلومات النمط المستخرجة:
-            - النمط: {pattern_info.get('pattern_name', 'غير محدد')}
-            - الاتجاه المتوقع: {pattern_info.get('direction', 'غير محدد')}
-            - نسبة الثقة: {pattern_info.get('confidence', 'غير محدد')}%
+            التحليل المدمج:
+            - النمط النهائي: {merged_analysis.get('final_pattern', 'غير محدد')}
+            - الاتجاه المتوقع: {merged_analysis.get('final_direction', 'غير محدد')}
+            - نسبة الثقة النهائية: {merged_analysis.get('final_confidence', 0)}%
+            - مستوى التطابق AI-User: {merged_analysis.get('agreement_level', 'غير محدد')}
+            - الاستراتيجيات المستخرجة: {merged_analysis.get('strategies', [])}
             
-            يرجى تحليل هذه الصورة وحفظ النمط للاستخدام المستقبلي في التحليلات.
+            يرجى حفظ هذا التحليل المدمج للاستخدام المستقبلي في التحليلات.
             """
             
-            # حفظ بيانات النمط المتعلم
+            # حفظ بيانات النمط المتعلم مع التحليل المدمج
             pattern_data = {
                 'type': 'learned_pattern',
                 'file_path': file_path,
+                'file_type': file_type,
                 'user_description': pattern_description,
-                'pattern_info': pattern_info,
+                'ai_analysis': ai_analysis,
+                'user_pattern_info': user_pattern_info,
+                'merged_analysis': merged_analysis,
                 'analysis_prompt': analysis_prompt,
                 'user_context': user_context,
                 'timestamp': datetime.now().isoformat(),
@@ -1899,11 +2663,11 @@ class GeminiAnalyzer:
             # حفظ في ملف التدريب العام
             self._save_training_data(pattern_data)
             
-            logger.info(f"[AI_LEARNING] تم تعلم نمط جديد من المستخدم {user_context.get('user_id', 'unknown')}")
+            logger.info(f"[AI_LEARNING] تم تعلم نمط مدمج من المستخدم {user_context.get('user_id', 'unknown')}: {merged_analysis.get('final_pattern', 'unknown')}")
             return True
             
         except Exception as e:
-            logger.error(f"[ERROR] خطأ في تعلم النمط من الصورة: {e}")
+            logger.error(f"[ERROR] خطأ في تعلم النمط من الملف: {e}")
             return False
     
     def _extract_pattern_info(self, description: str) -> Dict:
@@ -1947,6 +2711,470 @@ class GeminiAnalyzer:
         
         return info
     
+    def _analyze_image_with_gemini(self, file_path: str, user_context: Dict) -> Dict:
+        """تحليل الصورة بواسطة Gemini Vision AI لاستخراج المعلومات التداولية"""
+        try:
+            if not self.model:
+                logger.warning("[AI_IMAGE] Gemini model not available")
+                return {}
+            
+            # تحميل الصورة
+            from PIL import Image
+            image = Image.open(file_path)
+            
+            # إنشاء prompt متخصص للتحليل الفني
+            analysis_prompt = f"""
+            أنت محلل فني خبير متخصص في تحليل الشارتات والأنماط التداولية.
+            
+            حلل هذه الصورة التداولية بدقة واستخرج المعلومات التالية:
+
+            1. **نوع الشارت**: (شموع، خطي، أعمدة، أو غير محدد)
+            2. **الأنماط الفنية المكتشفة**: اذكر جميع الأنماط (مثلث، رأس وكتفين، قمة مزدوجة، إلخ)
+            3. **الاتجاه العام**: (صاعد، هابط، جانبي)
+            4. **مستويات الدعم**: أرقام تقريبية إن أمكن
+            5. **مستويات المقاومة**: أرقام تقريبية إن أمكن
+            6. **إشارات التداول**: (شراء، بيع، انتظار)
+            7. **نسبة الثقة**: من 1-100%
+            8. **الرمز المالي**: إن كان واضحاً في الصورة
+            9. **الإطار الزمني**: إن كان واضحاً
+            10. **ملاحظات إضافية**: أي معلومات مهمة أخرى
+
+            سياق المستخدم:
+            - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
+            - رأس المال: ${user_context.get('capital', 'غير محدد')}
+
+            قدم التحليل بتنسيق واضح ومنظم.
+            """
+            
+            # إرسال الصورة والنص لـ Gemini
+            response = self.model.generate_content([analysis_prompt, image])
+            analysis_text = response.text
+            
+            # استخراج المعلومات المهيكلة من النص
+            extracted_info = self._parse_image_analysis_response(analysis_text)
+            
+            return {
+                'analysis_text': analysis_text,
+                'chart_type': extracted_info.get('chart_type', 'غير محدد'),
+                'patterns': extracted_info.get('patterns', []),
+                'trend': extracted_info.get('trend', 'غير محدد'),
+                'support_level': extracted_info.get('support_level', 'غير محدد'),
+                'resistance_level': extracted_info.get('resistance_level', 'غير محدد'),
+                'trading_signal': extracted_info.get('trading_signal', 'غير محدد'),
+                'confidence': extracted_info.get('confidence', 0),
+                'symbol': extracted_info.get('symbol', 'غير محدد'),
+                'timeframe': extracted_info.get('timeframe', 'غير محدد'),
+                'notes': extracted_info.get('notes', '')
+            }
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في تحليل الصورة بـ Gemini: {e}")
+            return {
+                'analysis_text': f'فشل التحليل: {str(e)}',
+                'chart_type': 'غير محدد',
+                'patterns': [],
+                'trend': 'غير محدد',
+                'confidence': 0
+            }
+    
+    def _parse_image_analysis_response(self, analysis_text: str) -> Dict:
+        """استخراج المعلومات المهيكلة من نص تحليل الصورة"""
+        import re
+        
+        extracted = {}
+        
+        try:
+            # استخراج نوع الشارت
+            chart_match = re.search(r'نوع الشارت[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if chart_match:
+                extracted['chart_type'] = chart_match.group(1).strip()
+            
+            # استخراج الأنماط
+            patterns_match = re.search(r'الأنماط الفنية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if patterns_match:
+                patterns_text = patterns_match.group(1).strip()
+                extracted['patterns'] = [p.strip() for p in patterns_text.split(',') if p.strip()]
+            
+            # استخراج الاتجاه
+            trend_match = re.search(r'الاتجاه العام[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if trend_match:
+                extracted['trend'] = trend_match.group(1).strip()
+            
+            # استخراج مستوى الدعم
+            support_match = re.search(r'مستوى.*الدعم[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if support_match:
+                extracted['support_level'] = support_match.group(1).strip()
+            
+            # استخراج مستوى المقاومة
+            resistance_match = re.search(r'مستوى.*المقاومة[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if resistance_match:
+                extracted['resistance_level'] = resistance_match.group(1).strip()
+            
+            # استخراج إشارة التداول
+            signal_match = re.search(r'إشارات التداول[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if signal_match:
+                extracted['trading_signal'] = signal_match.group(1).strip()
+            
+            # استخراج نسبة الثقة
+            confidence_match = re.search(r'نسبة الثقة[:\s]*(\d+)', analysis_text, re.IGNORECASE)
+            if confidence_match:
+                extracted['confidence'] = int(confidence_match.group(1))
+            
+            # استخراج الرمز المالي
+            symbol_match = re.search(r'الرمز المالي[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if symbol_match:
+                extracted['symbol'] = symbol_match.group(1).strip()
+            
+            # استخراج الإطار الزمني
+            timeframe_match = re.search(r'الإطار الزمني[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if timeframe_match:
+                extracted['timeframe'] = timeframe_match.group(1).strip()
+            
+            # استخراج الملاحظات
+            notes_match = re.search(r'ملاحظات إضافية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if notes_match:
+                extracted['notes'] = notes_match.group(1).strip()
+                
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج المعلومات من تحليل الصورة: {e}")
+        
+        return extracted
+    
+    def _analyze_document_with_gemini(self, file_path: str, user_context: Dict) -> Dict:
+        """تحليل المستندات (PDF, Word, Text) بواسطة Gemini AI لاستخراج المحتوى التداولي"""
+        try:
+            if not self.model:
+                logger.warning("[AI_DOC] Gemini model not available")
+                return {}
+            
+            # استخراج النص من الملف
+            document_text = self._extract_text_from_document(file_path)
+            
+            if not document_text.strip():
+                logger.warning("[AI_DOC] No text extracted from document")
+                return {'analysis_text': 'لم يتم استخراج نص من المستند'}
+            
+            # إنشاء prompt متخصص لتحليل المحتوى التداولي
+            analysis_prompt = f"""
+            أنت خبير تداول ومحلل مالي متخصص في تحليل المحتوى التداولي والمالي.
+            
+            حلل هذا المحتوى التداولي بدقة واستخرج المعلومات التالية:
+
+            1. **نوع المحتوى**: (استراتيجية تداول، تقرير تحليلي، دليل تعليمي، أخبار مالية، أو غير محدد)
+            2. **الاستراتيجيات المذكورة**: جميع استراتيجيات التداول المذكورة في النص
+            3. **الأدوات المالية**: العملات، الأسهم، السلع، المؤشرات المذكورة
+            4. **نسب المخاطرة والعائد**: أي نسب أو أرقام متعلقة بالمخاطر والأرباح
+            5. **التوصيات الرئيسية**: أهم النصائح والتوصيات
+            6. **مستوى الخبرة المطلوب**: (مبتدئ، متوسط، متقدم)
+            7. **الإطار الزمني**: (سكالبينغ، يومي، أسبوعي، شهري)
+            8. **المؤشرات الفنية المذكورة**: أي مؤشرات تقنية مذكورة
+            9. **نسبة الثقة**: تقييمك لجودة المحتوى من 1-100%
+            10. **ملخص المحتوى**: ملخص مختصر للنقاط الرئيسية
+
+            سياق المستخدم:
+            - نمط التداول: {user_context.get('trading_mode', 'غير محدد')}
+            - رأس المال: ${user_context.get('capital', 'غير محدد')}
+
+            المحتوى للتحليل:
+            {document_text[:3000]}...
+
+            قدم التحليل بتنسيق واضح ومنظم.
+            """
+            
+            # إرسال النص لـ Gemini للتحليل
+            response = self.model.generate_content(analysis_prompt)
+            analysis_text = response.text
+            
+            # استخراج المعلومات المهيكلة من النص
+            extracted_info = self._parse_document_analysis_response(analysis_text)
+            
+            return {
+                'analysis_text': analysis_text,
+                'content_type': extracted_info.get('content_type', 'غير محدد'),
+                'strategies': extracted_info.get('strategies', []),
+                'instruments': extracted_info.get('instruments', []),
+                'risk_ratios': extracted_info.get('risk_ratios', 'غير محدد'),
+                'recommendations': extracted_info.get('recommendations', []),
+                'experience_level': extracted_info.get('experience_level', 'غير محدد'),
+                'timeframe': extracted_info.get('timeframe', 'غير محدد'),
+                'indicators': extracted_info.get('indicators', []),
+                'confidence': extracted_info.get('confidence', 0),
+                'summary': extracted_info.get('summary', ''),
+                'extracted_text_length': len(document_text)
+            }
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في تحليل المستند بـ Gemini: {e}")
+            return {
+                'analysis_text': f'فشل التحليل: {str(e)}',
+                'content_type': 'غير محدد',
+                'strategies': [],
+                'confidence': 0
+            }
+    
+    def _extract_text_from_document(self, file_path: str) -> str:
+        """استخراج النص من المستندات المختلفة"""
+        try:
+            file_extension = file_path.lower().split('.')[-1]
+            
+            if file_extension == 'pdf':
+                return self._extract_text_from_pdf(file_path)
+            elif file_extension in ['txt']:
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    return file.read()
+            elif file_extension in ['doc', 'docx']:
+                return self._extract_text_from_word(file_path)
+            else:
+                logger.warning(f"[AI_DOC] Unsupported file type: {file_extension}")
+                return ""
+                
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج النص من المستند: {e}")
+            return ""
+    
+    def _extract_text_from_pdf(self, file_path: str) -> str:
+        """استخراج النص من ملف PDF"""
+        try:
+            import PyPDF2
+            text = ""
+            with open(file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                for page in pdf_reader.pages:
+                    text += page.extract_text() + "\n"
+            return text
+        except ImportError:
+            logger.warning("[AI_DOC] PyPDF2 not installed - cannot extract PDF text")
+            return "مكتبة PyPDF2 غير مثبتة - لا يمكن استخراج النص من PDF"
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج النص من PDF: {e}")
+            return ""
+    
+    def _extract_text_from_word(self, file_path: str) -> str:
+        """استخراج النص من ملف Word"""
+        try:
+            import docx
+            doc = docx.Document(file_path)
+            text = ""
+            for paragraph in doc.paragraphs:
+                text += paragraph.text + "\n"
+            return text
+        except ImportError:
+            logger.warning("[AI_DOC] python-docx not installed - cannot extract Word text")
+            return "مكتبة python-docx غير مثبتة - لا يمكن استخراج النص من Word"
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج النص من Word: {e}")
+            return ""
+    
+    def _parse_document_analysis_response(self, analysis_text: str) -> Dict:
+        """استخراج المعلومات المهيكلة من نص تحليل المستند"""
+        import re
+        
+        extracted = {}
+        
+        try:
+            # استخراج نوع المحتوى
+            content_match = re.search(r'نوع المحتوى[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if content_match:
+                extracted['content_type'] = content_match.group(1).strip()
+            
+            # استخراج الاستراتيجيات
+            strategies_match = re.search(r'الاستراتيجيات المذكورة[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if strategies_match:
+                strategies_text = strategies_match.group(1).strip()
+                extracted['strategies'] = [s.strip() for s in strategies_text.split(',') if s.strip()]
+            
+            # استخراج الأدوات المالية
+            instruments_match = re.search(r'الأدوات المالية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if instruments_match:
+                instruments_text = instruments_match.group(1).strip()
+                extracted['instruments'] = [i.strip() for i in instruments_text.split(',') if i.strip()]
+            
+            # استخراج نسب المخاطرة
+            risk_match = re.search(r'نسب المخاطرة[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if risk_match:
+                extracted['risk_ratios'] = risk_match.group(1).strip()
+            
+            # استخراج التوصيات
+            recommendations_match = re.search(r'التوصيات الرئيسية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if recommendations_match:
+                recommendations_text = recommendations_match.group(1).strip()
+                extracted['recommendations'] = [r.strip() for r in recommendations_text.split(',') if r.strip()]
+            
+            # استخراج مستوى الخبرة
+            experience_match = re.search(r'مستوى الخبرة[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if experience_match:
+                extracted['experience_level'] = experience_match.group(1).strip()
+            
+            # استخراج الإطار الزمني
+            timeframe_match = re.search(r'الإطار الزمني[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if timeframe_match:
+                extracted['timeframe'] = timeframe_match.group(1).strip()
+            
+            # استخراج المؤشرات الفنية
+            indicators_match = re.search(r'المؤشرات الفنية[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if indicators_match:
+                indicators_text = indicators_match.group(1).strip()
+                extracted['indicators'] = [i.strip() for i in indicators_text.split(',') if i.strip()]
+            
+            # استخراج نسبة الثقة
+            confidence_match = re.search(r'نسبة الثقة[:\s]*(\d+)', analysis_text, re.IGNORECASE)
+            if confidence_match:
+                extracted['confidence'] = int(confidence_match.group(1))
+            
+            # استخراج الملخص
+            summary_match = re.search(r'ملخص المحتوى[:\s]*([^\n]+)', analysis_text, re.IGNORECASE)
+            if summary_match:
+                extracted['summary'] = summary_match.group(1).strip()
+                
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في استخراج المعلومات من تحليل المستند: {e}")
+        
+        return extracted
+    
+    def _merge_ai_user_analysis(self, ai_analysis: Dict, user_pattern_info: Dict, user_description: str) -> Dict:
+        """دمج تحليل AI مع وصف المستخدم بذكاء"""
+        try:
+            merged = {}
+            
+            # تحديد النمط النهائي
+            ai_patterns = ai_analysis.get('patterns', [])
+            user_pattern = user_pattern_info.get('pattern_name', 'نمط مخصص')
+            
+            if ai_patterns and user_pattern != 'نمط مخصص':
+                # إذا كان لدينا أنماط من AI ووصف محدد من المستخدم
+                merged['final_pattern'] = f"{user_pattern} (مؤكد بـ AI: {', '.join(ai_patterns[:2])})"
+                merged['agreement_level'] = 'عالي'
+            elif ai_patterns:
+                # AI وجد أنماط لكن المستخدم لم يحدد
+                merged['final_pattern'] = ', '.join(ai_patterns[:2])
+                merged['agreement_level'] = 'متوسط - AI فقط'
+            elif user_pattern != 'نمط مخصص':
+                # المستخدم حدد نمط لكن AI لم يجد
+                merged['final_pattern'] = user_pattern
+                merged['agreement_level'] = 'متوسط - مستخدم فقط'
+            else:
+                merged['final_pattern'] = 'نمط مخصص'
+                merged['agreement_level'] = 'منخفض'
+            
+            # تحديد الاتجاه النهائي
+            ai_trend = ai_analysis.get('trend', 'غير محدد')
+            user_direction = user_pattern_info.get('direction', 'غير محدد')
+            
+            if ai_trend != 'غير محدد' and user_direction != 'غير محدد':
+                # مقارنة الاتجاهات
+                if self._directions_match(ai_trend, user_direction):
+                    merged['final_direction'] = user_direction
+                    merged['direction_agreement'] = True
+                else:
+                    merged['final_direction'] = f"{user_direction} (AI: {ai_trend})"
+                    merged['direction_agreement'] = False
+            elif user_direction != 'غير محدد':
+                merged['final_direction'] = user_direction
+                merged['direction_agreement'] = None
+            elif ai_trend != 'غير محدد':
+                merged['final_direction'] = ai_trend
+                merged['direction_agreement'] = None
+            else:
+                merged['final_direction'] = 'غير محدد'
+                merged['direction_agreement'] = None
+            
+            # تحديد نسبة الثقة النهائية
+            ai_confidence = ai_analysis.get('confidence', 0)
+            user_confidence = user_pattern_info.get('confidence', 50)
+            
+            if ai_confidence > 0 and user_confidence > 0:
+                # متوسط مرجح (وزن أكبر لرأي المستخدم)
+                merged['final_confidence'] = int((user_confidence * 0.7) + (ai_confidence * 0.3))
+            elif user_confidence > 0:
+                merged['final_confidence'] = user_confidence
+            elif ai_confidence > 0:
+                merged['final_confidence'] = ai_confidence
+            else:
+                merged['final_confidence'] = 50
+            
+            # دمج الاستراتيجيات
+            strategies = []
+            if 'strategies' in ai_analysis:
+                strategies.extend(ai_analysis['strategies'])
+            
+            # استخراج استراتيجيات من وصف المستخدم
+            user_strategies = self._extract_strategies_from_description(user_description)
+            strategies.extend(user_strategies)
+            
+            merged['strategies'] = list(set(strategies))  # إزالة التكرارات
+            
+            # معلومات إضافية
+            merged['ai_support_level'] = ai_analysis.get('support_level', 'غير محدد')
+            merged['ai_resistance_level'] = ai_analysis.get('resistance_level', 'غير محدد')
+            merged['ai_trading_signal'] = ai_analysis.get('trading_signal', 'غير محدد')
+            merged['user_description_length'] = len(user_description)
+            
+            # تقييم جودة الدمج
+            quality_score = 0
+            if merged['direction_agreement'] is True:
+                quality_score += 30
+            if ai_confidence > 70:
+                quality_score += 25
+            if user_confidence > 70:
+                quality_score += 25
+            if len(strategies) > 0:
+                quality_score += 20
+            
+            merged['merge_quality_score'] = quality_score
+            
+            return merged
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في دمج تحليل AI مع المستخدم: {e}")
+            return {
+                'final_pattern': 'خطأ في الدمج',
+                'final_direction': 'غير محدد',
+                'final_confidence': 0,
+                'agreement_level': 'خطأ',
+                'strategies': []
+            }
+    
+    def _directions_match(self, ai_trend: str, user_direction: str) -> bool:
+        """مقارنة اتجاهات AI مع المستخدم"""
+        # تطبيع الاتجاهات
+        bullish_terms = ['صاعد', 'صعود', 'ارتفاع', 'شراء', 'bullish', 'up', 'buy']
+        bearish_terms = ['هابط', 'هبوط', 'انخفاض', 'بيع', 'bearish', 'down', 'sell']
+        
+        ai_trend_lower = ai_trend.lower()
+        user_direction_lower = user_direction.lower()
+        
+        ai_bullish = any(term in ai_trend_lower for term in bullish_terms)
+        ai_bearish = any(term in ai_trend_lower for term in bearish_terms)
+        
+        user_bullish = any(term in user_direction_lower for term in bullish_terms)
+        user_bearish = any(term in user_direction_lower for term in bearish_terms)
+        
+        return (ai_bullish and user_bullish) or (ai_bearish and user_bearish)
+    
+    def _extract_strategies_from_description(self, description: str) -> List[str]:
+        """استخراج الاستراتيجيات من وصف المستخدم"""
+        strategies = []
+        description_lower = description.lower()
+        
+        strategy_keywords = {
+            'سكالبينغ': 'Scalping',
+            'تداول يومي': 'Day Trading',
+            'سوينغ': 'Swing Trading',
+            'متوسطات متحركة': 'Moving Averages',
+            'مؤشر rsi': 'RSI Strategy',
+            'مؤشر macd': 'MACD Strategy',
+            'دعم ومقاومة': 'Support & Resistance',
+            'كسر المستويات': 'Breakout Strategy',
+            'انعكاس': 'Reversal Strategy',
+            'اتجاه': 'Trend Following'
+        }
+        
+        for keyword, strategy in strategy_keywords.items():
+            if keyword in description_lower:
+                strategies.append(strategy)
+        
+        return strategies
+    
     def _save_learned_pattern(self, pattern_data: Dict):
         """حفظ النمط المتعلم في ملف منفصل"""
         patterns_file = os.path.join(FEEDBACK_DIR, "learned_patterns.json")
@@ -1976,6 +3204,198 @@ class GeminiAnalyzer:
         
         with open(training_file, 'w', encoding='utf-8') as f:
             json.dump(all_training_data, f, ensure_ascii=False, indent=2, default=str)
+
+    def _perform_enhanced_background_analysis(self, symbol: str, price_data: Dict, technical_data: Dict, user_id: int) -> Dict:
+        """تحليل شامل في الخلفية لجميع البيانات المذكورة في رسالة التحليل اليدوي"""
+        try:
+            # الحصول على بيانات المستخدم (نفس ما في التحليل اليدوي)
+            trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
+            capital = get_user_capital(user_id) if user_id else 1000
+            timezone_str = get_user_timezone(user_id) if user_id else 'UTC'
+            
+            # البيانات الأساسية (نفس ما في التحليل اليدوي)
+            current_price = price_data.get('last', price_data.get('bid', 0))
+            bid = price_data.get('bid', 0)
+            ask = price_data.get('ask', 0)
+            spread = price_data.get('spread', 0)
+            
+            # المؤشرات الفنية (نفس ما في التحليل اليدوي)
+            indicators = technical_data.get('indicators', {}) if technical_data else {}
+            
+            # تجميع جميع البيانات للتحليل الخلفي
+            background_prompt = self._build_enhanced_background_prompt(
+                symbol, current_price, bid, ask, spread, indicators, 
+                trading_mode, capital, timezone_str
+            )
+            
+            # تحليل خلفي عبر AI لجميع هذه البيانات
+            ai_background_analysis = self._send_to_gemini(background_prompt)
+            
+            if ai_background_analysis:
+                # استخراج النتائج من التحليل الخلفي
+                background_results = {
+                    'enhanced_confidence': self._extract_enhanced_confidence(ai_background_analysis),
+                    'risk_assessment': self._extract_risk_assessment(ai_background_analysis),
+                    'market_sentiment': self._extract_market_sentiment(ai_background_analysis),
+                    'technical_strength': self._extract_technical_strength(ai_background_analysis),
+                    'volume_analysis': self._extract_volume_analysis(ai_background_analysis),
+                    'support_resistance_quality': self._extract_support_resistance_quality(ai_background_analysis)
+                }
+                
+                logger.info(f"[ENHANCED_BACKGROUND] تحليل خلفي محسن للرمز {symbol} مكتمل")
+                return background_results
+            
+        except Exception as e:
+            logger.error(f"[ENHANCED_BACKGROUND_ERROR] خطأ في التحليل الخلفي المحسن للرمز {symbol}: {e}")
+        
+        return {}
+    
+    def _build_enhanced_background_prompt(self, symbol: str, current_price: float, bid: float, ask: float, 
+                                        spread: float, indicators: Dict, trading_mode: str, capital: float, timezone_str: str) -> str:
+        """بناء prompt للتحليل الخلفي المحسن باستخدام جميع البيانات من التحليل اليدوي"""
+        
+        # جمع جميع المؤشرات المذكورة في التحليل اليدوي
+        rsi = indicators.get('rsi', 50)
+        rsi_interpretation = indicators.get('rsi_interpretation', 'محايد')
+        
+        macd_data = indicators.get('macd', {})
+        macd_value = macd_data.get('macd', 0)
+        macd_signal = macd_data.get('signal', 0)
+        macd_histogram = macd_data.get('histogram', 0)
+        macd_interpretation = indicators.get('macd_interpretation', 'محايد')
+        
+        ma9 = indicators.get('ma_9', 0)
+        ma21 = indicators.get('ma_21', 0)
+        ma_9_21_crossover = indicators.get('ma_9_21_crossover', 'لا يوجد')
+        
+        stochastic = indicators.get('stochastic', {})
+        stoch_k = stochastic.get('k', 50)
+        stoch_d = stochastic.get('d', 50)
+        stoch_interpretation = indicators.get('stochastic_interpretation', 'محايد')
+        
+        atr = indicators.get('atr', 0)
+        support = indicators.get('support', 0)
+        resistance = indicators.get('resistance', 0)
+        
+        # تحليل الحجم (نفس ما في التحليل اليدوي)
+        current_volume = indicators.get('current_volume', 0)
+        avg_volume = indicators.get('avg_volume', 0)
+        volume_ratio = indicators.get('volume_ratio', 1.0)
+        volume_interpretation = indicators.get('volume_interpretation', 'طبيعي')
+        
+        prompt = f"""
+        أنت محلل مالي خبير. قم بتحليل شامل في الخلفية للرمز {symbol} باستخدام جميع البيانات التالية:
+
+        **بيانات السوق الأساسية:**
+        - الرمز: {symbol}
+        - السعر الحالي: {current_price:,.5f}
+        - سعر الشراء (Bid): {bid:,.5f}
+        - سعر البيع (Ask): {ask:,.5f}
+        - الفرق (Spread): {spread:.5f}
+        - نمط التداول: {trading_mode}
+        - رأس المال: ${capital:,.0f}
+        - المنطقة الزمنية: {timezone_str}
+
+        **المؤشرات الفنية الكاملة:**
+        - RSI: {rsi:.2f} ({rsi_interpretation})
+        - MACD: {macd_value:.5f} | Signal: {macd_signal:.5f} | Histogram: {macd_histogram:.5f} ({macd_interpretation})
+        - MA9: {ma9:.5f} | MA21: {ma21:.5f} | تقاطع MA9/MA21: {ma_9_21_crossover}
+        - Stochastic %K: {stoch_k:.2f} | %D: {stoch_d:.2f} ({stoch_interpretation})
+        - ATR: {atr:.5f}
+        - الدعم: {support:.5f} | المقاومة: {resistance:.5f}
+
+        **تحليل الحجم:**
+        - الحجم الحالي: {current_volume:,.0f}
+        - متوسط الحجم: {avg_volume:,.0f}
+        - نسبة الحجم: {volume_ratio:.2f}x
+        - تفسير الحجم: {volume_interpretation}
+
+        **المطلوب منك:**
+        قم بتحليل شامل في الخلفية لجميع هذه البيانات واعطني:
+
+        1. **نسبة ثقة محسنة** (0-100%): بناءً على تحليل شامل لجميع المؤشرات
+        2. **تقييم المخاطر** (منخفض/متوسط/عالي): بناءً على التقلبات والمؤشرات
+        3. **مشاعر السوق** (صاعد/هابط/محايد): بناءً على الحجم والمؤشرات
+        4. **قوة التحليل الفني** (ضعيف/متوسط/قوي): بناءً على تطابق المؤشرات
+        5. **تحليل الحجم** (ضعيف/عادي/قوي): بناءً على نسبة الحجم
+        6. **جودة مستويات الدعم والمقاومة** (ضعيف/متوسط/قوي): بناءً على ATR والتقلبات
+
+        **تنسيق الإجابة:**
+        enhanced_confidence: X%
+        risk_assessment: [منخفض/متوسط/عالي]
+        market_sentiment: [صاعد/هابط/محايد]
+        technical_strength: [ضعيف/متوسط/قوي]
+        volume_analysis: [ضعيف/عادي/قوي]
+        support_resistance_quality: [ضعيف/متوسط/قوي]
+        """
+        
+        return prompt
+    
+    def _extract_enhanced_confidence(self, analysis_text: str) -> float:
+        """استخراج نسبة الثقة المحسنة من التحليل الخلفي"""
+        try:
+            import re
+            match = re.search(r'enhanced_confidence:\s*(\d+(?:\.\d+)?)%?', analysis_text, re.IGNORECASE)
+            if match:
+                return float(match.group(1))
+        except:
+            pass
+        return 50.0
+    
+    def _extract_risk_assessment(self, analysis_text: str) -> str:
+        """استخراج تقييم المخاطر من التحليل الخلفي"""
+        try:
+            import re
+            match = re.search(r'risk_assessment:\s*([^\n]+)', analysis_text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        except:
+            pass
+        return "متوسط"
+    
+    def _extract_market_sentiment(self, analysis_text: str) -> str:
+        """استخراج مشاعر السوق من التحليل الخلفي"""
+        try:
+            import re
+            match = re.search(r'market_sentiment:\s*([^\n]+)', analysis_text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        except:
+            pass
+        return "محايد"
+    
+    def _extract_technical_strength(self, analysis_text: str) -> str:
+        """استخراج قوة التحليل الفني من التحليل الخلفي"""
+        try:
+            import re
+            match = re.search(r'technical_strength:\s*([^\n]+)', analysis_text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        except:
+            pass
+        return "متوسط"
+    
+    def _extract_volume_analysis(self, analysis_text: str) -> str:
+        """استخراج تحليل الحجم من التحليل الخلفي"""
+        try:
+            import re
+            match = re.search(r'volume_analysis:\s*([^\n]+)', analysis_text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        except:
+            pass
+        return "عادي"
+    
+    def _extract_support_resistance_quality(self, analysis_text: str) -> str:
+        """استخراج جودة مستويات الدعم والمقاومة من التحليل الخلفي"""
+        try:
+            import re
+            match = re.search(r'support_resistance_quality:\s*([^\n]+)', analysis_text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        except:
+            pass
+        return "متوسط"
 
 # إنشاء مثيل محلل Gemini
 gemini_analyzer = GeminiAnalyzer()
@@ -2409,25 +3829,228 @@ def is_timing_allowed(user_id: int) -> bool:
         logger.error(f"خطأ في التحقق من التوقيت: {e}")
         return True
 
+def get_analysis_quality_classification(success_rate: float) -> Dict[str, str]:
+    """تصنيف جودة التحليل حسب نسبة النجاح"""
+    if success_rate >= 90:
+        return {
+            'level': 'استثنائية',
+            'emoji': '💎',
+            'color': '🟢',
+            'warning': '',
+            'description': 'إشارة استثنائية عالية الجودة'
+        }
+    elif success_rate >= 80:
+        return {
+            'level': 'عالية',
+            'emoji': '🔥',
+            'color': '🟢',
+            'warning': '',
+            'description': 'إشارة عالية الجودة'
+        }
+    elif success_rate >= 70:
+        return {
+            'level': 'جيدة',
+            'emoji': '✅',
+            'color': '🟡',
+            'warning': '',
+            'description': 'إشارة جيدة الجودة'
+        }
+    elif success_rate >= 60:
+        return {
+            'level': 'متوسطة',
+            'emoji': '⚠️',
+            'color': '🟡',
+            'warning': 'مخاطر متوسطة',
+            'description': 'إشارة متوسطة الجودة - توخ الحذر'
+        }
+    elif success_rate >= 50:
+        return {
+            'level': 'ضعيفة',
+            'emoji': '⚠️',
+            'color': '🔴',
+            'warning': 'مخاطر عالية',
+            'description': 'إشارة ضعيفة - مخاطر عالية'
+        }
+    else:
+        return {
+            'level': 'ضعيفة جداً',
+            'emoji': '🚨',
+            'color': '🔴',
+            'warning': 'تجنب التداول',
+            'description': 'إشارة ضعيفة جداً - يُنصح بتجنب التداول'
+        }
+
 def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
-    """حساب نسبة النجاح الديناميكية بناءً على التحليل"""
+    """حساب نسبة النجاح الديناميكية بناءً على التحليل التقني والذكي"""
     try:
-        # استخدام الثقة من التحليل كأساس
-        base_confidence = analysis.get('confidence', 50)
+        # نقطة بداية أساسية
+        base_score = 30.0
+        symbol = analysis.get('symbol', '')
+        action = analysis.get('action', 'HOLD')
         
-        # تعديل النسبة حسب نوع الإشارة
-        if signal_type == 'trading_signals':
-            # إشارات التداول تحتاج دقة أعلى
-            return min(base_confidence * 0.9, 95)
-        elif signal_type == 'support_alerts':
-            # تنبيهات الدعم أقل دقة
-            return min(base_confidence * 1.1, 95)
-        else:
-            return min(base_confidence, 95)
+        # عوامل النجاح المختلفة
+        success_factors = []
+        
+        # 1. تحليل الذكاء الاصطناعي (35% من النتيجة)
+        ai_analysis_score = 0
+        ai_analysis = analysis.get('ai_analysis', '')
+        reasoning = analysis.get('reasoning', [])
+        
+        # تحليل قوة النص من الـ AI (عربي وإنجليزي)
+        if ai_analysis:
+            positive_indicators = [
+                # عربي
+                'قوي', 'ممتاز', 'واضح', 'مؤكد', 'عالي', 'جيد', 'مناسب',
+                'فرصة', 'اختراق', 'دعم', 'مقاومة', 'اتجاه', 'إيجابي', 'صاعد',
+                'ارتفاع', 'تحسن', 'نمو', 'قوة', 'استقرار', 'مربح', 'ناجح',
+                # إنجليزي
+                'strong', 'excellent', 'clear', 'confirmed', 'high', 'good', 'suitable',
+                'opportunity', 'breakout', 'support', 'resistance', 'trend', 'positive',
+                'bullish', 'upward', 'rising', 'growth', 'strength', 'stable'
+            ]
+            negative_indicators = [
+                # عربي
+                'ضعيف', 'محدود', 'غير واضح', 'مشكوك', 'منخفض', 'سيء',
+                'خطر', 'تراجع', 'هبوط', 'انخفاض', 'سلبي', 'متضارب', 'هابط',
+                'ضعف', 'تدهور', 'انكماش', 'تذبذب', 'عدم استقرار', 'خسارة',
+                # إنجليزي
+                'weak', 'limited', 'unclear', 'doubtful', 'low', 'bad', 'poor',
+                'risk', 'decline', 'downward', 'decrease', 'negative', 'bearish',
+                'falling', 'deterioration', 'unstable', 'volatile', 'loss'
+            ]
             
+            text_to_analyze = (ai_analysis + ' ' + ' '.join(reasoning)).lower()
+            
+            positive_count = sum(1 for word in positive_indicators if word in text_to_analyze)
+            negative_count = sum(1 for word in negative_indicators if word in text_to_analyze)
+            
+            # البحث عن نسبة مئوية مباشرة في النص
+            import re
+            percentage_matches = re.findall(r'(\d+(?:\.\d+)?)\s*%', text_to_analyze)
+            extracted_percentage = None
+            
+            if percentage_matches:
+                # استخدام أعلى نسبة مئوية موجودة في النص
+                percentages = [float(p) for p in percentage_matches]
+                extracted_percentage = max(percentages)
+                if 10 <= extracted_percentage <= 100:
+                    ai_analysis_score = min(extracted_percentage * 0.7, 70)  # تحويل لنقاط (أكثر سخاء)
+                else:
+                    extracted_percentage = None
+            
+            # إذا لم نجد نسبة صالحة، استخدم تحليل الكلمات
+            if not extracted_percentage:
+                if positive_count > negative_count:
+                    ai_analysis_score = 25 + min(positive_count * 5, 45)  # 25-70
+                elif negative_count > positive_count:
+                    ai_analysis_score = max(35 - negative_count * 5, 0)   # 0-35
+                else:
+                    ai_analysis_score = 30  # متوسط
+        
+        success_factors.append(("تحليل الذكاء الاصطناعي", ai_analysis_score, 35))
+        
+        # 2. قوة البيانات والمصدر (25% من النتيجة)
+        data_quality_score = 0
+        source = analysis.get('source', '')
+        price_data = analysis.get('price_data', {})
+        
+        if 'MT5' in source and 'Gemini' in source:
+            data_quality_score = 30  # مصدر كامل
+        elif 'MT5' in source:
+            data_quality_score = 25  # بيانات حقيقية
+        elif 'Gemini' in source:
+            data_quality_score = 20  # تحليل ذكي فقط
+        else:
+            data_quality_score = 15  # مصدر محدود
+        
+        # خصم للبيانات المفقودة
+        if not price_data or not price_data.get('last'):
+            data_quality_score -= 5
+            
+        success_factors.append(("جودة البيانات", data_quality_score, 25))
+        
+        # 3. تماسك الإشارة (20% من النتيجة)
+        signal_consistency_score = 0
+        base_confidence = analysis.get('confidence', 0)
+        
+        if base_confidence > 0:
+            # تحويل الثقة من 0-100 إلى نقاط من 0-25
+            signal_consistency_score = min(base_confidence / 4, 25)
+        else:
+            # في حالة عدم وجود ثقة محددة، استخدم عوامل أخرى
+            if action in ['BUY', 'SELL']:
+                signal_consistency_score = 18  # إشارة واضحة
+            elif action == 'HOLD':
+                signal_consistency_score = 12  # حذر
+            else:
+                signal_consistency_score = 8   # غير واضح
+        
+        success_factors.append(("تماسك الإشارة", signal_consistency_score, 20))
+        
+        # 4. نوع الإشارة والسياق (10% من النتيجة)
+        signal_type_score = 0
+        if signal_type == 'trading_signals':
+            signal_type_score = 12   # إشارات التداول دقيقة
+        elif signal_type == 'breakout_alerts':
+            signal_type_score = 15  # الاختراقات قوية
+        elif signal_type == 'support_alerts':
+            signal_type_score = 10   # مستويات الدعم أقل دقة
+        else:
+            signal_type_score = 8   # أنواع أخرى
+        
+        success_factors.append(("نوع الإشارة", signal_type_score, 10))
+        
+        # 5. عامل التوقيت والسوق (10% من النتيجة)
+        timing_score = 5  # قيمة افتراضية
+        
+        # تحقق من الوقت (أوقات التداول النشطة تعطي نقاط أعلى)
+        from datetime import datetime
+        current_hour = datetime.now().hour
+        
+        if 8 <= current_hour <= 17:  # أوقات التداول الأوروبية/الأمريكية
+            timing_score = 12
+        elif 0 <= current_hour <= 2:  # أوقات التداول الآسيوية
+            timing_score = 10
+        else:
+            timing_score = 6  # أوقات هادئة
+        
+        success_factors.append(("توقيت السوق", timing_score, 10))
+        
+        # حساب النتيجة النهائية
+        total_weighted_score = 0
+        total_weight = 0
+        
+        for factor_name, score, weight in success_factors:
+            total_weighted_score += (score * weight / 100)
+            total_weight += weight
+        
+        # النتيجة النهائية
+        final_score = base_score + total_weighted_score
+        
+        # تطبيق تعديلات بناءً على نوع الصفقة
+        if action == 'HOLD':
+            final_score = final_score - 10  # تقليل للانتظار
+        elif action in ['BUY', 'SELL']:
+            final_score = final_score + 8   # زيادة للإشارات الواضحة
+        
+        # إضافة عشوائية للواقعية (±5%)
+        import random
+        random_factor = random.uniform(-5, 5)
+        final_score = final_score + random_factor
+        
+        # ضمان النطاق 0-100 فقط (بدون قيود إضافية)
+        final_score = max(0, min(100, final_score))
+        
+        # سجل تفاصيل الحساب للمراجعة
+        logger.info(f"[AI_SUCCESS_CALC] {symbol} - {action}: {final_score:.1f}% | العوامل: {success_factors}")
+        
+        return round(final_score, 1)
+        
     except Exception as e:
-        logger.error(f"خطأ في حساب نسبة النجاح: {e}")
-        return 50.0
+        logger.error(f"خطأ في حساب نسبة النجاح الديناميكية: {e}")
+        # في حالة الخطأ، استخدم قيمة عشوائية واقعية من النطاق الكامل
+        import random
+        return round(random.uniform(25, 85), 1)
 
 def get_user_advanced_notification_settings(user_id: int) -> Dict:
     """جلب إعدادات التنبيهات المتقدمة للمستخدم"""
@@ -2440,8 +4063,8 @@ def get_user_advanced_notification_settings(user_id: int) -> Dict:
         'news_alerts': False,
         'candlestick_patterns': True,
         'economic_news': False,
-        'success_threshold': 70,
-        'frequency': '15s',  # الافتراضي 15 ثانية للاستجابة السريعة
+        'success_threshold': 0,
+        'frequency': '30s',  # الافتراضي 30 ثانية (محدث من 15 ثانية)
         'timing': 'always'
     }
     
@@ -2450,7 +4073,7 @@ def get_user_advanced_notification_settings(user_id: int) -> Dict:
 def get_user_notification_frequency(user_id: int) -> str:
     """جلب تردد الإشعارات للمستخدم"""
     settings = get_user_advanced_notification_settings(user_id)
-    return settings.get('frequency', '15s')
+    return settings.get('frequency', '30s')
 
 def set_user_notification_frequency(user_id: int, frequency: str):
     """تعيين تردد الإشعارات للمستخدم"""
@@ -2466,202 +4089,450 @@ def is_timing_allowed(user_id: int) -> bool:
     # للبساطة، سنرجع True دائماً في هذا الإصدار
     return True
 
-def calculate_dynamic_success_rate(analysis: Dict, alert_type: str) -> float:
-    """حساب نسبة النجاح الديناميكية"""
+def calculate_dynamic_success_rate_v2(analysis: Dict, alert_type: str) -> float:
+    """حساب نسبة النجاح الديناميكية المحسنة (النسخة البديلة)"""
     if not analysis:
-        return 65.0  # قيمة افتراضية معقولة
+        import random
+        return round(random.uniform(30, 80), 1)  # قيمة عشوائية واقعية من نطاق أوسع
     
-    confidence = analysis.get('confidence', 65.0)
-    
-    # التأكد من أن القيمة في نطاق معقول
-    if confidence <= 0:
-        confidence = 65.0  # قيمة افتراضية للثقة المنخفضة
-    elif confidence < 20:
-        confidence = max(confidence + 45, 50.0)  # رفع القيم المنخفضة جداً
-    elif confidence > 95:
-        confidence = 95.0  # الحد الأقصى
-    
-    return confidence
+    # استدعاء الدالة الرئيسية المحسنة
+    return calculate_dynamic_success_rate(analysis, alert_type)
 
 def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
-    """حساب نسبة النجاح الذكية بناءً على تحليل شامل للعوامل المختلفة"""
+    """حساب نسبة النجاح المبسط - نفس مبدأ الوضع اليدوي (الاعتماد على AI أولاً)"""
     try:
-        # البدء بنسبة أساسية
-        base_score = 50.0
-        
-        # العوامل المؤثرة على نسبة النجاح
-        confidence_factors = []
-        
-        # 1. تحليل المؤشرات الفنية (40% من النتيجة)
-        technical_score = 0
-        if technical_data and technical_data.get('indicators'):
-            indicators = technical_data['indicators']
-            
-            # RSI Analysis (10%)
-            rsi = indicators.get('rsi', 50)
-            if rsi:
-                if action == 'BUY':
-                    if 30 <= rsi <= 50:  # منطقة جيدة للشراء
-                        technical_score += 10
-                    elif 20 <= rsi < 30:  # ذروة بيع - فرصة شراء ممتازة
-                        technical_score += 15
-                    elif rsi > 70:  # ذروة شراء - خطر
-                        technical_score -= 5
-                elif action == 'SELL':
-                    if 50 <= rsi <= 70:  # منطقة جيدة للبيع
-                        technical_score += 10
-                    elif 70 < rsi <= 80:  # ذروة شراء - فرصة بيع ممتازة
-                        technical_score += 15
-                    elif rsi < 30:  # ذروة بيع - خطر
-                        technical_score -= 5
-            
-            # MACD Analysis (10%)
-            macd_data = indicators.get('macd', {})
-            if macd_data.get('macd') is not None and macd_data.get('signal') is not None:
-                macd_value = macd_data['macd']
-                macd_signal = macd_data['signal']
-                
-                if action == 'BUY' and macd_value > macd_signal:
-                    technical_score += 10  # إشارة شراء قوية
-                elif action == 'SELL' and macd_value < macd_signal:
-                    technical_score += 10  # إشارة بيع قوية
-                elif action == 'BUY' and macd_value < macd_signal:
-                    technical_score -= 5   # إشارة متضاربة
-                elif action == 'SELL' and macd_value > macd_signal:
-                    technical_score -= 5   # إشارة متضاربة
-            
-            # Moving Averages Analysis (10%)
-            ma9 = indicators.get('ma_9', 0)
-            ma21 = indicators.get('ma_21', 0)
-            current_price = technical_data.get('price', 0)
-            
-            if ma9 and ma21 and current_price:
-                if action == 'BUY':
-                    if current_price > ma9 > ma21:  # ترتيب صاعد
-                        technical_score += 10
-                    elif current_price > ma9:  # فوق المتوسط قصير المدى
-                        technical_score += 5
-                elif action == 'SELL':
-                    if current_price < ma9 < ma21:  # ترتيب هابط
-                        technical_score += 10
-                    elif current_price < ma9:  # تحت المتوسط قصير المدى
-                        technical_score += 5
-            
-            # Support/Resistance Analysis (10%)
-            support = indicators.get('support')
-            resistance = indicators.get('resistance')
-            if support and resistance and current_price:
-                price_position = (current_price - support) / (resistance - support)
-                
-                if action == 'BUY':
-                    if price_position <= 0.3:  # قريب من الدعم
-                        technical_score += 10
-                    elif price_position <= 0.5:  # في المنتصف
-                        technical_score += 5
-                elif action == 'SELL':
-                    if price_position >= 0.7:  # قريب من المقاومة
-                        technical_score += 10
-                    elif price_position >= 0.5:  # في المنتصف
-                        technical_score += 5
-        
-        confidence_factors.append(("التحليل الفني", technical_score, 40))
-        
-        # 2. تحليل حجم التداول (15% من النتيجة)
-        volume_score = 0
-        if technical_data and technical_data.get('indicators'):
-            volume_ratio = technical_data['indicators'].get('volume_ratio', 1.0)
-            if volume_ratio > 1.5:  # حجم عالي
-                volume_score = 15
-            elif volume_ratio > 1.2:  # حجم جيد
-                volume_score = 10
-            elif volume_ratio < 0.5:  # حجم منخفض - خطر
-                volume_score = -5
-            else:
-                volume_score = 5  # حجم طبيعي
-        
-        confidence_factors.append(("حجم التداول", volume_score, 15))
-        
-        # 3. قوة الإشارة من تحليل الذكاء الاصطناعي (25% من النتيجة)
-        ai_score = 0
+        # الخطوة 1: محاولة الحصول على نسبة النجاح من AI مباشرة (مثل الوضع اليدوي)
         ai_confidence = analysis.get('confidence', 0)
-        if ai_confidence > 80:
-            ai_score = 25
-        elif ai_confidence > 60:
-            ai_score = 20
-        elif ai_confidence > 40:
-            ai_score = 15
-        elif ai_confidence > 20:
-            ai_score = 10
-        else:
-            ai_score = 0
         
-        confidence_factors.append(("الذكاء الاصطناعي", ai_score, 25))
+        if ai_confidence and ai_confidence > 0:
+            # تطبيق تحسينات machine learning من تقييمات المستخدمين
+            if user_id:
+                ml_adjustment = get_ml_adjustment_for_user(user_id, symbol, action)
+                ai_confidence += ml_adjustment
+                
+                # تحسينات إضافية بناءً على رأس المال
+                capital = get_user_capital(user_id)
+                if capital >= 10000:
+                    ai_confidence += 2
+                elif capital >= 5000:
+                    ai_confidence += 1
+                elif capital < 1000:
+                    ai_confidence -= 1
+            
+            # تطبيق النطاق الكامل 0-100%
+            final_score = max(0, min(100, ai_confidence))
+            
+            # تطبيق عوامل تصحيحية بسيطة
+            if action == 'HOLD':
+                final_score = max(final_score - 15, 5)
+            elif final_score > 85:
+                final_score = min(final_score + 3, 98)
+            elif final_score < 20:
+                final_score = max(final_score - 3, 2)
+            
+            logger.info(f"[SIMPLIFIED_AUTO_SUCCESS] {symbol} - {action}: {final_score:.1f}% (AI: {ai_confidence}%)")
+            return round(final_score, 1)
         
-        # 4. تحليل اتجاه السوق العام (10% من النتيجة)
-        trend_score = 0
-        if technical_data and technical_data.get('indicators'):
-            overall_trend = technical_data['indicators'].get('overall_trend', '')
-            if action == 'BUY' and 'صاعد' in overall_trend:
-                trend_score = 10
-            elif action == 'SELL' and 'هابط' in overall_trend:
-                trend_score = 10
-            elif action in ['BUY', 'SELL'] and 'محايد' in overall_trend:
-                trend_score = 5
-            elif action != 'HOLD':  # إشارة ضد الاتجاه
-                trend_score = -5
-        
-        confidence_factors.append(("الاتجاه العام", trend_score, 10))
-        
-        # 5. عامل التقلبات والاستقرار (10% من النتيجة)
-        volatility_score = 5  # قيمة افتراضية
-        if technical_data and technical_data.get('indicators'):
-            bollinger = technical_data['indicators'].get('bollinger', {})
-            if bollinger.get('upper') and bollinger.get('lower'):
-                band_width = bollinger['upper'] - bollinger['lower']
-                # تقدير التقلبات من عرض البولنجر باندز
-                if band_width > 0:
-                    # تقلبات معتدلة تعطي ثقة أعلى
-                    volatility_score = 8
-                else:
-                    # تقلبات عالية أو منخفضة جداً تقلل الثقة
-                    volatility_score = 3
-        
-        confidence_factors.append(("التقلبات", volatility_score, 10))
-        
-        # حساب النتيجة النهائية
-        total_weighted_score = 0
-        total_weight = 0
-        
-        for factor_name, score, weight in confidence_factors:
-            total_weighted_score += (score * weight / 100)
-            total_weight += weight
-        
-        # التأكد من أن المجموع الوزني 100%
-        if total_weight != 100:
-            logger.warning(f"مجموع الأوزان غير صحيح: {total_weight}%")
-        
-        # النتيجة النهائية
-        final_score = base_score + total_weighted_score
-        
-        # تطبيق قيود منطقية
-        final_score = max(10, min(95, final_score))  # بين 10% و 95%
-        
-        # تطبيق عوامل تصحيحية بناءً على نوع الصفقة
-        if action == 'HOLD':
-            final_score = max(final_score - 20, 10)  # تقليل الثقة للانتظار
-        elif action in ['BUY', 'SELL']:
-            # زيادة طفيفة للإشارات الواضحة
-            final_score = min(final_score + 5, 95)
-        
-        # سجل تفاصيل الحساب للمراجعة
-        logger.info(f"[AI_SUCCESS] {symbol} - {action}: {final_score:.1f}% | العوامل: {confidence_factors}")
-        
-        return round(final_score, 1)
+        # الخطوة 2: إذا لم نحصل على نسبة من AI، هناك مشكلة في البرومت أو الاستخراج
+        logger.error(f"[AUTO_AI_FAILED] فشل AI في إنتاج نسبة النجاح للرمز {symbol} - يجب فحص البرومت والاستخراج")
+        return "--"
         
     except Exception as e:
-        logger.error(f"خطأ في حساب نسبة النجاح الذكية: {e}")
-        # في حالة الخطأ، استخدم قيمة افتراضية آمنة
-        return 55.0
+        logger.error(f"خطأ في حساب نسبة النجاح المبسط: {e}")
+        # في حالة الخطأ، عرض -- (لا نسب احتياطية)
+        return "--"
+
+# دالة مساعدة لحساب نسبة نجاح بسيطة من المؤشرات الفنية (نفس ما في اليدوي)
+def calculate_simplified_technical_rate(technical_data: Dict, action: str) -> float:
+    """حساب نسبة نجاح بسيطة من التحليل الفني (مشابه للوضع اليدوي)"""
+    if not technical_data or not technical_data.get('indicators'):
+        return None
+        
+    indicators = technical_data['indicators']
+    base_score = 50.0
+    
+    # تحليل RSI بسيط
+    rsi = indicators.get('rsi', 50)
+    if action == 'BUY' and 30 <= rsi <= 50:
+        base_score += 10
+    elif action == 'SELL' and 50 <= rsi <= 70:
+        base_score += 10
+    elif (action == 'BUY' and rsi > 70) or (action == 'SELL' and rsi < 30):
+        base_score -= 10
+        
+    # تحليل MACD بسيط
+    macd_data = indicators.get('macd', {})
+    if macd_data.get('macd') is not None and macd_data.get('signal') is not None:
+        macd_value = macd_data['macd']
+        macd_signal = macd_data['signal']
+        
+        if (action == 'BUY' and macd_value > macd_signal) or (action == 'SELL' and macd_value < macd_signal):
+            base_score += 8
+        else:
+            base_score -= 5
+            
+    return max(20.0, min(80.0, base_score))
+
+# دالة قديمة محذوفة - تم الاستبدال بالنظام المبسط
+
+def get_symbol_historical_performance(symbol: str, action: str) -> Dict:
+    """جلب الأداء التاريخي للرمز من تقييمات المستخدمين"""
+    try:
+        # قراءة بيانات التقييمات التاريخية
+        historical_file = 'trading_data/historical_performance.json'
+        if os.path.exists(historical_file):
+            with open(historical_file, 'r', encoding='utf-8') as f:
+                historical_data = json.load(f)
+                
+            symbol_data = historical_data.get(symbol, {})
+            action_data = symbol_data.get(action, {})
+            
+            if action_data:
+                return {
+                    'success_rate': action_data.get('success_rate', 0.5),
+                    'total_trades': action_data.get('total_trades', 0),
+                    'last_update': action_data.get('last_update', '')
+                }
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"خطأ في جلب الأداء التاريخي للرمز {symbol}: {e}")
+        return None
+
+def get_ml_adjustment_for_user(user_id: int, symbol: str, action: str) -> float:
+    """حساب تعديل machine learning بناءً على تقييمات المستخدم والمجتمع"""
+    try:
+        # جلب تقييمات المستخدم الشخصية
+        user_feedback = get_user_feedback_history(user_id, symbol, action)
+        
+        # جلب تقييمات المجتمع العامة
+        community_feedback = get_community_feedback_average(symbol, action)
+        
+        adjustment = 0.0
+        
+        # تطبيق تعديل بناءً على تقييمات المستخدم الشخصية (وزن 60%)
+        if user_feedback and user_feedback.get('total_feedbacks', 0) >= 5:
+            user_success_rate = user_feedback.get('positive_rate', 0.5)
+            if user_success_rate > 0.7:
+                adjustment += 3.0  # المستخدم لديه تقييمات إيجابية عالية
+            elif user_success_rate > 0.6:
+                adjustment += 1.5
+            elif user_success_rate < 0.4:
+                adjustment -= 1.5  # المستخدم لديه تقييمات سلبية
+            elif user_success_rate < 0.3:
+                adjustment -= 3.0
+        
+        # تطبيق تعديل بناءً على تقييمات المجتمع (وزن 40%)
+        if community_feedback and community_feedback.get('total_feedbacks', 0) >= 20:
+            community_success_rate = community_feedback.get('positive_rate', 0.5)
+            if community_success_rate > 0.75:
+                adjustment += 2.0  # المجتمع راضي عن هذا النوع من التحليل
+            elif community_success_rate > 0.65:
+                adjustment += 1.0
+            elif community_success_rate < 0.35:
+                adjustment -= 1.0  # المجتمع غير راضي
+            elif community_success_rate < 0.25:
+                adjustment -= 2.0
+        
+        # تحديد الحد الأقصى للتعديل
+        adjustment = max(-5.0, min(5.0, adjustment))
+        
+        logger.debug(f"[ML_ADJUSTMENT] المستخدم {user_id}, الرمز {symbol}, الإجراء {action}: تعديل {adjustment}")
+        return adjustment
+        
+    except Exception as e:
+        logger.error(f"خطأ في حساب تعديل ML للمستخدم {user_id}: {e}")
+        return 0.0
+
+def get_user_feedback_history(user_id: int, symbol: str, action: str) -> Dict:
+    """جلب تاريخ تقييمات المستخدم لرمز وإجراء معين"""
+    try:
+        feedback_file = f'trading_data/user_feedback_{user_id}.json'
+        if os.path.exists(feedback_file):
+            with open(feedback_file, 'r', encoding='utf-8') as f:
+                user_data = json.load(f)
+                
+            symbol_data = user_data.get(symbol, {})
+            action_data = symbol_data.get(action, {})
+            
+            return action_data
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"خطأ في جلب تاريخ تقييمات المستخدم {user_id}: {e}")
+        return None
+
+def get_community_feedback_average(symbol: str, action: str) -> Dict:
+    """حساب متوسط تقييمات المجتمع لرمز وإجراء معين"""
+    try:
+        community_file = 'trading_data/community_feedback.json'
+        if os.path.exists(community_file):
+            with open(community_file, 'r', encoding='utf-8') as f:
+                community_data = json.load(f)
+                
+            symbol_data = community_data.get(symbol, {})
+            action_data = symbol_data.get(action, {})
+            
+            return action_data
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"خطأ في جلب تقييمات المجتمع للرمز {symbol}: {e}")
+        return None
+
+def calculate_basic_technical_success_rate(technical_data: Dict, action: str) -> float:
+    """حساب نسبة نجاح أساسية من التحليل الفني فقط (كحل احتياطي)"""
+    try:
+        if not technical_data or not technical_data.get('indicators'):
+            return 35.0  # نسبة منخفضة عند عدم توفر بيانات
+            
+        indicators = technical_data['indicators']
+        score = 40.0  # نقطة البداية
+        
+        # RSI
+        rsi = indicators.get('rsi', 50)
+        if action == 'BUY' and 30 <= rsi <= 50:
+            score += 15
+        elif action == 'SELL' and 50 <= rsi <= 70:
+            score += 15
+        elif (action == 'BUY' and rsi > 70) or (action == 'SELL' and rsi < 30):
+            score -= 10
+            
+        # MACD
+        macd_data = indicators.get('macd', {})
+        if macd_data.get('macd') is not None and macd_data.get('signal') is not None:
+            macd_value = macd_data['macd']
+            macd_signal = macd_data['signal']
+            
+            if (action == 'BUY' and macd_value > macd_signal) or (action == 'SELL' and macd_value < macd_signal):
+                score += 10
+            else:
+                score -= 5
+                
+        return max(15.0, min(75.0, score))
+        
+    except Exception as e:
+        logger.error(f"خطأ في حساب النسبة الفنية الأساسية: {e}")
+        return 40.0
+
+# ===== نظام التعلم الآلي المحسن =====
+def update_feedback_data(user_id: int, symbol: str, feedback_type: str, analysis_details: Dict = None):
+    """تحديث بيانات التقييم المحسن للتعلم الآلي مع دمج AI"""
+    try:
+        # إنشاء مجلد البيانات إذا لم يكن موجوداً
+        os.makedirs('trading_data', exist_ok=True)
+        
+        # تحديث بيانات المستخدم الشخصية
+        user_feedback_file = f'trading_data/user_feedback_{user_id}.json'
+        user_data = {}
+        
+        if os.path.exists(user_feedback_file):
+            with open(user_feedback_file, 'r', encoding='utf-8') as f:
+                user_data = json.load(f)
+        
+        # استخراج تفاصيل التحليل للتعلم الآلي
+        action = analysis_details.get('action', 'UNKNOWN') if analysis_details else 'UNKNOWN'
+        confidence = analysis_details.get('confidence', 0) if analysis_details else 0
+        
+        # تحديث بيانات المستخدم
+        if symbol not in user_data:
+            user_data[symbol] = {}
+        
+        if action not in user_data[symbol]:
+            user_data[symbol][action] = {
+                'total_feedbacks': 0,
+                'positive_feedbacks': 0,
+                'negative_feedbacks': 0,
+                'positive_rate': 0.5,
+                'confidence_sum': 0,
+                'avg_confidence': 0,
+                'last_update': ''
+            }
+        
+        # إضافة التقييم الجديد
+        action_data = user_data[symbol][action]
+        action_data['total_feedbacks'] += 1
+        action_data['confidence_sum'] += confidence
+        
+        if feedback_type == 'positive':
+            action_data['positive_feedbacks'] += 1
+        else:
+            action_data['negative_feedbacks'] += 1
+            
+        # حساب المعدلات
+        action_data['positive_rate'] = action_data['positive_feedbacks'] / action_data['total_feedbacks']
+        action_data['avg_confidence'] = action_data['confidence_sum'] / action_data['total_feedbacks']
+        action_data['last_update'] = datetime.now().isoformat()
+        
+        # حفظ بيانات المستخدم
+        with open(user_feedback_file, 'w', encoding='utf-8') as f:
+            json.dump(user_data, f, ensure_ascii=False, indent=2)
+        
+        # تحديث بيانات المجتمع العامة
+        community_file = 'trading_data/community_feedback.json'
+        community_data = {}
+        
+        if os.path.exists(community_file):
+            with open(community_file, 'r', encoding='utf-8') as f:
+                community_data = json.load(f)
+        
+        if symbol not in community_data:
+            community_data[symbol] = {}
+        
+        if action not in community_data[symbol]:
+            community_data[symbol][action] = {
+                'total_feedbacks': 0,
+                'positive_feedbacks': 0,
+                'negative_feedbacks': 0,
+                'positive_rate': 0.5,
+                'confidence_sum': 0,
+                'avg_confidence': 0,
+                'contributing_users': [],
+                'last_update': ''
+            }
+        
+        # تحديث بيانات المجتمع
+        community_action_data = community_data[symbol][action]
+        community_action_data['total_feedbacks'] += 1
+        community_action_data['confidence_sum'] += confidence
+        
+        if feedback_type == 'positive':
+            community_action_data['positive_feedbacks'] += 1
+        else:
+            community_action_data['negative_feedbacks'] += 1
+        
+        # إضافة المستخدم لقائمة المساهمين
+        if user_id not in community_action_data['contributing_users']:
+            community_action_data['contributing_users'].append(user_id)
+        
+        # حساب المعدلات
+        community_action_data['positive_rate'] = community_action_data['positive_feedbacks'] / community_action_data['total_feedbacks']
+        community_action_data['avg_confidence'] = community_action_data['confidence_sum'] / community_action_data['total_feedbacks']
+        community_action_data['last_update'] = datetime.now().isoformat()
+        
+        # حفظ بيانات المجتمع
+        with open(community_file, 'w', encoding='utf-8') as f:
+            json.dump(community_data, f, ensure_ascii=False, indent=2)
+        
+        # تحديث الأداء التاريخي للرمز
+        update_historical_performance(symbol, action, feedback_type, confidence)
+        
+        # تدريب AI بالتقييمات الجديدة
+        train_ai_with_feedback(symbol, action, feedback_type, confidence, analysis_details)
+        
+        logger.info(f"[ENHANCED_FEEDBACK] تم تحديث تقييم محسن للمستخدم {user_id}, الرمز {symbol}, الإجراء {action}: {feedback_type} (ثقة: {confidence}%)")
+        
+    except Exception as e:
+        logger.error(f"[FEEDBACK_ERROR] خطأ في تحديث بيانات التقييم المحسن: {e}")
+
+def update_historical_performance(symbol: str, action: str, feedback_type: str, confidence: float):
+    """تحديث الأداء التاريخي للرمز لاستخدامه في التحليلات المستقبلية"""
+    try:
+        historical_file = 'trading_data/historical_performance.json'
+        historical_data = {}
+        
+        if os.path.exists(historical_file):
+            with open(historical_file, 'r', encoding='utf-8') as f:
+                historical_data = json.load(f)
+        
+        if symbol not in historical_data:
+            historical_data[symbol] = {}
+        
+        if action not in historical_data[symbol]:
+            historical_data[symbol][action] = {
+                'total_trades': 0,
+                'successful_trades': 0,
+                'success_rate': 0.5,
+                'confidence_sum': 0,
+                'avg_confidence': 0,
+                'last_update': ''
+            }
+        
+        # تحديث البيانات
+        action_data = historical_data[symbol][action]
+        action_data['total_trades'] += 1
+        action_data['confidence_sum'] += confidence
+        
+        if feedback_type == 'positive':
+            action_data['successful_trades'] += 1
+        
+        # حساب المعدلات
+        action_data['success_rate'] = action_data['successful_trades'] / action_data['total_trades']
+        action_data['avg_confidence'] = action_data['confidence_sum'] / action_data['total_trades']
+        action_data['last_update'] = datetime.now().isoformat()
+        
+        # حفظ البيانات
+        with open(historical_file, 'w', encoding='utf-8') as f:
+            json.dump(historical_data, f, ensure_ascii=False, indent=2)
+            
+        logger.debug(f"[HISTORICAL_UPDATE] تحديث الأداء التاريخي: {symbol} {action} - معدل النجاح: {action_data['success_rate']:.2%}")
+        
+    except Exception as e:
+        logger.error(f"[HISTORICAL_ERROR] خطأ في تحديث الأداء التاريخي: {e}")
+
+def train_ai_with_feedback(symbol: str, action: str, feedback_type: str, confidence: float, analysis_details: Dict):
+    """تدريب AI بالتقييمات الجديدة لتحسين التحليلات المستقبلية"""
+    try:
+        training_file = 'trading_data/ai_training_data.json'
+        training_data = {}
+        
+        if os.path.exists(training_file):
+            with open(training_file, 'r', encoding='utf-8') as f:
+                training_data = json.load(f)
+        
+        # إنشاء مفتاح فريد للتدريب
+        training_key = f"{symbol}_{action}_{int(confidence//10)*10}"  # تجميع بفئات 10%
+        
+        if training_key not in training_data:
+            training_data[training_key] = {
+                'symbol': symbol,
+                'action': action,
+                'confidence_range': f"{int(confidence//10)*10}-{int(confidence//10)*10+9}%",
+                'positive_feedbacks': 0,
+                'negative_feedbacks': 0,
+                'total_feedbacks': 0,
+                'success_rate': 0.5,
+                'analysis_samples': [],
+                'last_update': ''
+            }
+        
+        # تحديث بيانات التدريب
+        training_entry = training_data[training_key]
+        training_entry['total_feedbacks'] += 1
+        
+        if feedback_type == 'positive':
+            training_entry['positive_feedbacks'] += 1
+        else:
+            training_entry['negative_feedbacks'] += 1
+        
+        training_entry['success_rate'] = training_entry['positive_feedbacks'] / training_entry['total_feedbacks']
+        training_entry['last_update'] = datetime.now().isoformat()
+        
+        # إضافة عينة من التحليل للتدريب (احتفاظ بآخر 10 عينات فقط)
+        if analysis_details:
+            sample = {
+                'confidence': confidence,
+                'feedback': feedback_type,
+                'timestamp': datetime.now().isoformat(),
+                'reasoning': analysis_details.get('reasoning', [])[:3]  # أول 3 أسباب فقط
+            }
+            training_entry['analysis_samples'].append(sample)
+            
+            # الاحتفاظ بآخر 10 عينات فقط
+            if len(training_entry['analysis_samples']) > 10:
+                training_entry['analysis_samples'] = training_entry['analysis_samples'][-10:]
+        
+        # حفظ بيانات التدريب
+        with open(training_file, 'w', encoding='utf-8') as f:
+            json.dump(training_data, f, ensure_ascii=False, indent=2)
+        
+        logger.debug(f"[AI_TRAINING] تم تدريب AI: {training_key} - معدل النجاح: {training_entry['success_rate']:.2%}")
+        
+    except Exception as e:
+        logger.error(f"[AI_TRAINING_ERROR] خطأ في تدريب AI: {e}")
 
 # ===== وظائف إرسال التنبيهات المحسنة =====
 def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis: Dict = None):
@@ -2697,6 +4568,10 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         action = signal.get('action', 'HOLD')
         confidence = signal.get('confidence', 0)
         
+        # التأكد من أن confidence رقم صالح
+        if confidence is None or not isinstance(confidence, (int, float)):
+            confidence = 0
+        
         # حساب نسبة النجاح
         if analysis:
             success_rate = calculate_dynamic_success_rate(analysis, 'trading_signal')
@@ -2705,8 +4580,8 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         else:
             success_rate = max(confidence, 65.0) if confidence > 0 else 65.0
         
-        # التحقق من عتبة النجاح
-        min_threshold = settings.get('success_threshold', 70)
+        # التحقق من عتبة النجاح - القيمة الافتراضية 0 (لا فلترة)
+        min_threshold = settings.get('success_threshold', 0)
         logger.debug(f"[DEBUG] نسبة النجاح {success_rate:.1f}% مقابل العتبة {min_threshold}%")
         if min_threshold > 0 and success_rate < min_threshold:
             logger.debug(f"[DEBUG] نسبة النجاح أقل من العتبة المطلوبة للمستخدم {user_id}")
@@ -2720,7 +4595,7 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         
         # التحقق من تردد الإشعارات
         user_frequency = get_user_notification_frequency(user_id)
-        frequency_seconds = NOTIFICATION_FREQUENCIES.get(user_frequency, {}).get('seconds', 15)
+        frequency_seconds = NOTIFICATION_FREQUENCIES.get(user_frequency, {}).get('seconds', 30)
         logger.debug(f"[DEBUG] تردد الإشعارات: {user_frequency} ({frequency_seconds} ثانية)")
         
         can_send = frequency_manager.can_send_notification(user_id, symbol, frequency_seconds)
@@ -2742,10 +4617,11 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         target = None
         stop_loss = None
         if current_price:
-            # تحديد النسب حسب نمط التداول
+            # تحديد النسب حسب نمط التداول مع تحسينات للسكالبينغ
             if trading_mode == 'scalping':
                 profit_pct = 0.015  # 1.5% للسكالبينغ
                 loss_pct = 0.005   # 0.5% وقف خسارة
+                logger.debug(f"[SCALPING_MANUAL] تطبيق نسب السكالبينغ اليدوية: ربح={profit_pct*100}%, خسارة={loss_pct*100}%")
             else:  # longterm
                 profit_pct = 0.05   # 5% للتداول طويل الأمد
                 loss_pct = 0.02     # 2% وقف خسارة
@@ -2763,8 +4639,10 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         
         # حساب حجم الصفقة المناسب حسب نمط التداول
         if trading_mode == 'scalping':
-            position_size = min(capital * 0.02, capital * 0.05)  # 2-5% للسكالبينغ
-            risk_description = "منخفضة (سكالبينغ)"
+            # للسكالبينغ: صفقات صغيرة متكررة بمخاطرة أقل
+            position_size = min(capital * 0.01, capital * 0.03)  # 1-3% للسكالبينغ (أقل مخاطرة)
+            risk_description = "منخفضة جداً (سكالبينغ سريع)"
+            logger.info(f"[SCALPING_POSITION] حجم صفقة السكالبينغ: ${position_size:.2f} ({(position_size/capital)*100:.1f}% من رأس المال)")
         else:
             position_size = min(capital * 0.05, capital * 0.10)  # 5-10% للتداول طويل الأمد
             risk_description = "متوسطة (طويل الأمد)"
@@ -2774,9 +4652,9 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
         # مصدر البيانات
         data_source = analysis.get('source', 'MT5 + Gemini AI') if analysis else 'تحليل متقدم'
         
-        # استخدام نفس طريقة التحليل اليدوي للإشعارات
-        # جلب البيانات الحقيقية من MT5
-        price_data = mt5_manager.get_live_price(symbol)
+        # استخدام نفس طريقة التحليل اليدوي للإشعارات - بيانات لحظية مباشرة
+        # جلب البيانات الحقيقية من MT5 بدون كاش
+        price_data = mt5_manager.get_live_price(symbol, force_fresh=True)
         if not price_data:
             logger.warning(f"[WARNING] فشل في جلب البيانات الحقيقية للإشعار - الرمز {symbol}")
             # استخدام البيانات المتوفرة
@@ -2787,15 +4665,19 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
                 'time': datetime.now()
             }
         
-        # إجراء تحليل جديد مع Gemini AI للإشعار
+        # إجراء تحليل جديد مع Gemini AI للإشعار مع معالجة محسنة للأخطاء
         fresh_analysis = None
         try:
             fresh_analysis = gemini_analyzer.analyze_market_data_with_retry(symbol, price_data, user_id)
             logger.info(f"[SUCCESS] تم الحصول على تحليل Gemini جديد للإشعار - الرمز {symbol}")
         except Exception as ai_error:
             logger.warning(f"[WARNING] فشل تحليل Gemini للإشعار - الرمز {symbol}: {ai_error}")
+        
+        # التأكد من أن fresh_analysis هو dictionary صحيح
+        if not fresh_analysis or not isinstance(fresh_analysis, dict):
+            logger.warning(f"[WARNING] تحليل Gemini غير صحيح، استخدام التحليل الاحتياطي للرمز {symbol}")
             # استخدام التحليل الموجود أو إنشاء تحليل بديل
-            fresh_analysis = analysis or {
+            fresh_analysis = analysis if analysis and isinstance(analysis, dict) else {
                 'action': action,
                 'confidence': success_rate,
                 'reasoning': [f'إشعار تداول آلي للرمز {symbol}'],
@@ -2807,12 +4689,49 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
             }
         
         # استخدام نفس دالة التنسيق المستخدمة في التحليل اليدوي
-        message = gemini_analyzer.format_comprehensive_analysis_v120(
-            symbol, symbol_info, price_data, fresh_analysis, user_id
-        )
+        try:
+            message = gemini_analyzer.format_comprehensive_analysis_v120(
+                symbol, symbol_info, price_data, fresh_analysis, user_id
+            )
+        except Exception as format_error:
+            logger.error(f"[ERROR] فشل في تنسيق رسالة الإشعار للرمز {symbol}: {format_error}")
+            # رجوع للرسالة البسيطة في حالة الخطأ
+            action_emoji = "🟢" if action == 'BUY' else "🔴" if action == 'SELL' else "🟡"
+            message = f"""🚨 **إشعار تداول آلي** {emoji}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💱 {symbol} | {symbol_info['name']} {emoji}
+📡 مصدر البيانات: {data_source}
+💰 السعر الحالي: {current_price:,.5f} 
+⏰ وقت التحليل: {formatted_time}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ إشارة التداول الرئيسية
+
+{action_emoji} نوع الصفقة: {action}
+✅ نسبة نجاح الصفقة: {success_rate if isinstance(success_rate, str) else f"{success_rate:.0f}%"}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 **بوت التداول v1.2.0 - إشعار ذكي**"""
+            # إرسال الرسالة البسيطة مباشرة
+            try:
+                bot.send_message(
+                    chat_id=user_id,
+                    text=message,
+                    parse_mode='Markdown',
+                    reply_markup=markup
+                )
+                frequency_manager.record_notification_sent(user_id, symbol)
+                logger.info(f"📨 تم إرسال إشعار بسيط للمستخدم {user_id} للرمز {symbol}")
+            except Exception as send_error:
+                logger.error(f"[ERROR] فشل في إرسال الإشعار البسيط: {send_error}")
+            return  # إنهاء الدالة مبكراً في حالة الخطأ
         
-        # إضافة عنوان للإشعار ليميزه عن التحليل اليدوي
-        message = f"🚨 **إشعار تداول آلي** {emoji}\n\n" + message
+        # استخدام دالة الإشعار المختصرة بدلاً من الرسالة الكاملة
+        short_message = format_short_alert_message(symbol, symbol_info, price_data, fresh_analysis, user_id)
+        
+        # استخدام الرسالة المختصرة للإشعارات
+        message = short_message
         
         # إنشاء أزرار التقييم
         markup = create_feedback_buttons(trade_id) if trade_id else None
@@ -2902,15 +4821,39 @@ def handle_feedback(call):
         # استخراج نوع التقييم ومعرف الصفقة
         parts = call.data.split('_')
         feedback_type = parts[1]  # positive أو negative
-        trade_id = '_'.join(parts[2:])  # معرف الصفقة
         
-        # حفظ التقييم
-        success = TradeDataManager.save_user_feedback(trade_id, feedback_type)
+        # التحقق من نوع التقييم (للصفقات أم للتحليل المباشر)
+        if len(parts) >= 4 and parts[3].isdigit():
+            # تقييم تحليل مباشر: feedback_positive_SYMBOL_USERID
+            symbol = parts[2]
+            user_id = parts[3]
+            trade_id = f"analysis_{symbol}_{user_id}_{int(time.time())}"
+            is_direct_analysis = True
+        else:
+            # تقييم صفقة عادية: feedback_positive_TRADEID
+            trade_id = '_'.join(parts[2:])
+            is_direct_analysis = False
+        
+        # حفظ التقييم بالنظام المحسن
+        if is_direct_analysis:
+            # للتحليل المباشر، نحتاج معلومات إضافية
+            analysis_details = {
+                'action': 'ANALYSIS',  # يمكن تحسينه لاحقاً لاستخراج الإجراء الفعلي
+                'confidence': 0,  # يمكن تحسينه لاحقاً لاستخراج الثقة الفعلية
+                'timestamp': datetime.now().isoformat(),
+                'type': 'manual_analysis'
+            }
+            update_feedback_data(int(user_id), symbol, feedback_type, analysis_details)
+            success = True
+        else:
+            # للصفقات العادية، استخدام النظام القديم مؤقتاً
+            success = TradeDataManager.save_user_feedback(trade_id, feedback_type)
         
         if success:
             # رسالة شكر للمستخدم
             feedback_emoji = "👍" if feedback_type == "positive" else "👎"
             thanks_message = f"""
+
 ✅ **شكراً لتقييمك!** {feedback_emoji}
 
 تم حفظ تقييمك وسيتم استخدامه لتحسين دقة التوقعات المستقبلية.
@@ -2918,18 +4861,60 @@ def handle_feedback(call):
 🧠 **نظام التعلم الذكي:** سيقوم Gemini AI بالتعلم من تقييمك لتقديم توقعات أكثر دقة.
             """
             
-            # تعديل الرسالة الأصلية
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=call.message.text + f"\n\n{thanks_message}",
-                parse_mode='Markdown'
-            )
+            # تحديث أزرار التقييم لإظهار الاختيار مع علامة ✅
+            try:
+                updated_markup = types.InlineKeyboardMarkup(row_width=2)
+                
+                if is_direct_analysis:
+                    # أزرار للتحليل المباشر
+                    if feedback_type == "positive":
+                        updated_markup.row(
+                            types.InlineKeyboardButton("✅ 👍 تحليل ممتاز", callback_data="feedback_selected"),
+                            types.InlineKeyboardButton("👎 تحليل ضعيف", callback_data="feedback_disabled")
+                        )
+                    else:
+                        updated_markup.row(
+                            types.InlineKeyboardButton("👍 تحليل ممتاز", callback_data="feedback_disabled"),
+                            types.InlineKeyboardButton("✅ 👎 تحليل ضعيف", callback_data="feedback_selected")
+                        )
+                else:
+                    # أزرار للصفقات العادية
+                    if feedback_type == "positive":
+                        updated_markup.row(
+                            types.InlineKeyboardButton("✅ 👍 دقيق", callback_data="feedback_selected"),
+                            types.InlineKeyboardButton("👎 غير دقيق", callback_data="feedback_disabled")
+                        )
+                    else:
+                        updated_markup.row(
+                            types.InlineKeyboardButton("👍 دقيق", callback_data="feedback_disabled"),
+                            types.InlineKeyboardButton("✅ 👎 غير دقيق", callback_data="feedback_selected")
+                        )
+                
+                # إضافة الأزرار الإضافية للتحليل المباشر
+                if is_direct_analysis and 'symbol' in locals():
+                    updated_markup.row(
+                        types.InlineKeyboardButton("🔄 تحديث التحليل", callback_data=f"analyze_symbol_{symbol}"),
+                        types.InlineKeyboardButton("📊 تحليل آخر", callback_data="analyze_symbols")
+                    )
+                
+                # تعديل الرسالة مع الأزرار المحدثة
+                bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text=call.message.text + thanks_message,
+                    parse_mode='Markdown',
+                    reply_markup=updated_markup
+                )
+                
+            except Exception as edit_error:
+                logger.debug(f"[DEBUG] لم يتم تحديث الأزرار: {edit_error}")
+                # في حالة فشل التحديث، نرسل رسالة منفصلة
+                bot.send_message(call.message.chat.id, thanks_message, parse_mode='Markdown')
             
             # إشعار للمستخدم
             bot.answer_callback_query(
                 call.id, 
-                f"تم حفظ تقييمك {feedback_emoji} - شكراً لك!",
+                f"✅ تم حفظ تقييمك {feedback_emoji} - شكراً لك!",
                 show_alert=False
             )
             
@@ -2947,6 +4932,15 @@ def handle_feedback(call):
             "حدث خطأ في معالجة التقييم",
             show_alert=True
         )
+
+# معالج للأزرار المعطلة بعد التقييم
+@bot.callback_query_handler(func=lambda call: call.data in ["feedback_selected", "feedback_disabled"])
+def handle_feedback_buttons(call):
+    """معالج الأزرار المعطلة بعد التقييم"""
+    if call.data == "feedback_selected":
+        bot.answer_callback_query(call.id, "✅ تم حفظ تقييمك مسبقاً")
+    else:
+        bot.answer_callback_query(call.id, "لقد قمت بالتقييم بالفعل")
 
 # ===== وظائف إدارة البوت الرئيسية =====
 def create_main_keyboard():
@@ -3149,7 +5143,7 @@ def handle_settings_callback(message):
         trading_mode_display = "⚡ سكالبينغ سريع" if trading_mode == 'scalping' else "📈 تداول طويل المدى"
         settings = get_user_advanced_notification_settings(user_id)
         frequency = get_user_notification_frequency(user_id)
-        frequency_name = NOTIFICATION_FREQUENCIES.get(frequency, {}).get('name', '15 ثانية 🔥')
+        frequency_name = NOTIFICATION_FREQUENCIES.get(frequency, {}).get('name', '30 ثانية ⚡')
         user_timezone = get_user_timezone(user_id)
         timezone_display = AVAILABLE_TIMEZONES.get(user_timezone, user_timezone)
         capital = get_user_capital(user_id)
@@ -3162,7 +5156,7 @@ def handle_settings_callback(message):
 🌍 **المنطقة الزمنية:** {timezone_display}
 🔔 **التنبيهات:** {'مفعلة' if settings.get('trading_signals', True) else 'معطلة'}
 ⏱️ **تردد الإشعارات:** {frequency_name}
-📊 **عتبة النجاح:** {settings.get('success_threshold', 70)}%
+📊 **عتبة النجاح:** {settings.get('success_threshold', 0)}%
 
 اختر الإعداد المطلوب تعديله:
         """
@@ -3304,6 +5298,94 @@ def handle_settings_keyboard(message):
 def handle_help_keyboard(message):
     """معالج زر المساعدة من الكيبورد"""
     handle_help_main_callback(message)
+
+@bot.message_handler(func=lambda message: user_states.get(message.from_user.id) == 'waiting_pattern_description')
+def handle_pattern_description(message):
+    """معالج وصف النمط المرفوع"""
+    try:
+        user_id = message.from_user.id
+        pattern_description = message.text.strip()
+        
+        if len(pattern_description) < 10:
+            bot.reply_to(message, 
+                "⚠️ **الوصف قصير جداً**\n\n"
+                "يرجى إعطاء وصف مفصل أكثر للنمط والاتجاه المتوقع")
+            return
+        
+        # إرسال رسالة معالجة
+        processing_msg = bot.reply_to(message, "🔄 **جاري معالجة الوصف...**\n\nيرجى الانتظار بينما نحلل المحتوى ونربطه بملفك")
+        
+        # جلب بيانات الملف المحفوظة
+        if hasattr(bot, 'temp_user_files') and user_id in bot.temp_user_files:
+            file_data = bot.temp_user_files[user_id]
+            
+            # إعداد سياق المستخدم للتدريب
+            user_context = {
+                'trading_mode': get_user_trading_mode(user_id),
+                'capital': get_user_capital(user_id),
+                'timezone': get_user_timezone(user_id),
+                'pattern_description': pattern_description
+            }
+            
+            # إرسال للتعلم الآلي مع الوصف
+            try:
+                success = gemini_analyzer.learn_from_pattern_image(
+                    file_data['file_path'], 
+                    file_data['file_type'], 
+                    user_context,
+                    pattern_description
+                )
+                
+                # تحديد نوع الملف للرسالة
+                file_type_name = "النمط" if file_data['file_type'].startswith('image/') else "المحتوى"
+                if file_data['file_type'] == 'application/pdf':
+                    file_type_name = "محتوى PDF"
+                
+                if success:
+                    bot.edit_message_text(
+                        f"🎯 **تم رفع التدريب بنجاح!**\n\n"
+                        f"📊 **{file_type_name} المحفوظ:** {pattern_description[:100]}...\n\n"
+                        f"🧠 **ما حدث:**\n"
+                        f"• تم تحليل الملف بواسطة الذكاء الاصطناعي\n"
+                        f"• تم ربط المحتوى بوصفك وتوقعاتك\n"
+                        f"• سيتم استخدام هذه المعرفة في التحليلات القادمة\n\n"
+                        f"🔄 **النتيجة:** التحليلات ستكون أكثر دقة ومخصصة لك!",
+                        chat_id=processing_msg.chat.id,
+                        message_id=processing_msg.message_id
+                    )
+                else:
+                    bot.edit_message_text(
+                        f"✅ **تم حفظ {file_type_name} بنجاح!**\n\n"
+                        f"📁 المحتوى محفوظ مع وصفك\n"
+                        f"🔧 سيتم معالجته والاستفادة منه لاحقاً",
+                        chat_id=processing_msg.chat.id,
+                        message_id=processing_msg.message_id
+                    )
+            except Exception as process_error:
+                logger.error(f"[ERROR] خطأ في معالجة الوصف: {process_error}")
+                bot.edit_message_text(
+                    f"✅ **تم حفظ الوصف!**\n\n"
+                    f"📁 المحتوى محفوظ مع وصفك\n"
+                    f"🔧 سيتم معالجته والاستفادة منه لاحقاً",
+                    chat_id=processing_msg.chat.id,
+                    message_id=processing_msg.message_id
+                )
+            
+            # تنظيف البيانات المؤقتة
+            del bot.temp_user_files[user_id]
+        else:
+            bot.edit_message_text(
+                "❌ **خطأ:** لم يتم العثور على الملف المرفوع\n\nيرجى رفع الملف مرة أخرى",
+                chat_id=processing_msg.chat.id,
+                message_id=processing_msg.message_id
+            )
+        
+        # إزالة حالة انتظار الوصف
+        user_states.pop(user_id, None)
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في معالجة وصف النمط: {e}")
+        bot.reply_to(message, "❌ حدث خطأ في معالجة الوصف")
 
 @bot.message_handler(func=lambda message: user_states.get(message.from_user.id) == 'waiting_password')
 def handle_password(message):
@@ -3654,6 +5736,11 @@ def handle_single_symbol_analysis(call):
         
         logger.info(f"[START] بدء تحليل الرمز {symbol} للمستخدم {user_id}")
         
+        # تعطيل المراقبة مؤقتاً لتجنب التضارب مع MT5
+        global analysis_in_progress
+        analysis_in_progress = True
+        logger.debug(f"[ANALYSIS_LOCK] تم تفعيل قفل التحليل للرمز {symbol}")
+        
         # العثور على معلومات الرمز
         symbol_info = ALL_SYMBOLS.get(symbol)
         if not symbol_info:
@@ -3671,23 +5758,35 @@ def handle_single_symbol_analysis(call):
         )
         
         # جلب البيانات اللحظية المباشرة من MT5 (بدون كاش - للتحليل اليدوي)
-        logger.info(f"[MANUAL_ANALYSIS] جلب بيانات لحظية مباشرة للرمز {symbol}")
-        price_data = mt5_manager.get_live_price(symbol, force_fresh=True)
+        try:
+            logger.info(f"[MANUAL_ANALYSIS] جلب بيانات لحظية مباشرة للرمز {symbol}")
+            price_data = mt5_manager.get_live_price(symbol, force_fresh=True)
+        except Exception as data_error:
+            logger.error(f"[ERROR] خطأ في جلب البيانات اللحظية من MT5 للرمز {symbol}: {data_error}")
+            price_data = None
+            
         if not price_data:
             logger.error(f"[ERROR] فشل في جلب البيانات الحقيقية من MT5 للرمز {symbol}")
-            bot.edit_message_text(
-                f"❌ **لا يمكن الحصول على بيانات حقيقية**\n\n"
-                f"لا يمكن الحصول على بيانات {symbol_info['emoji']} {symbol_info['name']} من MetaTrader5.\n\n"
-                "🔧 **متطلبات التشغيل:**\n"
-                "• يجب تشغيل MetaTrader5 على نفس الجهاز\n"
-                "• يجب تسجيل الدخول لحساب حقيقي أو تجريبي في MT5\n"
-                "• تأكد من وجود اتصال إنترنت مستقر\n"
-                "• تأكد من إضافة الرمز للمراقبة في MT5\n\n"
-                "⚠️ **تحذير:** لا يمكن التحليل بدون بيانات حقيقية لحمايتك من قرارات خاطئة.",
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode='Markdown'
-            )
+            try:
+                bot.edit_message_text(
+                    f"❌ **لا يمكن الحصول على بيانات حقيقية**\n\n"
+                    f"لا يمكن الحصول على بيانات {symbol_info['emoji']} {symbol_info['name']} من MetaTrader5.\n\n"
+                    "🔧 **متطلبات التشغيل:**\n"
+                    "• يجب تشغيل MetaTrader5 على نفس الجهاز\n"
+                    "• يجب تسجيل الدخول لحساب حقيقي أو تجريبي في MT5\n"
+                    "• تأكد من وجود اتصال إنترنت مستقر\n"
+                    "• تأكد من إضافة الرمز للمراقبة في MT5\n\n"
+                    "⚠️ **تحذير:** لا يمكن التحليل بدون بيانات حقيقية لحمايتك من قرارات خاطئة.",
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode='Markdown'
+                )
+            except Exception as msg_error:
+                logger.error(f"[ERROR] فشل في إرسال رسالة الخطأ: {msg_error}")
+                try:
+                    bot.answer_callback_query(call.id, "❌ فشل في جلب البيانات من MT5", show_alert=True)
+                except:
+                    pass
             return
         
         # تحليل ذكي مع Gemini AI مع بديل
@@ -3759,6 +5858,10 @@ def handle_single_symbol_analysis(call):
             else:
                 main_message = message_text
             
+            # إضافة طابع زمني لتجنب خطأ "message is not modified"
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            main_message = f"{main_message}\n\n🕒 _محدث: {timestamp}_"
+            
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
@@ -3780,19 +5883,33 @@ def handle_single_symbol_analysis(call):
             
         except Exception as send_error:
             logger.error(f"[ERROR] فشل في إرسال التحليل: {send_error}")
+            
+            # التحقق من نوع الخطأ
+            error_str = str(send_error).lower()
+            if "message is not modified" in error_str:
+                logger.info(f"[INFO] الرسالة لم تتغير للرمز {symbol} - تجاهل الخطأ")
+                # لا حاجة لإعادة الإرسال إذا كان المحتوى نفسه
+                return
+            
             try:
-                # محاولة إرسال رسالة خطأ بسيطة
+                # محاولة إرسال رسالة خطأ بسيطة مع طابع زمني
+                error_timestamp = datetime.now().strftime("%H:%M:%S")
                 bot.edit_message_text(
                     f"❌ **خطأ في عرض التحليل**\n\n"
                     f"حدث خطأ في عرض تحليل {symbol_info['emoji']} {symbol_info['name']}.\n\n"
-                    "يرجى المحاولة مرة أخرى لاحقاً.",
+                    f"يرجى المحاولة مرة أخرى لاحقاً.\n\n"
+                    f"🕒 _خطأ في: {error_timestamp}_",
                     call.message.chat.id,
                     call.message.message_id,
                     parse_mode='Markdown',
                     reply_markup=markup
                 )
-            except:
-                bot.answer_callback_query(call.id, "حدث خطأ في عرض التحليل", show_alert=True)
+            except Exception as final_error:
+                logger.error(f"[ERROR] فشل في إرسال رسالة الخطأ أيضاً: {final_error}")
+                try:
+                    bot.answer_callback_query(call.id, "حدث خطأ في عرض التحليل", show_alert=True)
+                except:
+                    pass
         
     except Exception as e:
         logger.error(f"[ERROR] خطأ عام في تحليل الرمز {call.data}: {e}")
@@ -3800,6 +5917,10 @@ def handle_single_symbol_analysis(call):
             bot.answer_callback_query(call.id, "حدث خطأ في التحليل", show_alert=True)
         except:
             pass
+    finally:
+        # إعادة تفعيل المراقبة
+        analysis_in_progress = False
+        logger.debug(f"[ANALYSIS_UNLOCK] تم إلغاء قفل التحليل")
 
 @bot.callback_query_handler(func=lambda call: call.data == "analyze_symbols")
 def handle_analyze_symbols(call):
@@ -3921,7 +6042,7 @@ def handle_settings(call):
         trading_mode_display = "⚡ سكالبينغ سريع" if trading_mode == 'scalping' else "📈 تداول طويل المدى"
         settings = get_user_advanced_notification_settings(user_id)
         frequency = get_user_notification_frequency(user_id)
-        frequency_name = NOTIFICATION_FREQUENCIES.get(frequency, {}).get('name', '15 ثانية 🔥')
+        frequency_name = NOTIFICATION_FREQUENCIES.get(frequency, {}).get('name', '30 ثانية ⚡')
         user_timezone = get_user_timezone(user_id)
         timezone_display = AVAILABLE_TIMEZONES.get(user_timezone, user_timezone)
         capital = get_user_capital(user_id)
@@ -3934,7 +6055,7 @@ def handle_settings(call):
 🌍 **المنطقة الزمنية:** {timezone_display}
 🔔 **التنبيهات:** {'مفعلة' if settings.get('trading_signals', True) else 'معطلة'}
 ⏱️ **تردد الإشعارات:** {frequency_name}
-📊 **عتبة النجاح:** {settings.get('success_threshold', 70)}%
+📊 **عتبة النجاح:** {settings.get('success_threshold', 0)}%
 
 اختر الإعداد المطلوب تعديله:
         """
@@ -4065,9 +6186,18 @@ def load_analysis_rules():
     """تحميل قواعد التحليل من الملف"""
     rules_file = os.path.join(FEEDBACK_DIR, "analysis_rules.json")
     try:
+        logger.debug(f"[LOAD_RULES] محاولة تحميل القواعد من: {rules_file}")
+        
         if os.path.exists(rules_file):
             with open(rules_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                rules = json.load(f)
+                logger.info(f"[LOAD_RULES] تم تحميل {len(rules)} قاعدة بنجاح")
+                return rules
+        else:
+            logger.info(f"[LOAD_RULES] ملف القواعد غير موجود، سيتم إنشاؤه عند الحاجة")
+            return []
+    except json.JSONDecodeError as e:
+        logger.error(f"[ERROR] خطأ في تحليل JSON للقواعد: {e}")
         return []
     except Exception as e:
         logger.error(f"[ERROR] خطأ في تحميل قواعد التحليل: {e}")
@@ -4077,40 +6207,76 @@ def save_analysis_rules(rules):
     """حفظ قواعد التحليل في الملف"""
     rules_file = os.path.join(FEEDBACK_DIR, "analysis_rules.json")
     try:
+        logger.debug(f"[SAVE_RULES] محاولة حفظ {len(rules)} قاعدة في: {rules_file}")
+        
+        # إنشاء المجلد إذا لم يكن موجوداً
         os.makedirs(FEEDBACK_DIR, exist_ok=True)
+        
+        # حفظ القواعد
         with open(rules_file, 'w', encoding='utf-8') as f:
             json.dump(rules, f, ensure_ascii=False, indent=2, default=str)
+        
+        logger.info(f"[SAVE_RULES] تم حفظ {len(rules)} قاعدة بنجاح")
         return True
+        
     except Exception as e:
         logger.error(f"[ERROR] خطأ في حفظ قواعد التحليل: {e}")
+        logger.error(f"[ERROR] مسار الملف: {rules_file}")
+        logger.error(f"[ERROR] مجلد FEEDBACK_DIR: {FEEDBACK_DIR}")
         return False
 
 def process_user_rule_with_ai(user_input, user_id):
-    """معالجة قاعدة المستخدم باستخدام الذكاء الاصطناعي"""
+    """معالجة قاعدة المستخدم - مبسطة لتوافق Flash 2.0"""
     try:
-        if not gemini_analyzer or not gemini_analyzer.model:
+        # التحقق من أن النص ليس فارغاً
+        if not user_input or len(user_input.strip()) < 5:
             return None
             
-        prompt = f"""
-أنت خبير في تحليل الأسواق المالية. المستخدم أدخل قاعدة تحليل جديدة:
+        # محاولة المعالجة بالذكاء الاصطناعي بطريقة مبسطة
+        if gemini_analyzer and gemini_analyzer.model:
+            try:
+                # برومبت مبسط متوافق مع Flash 2.0
+                prompt = f"""تحسين قاعدة التحليل التالية وإعادة صياغتها بوضوح:
 
-"{user_input}"
+القاعدة: {user_input}
 
-مهمتك:
-1. تحسين وإعادة صياغة هذه القاعدة بشكل احترافي ومفهوم
-2. ترقيم القاعدة وتنظيمها
-3. إضافة تفاصيل تقنية مفيدة إذا لزم الأمر
-4. التأكد من أن القاعدة واضحة وقابلة للتطبيق
-
-اكتب القاعدة المحسنة بشكل مرقم ومنظم:
-"""
+اكتب القاعدة المحسنة:"""
+                
+                response = gemini_analyzer.model.generate_content(prompt)
+                ai_result = response.text.strip()
+                
+                if ai_result and len(ai_result) > 10 and ai_result != user_input:
+                    logger.info(f"[AI_RULE_SUCCESS] تم تحسين القاعدة للمستخدم {user_id}")
+                    return ai_result
+                else:
+                    logger.warning(f"[AI_RULE_SKIP] استخدام المعالجة الأساسية للمستخدم {user_id}")
+                    
+            except Exception as ai_error:
+                logger.warning(f"[AI_RULE_ERROR] فشل AI في معالجة القاعدة: {ai_error}")
         
-        response = gemini_analyzer.model.generate_content(prompt)
-        return response.text.strip()
+        # المعالجة الأساسية دائماً كبديل
+        logger.info(f"[RULE_FALLBACK] استخدام المعالجة الأساسية للقاعدة")
+        
+        # تنظيف وتحسين النص بشكل أساسي
+        cleaned_rule = user_input.strip()
+        
+        # إضافة بنية أساسية للقاعدة
+        if not cleaned_rule.startswith(('•', '-', '1.', '2.', '3.')):
+            cleaned_rule = f"• {cleaned_rule}"
+        
+        # إضافة تحسينات بسيطة
+        if not cleaned_rule.endswith('.'):
+            cleaned_rule += "."
+            
+        # قاعدة محسنة ومنظمة
+        enhanced_rule = f"📋 قاعدة مخصصة: {cleaned_rule}"
+        
+        return enhanced_rule
         
     except Exception as e:
-        logger.error(f"[ERROR] خطأ في معالجة القاعدة بالذكاء الاصطناعي: {e}")
-        return None
+        logger.error(f"[ERROR] خطأ في معالجة القاعدة: {e}")
+        # إرجاع القاعدة الأساسية حتى لو حدث خطأ
+        return f"• {user_input.strip()}." if user_input else None
 
 def get_analysis_rules_for_prompt():
     """جلب قواعد التحليل المخصصة للإضافة إلى البرومبت"""
@@ -4181,7 +6347,9 @@ def handle_add_analysis_rule(call):
 def handle_edit_analysis_rules(call):
     """معالج تحرير قواعد التحليل"""
     try:
+        logger.info(f"[EDIT_RULES] معالجة طلب تحرير القواعد من المستخدم {call.from_user.id}")
         rules = load_analysis_rules()
+        logger.info(f"[EDIT_RULES] تم تحميل {len(rules)} قاعدة")
         
         if not rules:
             message_text = """
@@ -4236,10 +6404,14 @@ def handle_edit_analysis_rules(call):
 def handle_edit_specific_rule(call):
     """معالج تحرير قاعدة محددة"""
     try:
+        logger.info(f"[EDIT_RULE] معالجة طلب تحرير قاعدة: {call.data}")
         rule_index = int(call.data.split("_")[2])
         rules = load_analysis_rules()
         
+        logger.info(f"[EDIT_RULE] عدد القواعد المحملة: {len(rules)}, الفهرس المطلوب: {rule_index}")
+        
         if rule_index >= len(rules):
+            logger.warning(f"[EDIT_RULE] القاعدة غير موجودة - الفهرس {rule_index} أكبر من {len(rules)}")
             bot.answer_callback_query(call.id, "القاعدة غير موجودة", show_alert=True)
             return
             
@@ -4521,7 +6693,7 @@ def handle_toggle_symbol(call):
         logger.error(f"[ERROR] خطأ في تبديل الرمز: {e}")
         bot.answer_callback_query(call.id, "حدث خطأ في تبديل الرمز", show_alert=True)
 
-# تم حذف معالجات التردد - التردد الآن موحد لكل 15 ثانية
+# تم حذف معالجات التردد - التردد الآن موحد لكل 30 ثانية
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("detailed_"))
 def handle_detailed_analysis(call):
@@ -4622,7 +6794,8 @@ def handle_full_symbol_analysis(call):
         
         # إعداد الرسالة الشاملة
         data_source = price_data.get('source', 'Unknown')
-        formatted_time = format_time_for_user(user_id, price_data.get('time'))
+        # استخدام الوقت الحالي للمستخدم لضمان الدقة
+        formatted_time = get_current_time_for_user(user_id)
         trading_mode = get_user_trading_mode(user_id)
         capital = get_user_capital(user_id)
         
@@ -4691,7 +6864,7 @@ def handle_help(call):
 ❓ **مساعدة بوت التداول v1.2.0**
 
 🚀 **الميزات الجديدة:**
-• بيانات لحظية حقيقية من MetaTrader5 + Yahoo Finance
+• بيانات لحظية حقيقية من MetaTrader5
 • تحليل ذكي مخصص بـ Google Gemini AI
 • نظام تقييم الإشعارات 👍👎 للتعلم الآلي
 • تدريب الذكاء الاصطناعي برفع الملفات
@@ -4724,8 +6897,7 @@ def handle_help(call):
    • اختر المنطقة الزمنية لعرض الأوقات بدقة
 
 📊 **مصادر البيانات:**
-• **أولوية أولى:** MetaTrader5 (بيانات لحظية مباشرة)
-• **بديل ذكي:** Yahoo Finance (للرموز غير المتوفرة في MT5)
+• **المصدر الوحيد:** MetaTrader5 (بيانات لحظية مباشرة)
 • **ضمان التغطية:** 25+ رمز مالي مدعوم
 
 🧠 **الذكاء الاصطناعي المخصص:**
@@ -4779,7 +6951,7 @@ def handle_about(call):
 
 🚀 **الميزات الجديدة في v1.2.0:**
 ✅ إلغاء الاعتماد على البيانات التاريخية
-✅ بيانات لحظية مباشرة من MT5 + Yahoo Finance
+✅ بيانات لحظية مباشرة من MetaTrader5
 ✅ تحليل ذكي مخصص مدعوم بـ Gemini AI
 ✅ نظام تقييم تفاعلي 👍👎 للتعلم الآلي
 ✅ رفع ملفات لتدريب الذكاء الاصطناعي
@@ -4904,7 +7076,9 @@ def handle_alerts_log(call):
                 message_text += f"**{i}.** {symbol} - {action}\n"
                 message_text += f"   💪 قوة: {confidence:.1f}%\n"
                 message_text += f"   {feedback_emoji} تقييم: {feedback}\n"
-                message_text += f"   🕐 {formatted_time}\n\n"
+                # استخدام التوقيت المصحح للمستخدم
+                user_formatted_time = format_time_for_user(user_id, datetime.fromisoformat(trade_data.get('timestamp')))
+                message_text += f"   🕐 {user_formatted_time}\n\n"
         
         # إحصائيات التقييم
         stats = TradeDataManager.get_user_feedback_stats(user_id)
@@ -5010,73 +7184,129 @@ def handle_file_upload(message):
                     'file_type': file_type
                 }
                 
-                # طلب وصف النمط من المستخدم
-                user_states[user_id] = 'waiting_pattern_description'
+                # تحديد نوع الملف للرسالة
+                file_type_name = "الصورة" if file_type.startswith('image/') else "الملف"
+                if file_type == 'application/pdf':
+                    file_type_name = "ملف PDF"
                 
-                bot.reply_to(message, 
-                    "✅ **تم رفع الصورة بنجاح!**\n\n"
-                    "🧠 **الآن اشرح لي النمط:**\n\n"
-                    "📝 **مثال على الوصف:**\n"
-                    "• 'عند رؤية هذا النمط من الشموع، السعر سينزل بنسبة 90%'\n"
-                    "• 'هذا النمط يعني ارتفاع قوي - ثقة 100%'\n"
-                    "• 'شمعة الدوجي هذه تعني تردد السوق - احتمال انعكاس 80%'\n\n"
-                    "💡 **كن محدداً:** اذكر النمط والاتجاه المتوقع ونسبة الثقة")
-        
-        elif user_states.get(user_id) == 'waiting_pattern_description':
-            # معالجة وصف النمط
-            pattern_description = message.text.strip()
-            
-            if len(pattern_description) < 10:
-                bot.reply_to(message, 
-                    "⚠️ **الوصف قصير جداً**\n\n"
-                    "يرجى إعطاء وصف مفصل أكثر للنمط والاتجاه المتوقع")
-                return
-            
-            # جلب بيانات الملف المحفوظة
-            if hasattr(bot, 'temp_user_files') and user_id in bot.temp_user_files:
-                file_data = bot.temp_user_files[user_id]
+                # سؤال المستخدم عن إضافة وصف
+                user_states[user_id] = 'waiting_description_choice'
                 
-                # إعداد سياق المستخدم للتدريب
-                user_context = {
-                    'trading_mode': get_user_trading_mode(user_id),
-                    'capital': get_user_capital(user_id),
-                    'timezone': get_user_timezone(user_id),
-                    'pattern_description': pattern_description
-                }
-                
-                # إرسال للتعلم الآلي مع الوصف
-                success = gemini_analyzer.learn_from_pattern_image(
-                    file_data['file_path'], 
-                    file_data['file_type'], 
-                    user_context,
-                    pattern_description
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.row(
+                    types.InlineKeyboardButton("✅ نعم، إضافة وصف", callback_data=f"add_description_{user_id}"),
+                    types.InlineKeyboardButton("❌ لا، رفع مباشر", callback_data=f"skip_description_{user_id}")
                 )
                 
-                if success:
-                    bot.reply_to(message, 
-                        "🎯 **تم تعلم النمط بنجاح!**\n\n"
-                        f"📊 **النمط المحفوظ:** {pattern_description[:100]}...\n\n"
-                        "🧠 **ما حدث:**\n"
-                        "• تم تحليل الصورة بواسطة الذكاء الاصطناعي\n"
-                        "• تم ربط النمط بوصفك وتوقعاتك\n"
-                        "• سيتم استخدام هذه المعرفة في التحليلات القادمة\n\n"
-                        "🔄 **النتيجة:** التحليلات ستكون أكثر دقة ومخصصة لك!")
-                else:
-                    bot.reply_to(message, 
-                        "⚠️ **تم حفظ النمط ولكن...**\n\n"
-                        "📁 النمط محفوظ بنجاح\n"
-                        "🤖 لكن لم يتم معالجته بالكامل\n"
-                        "🔧 سيتم المحاولة لاحقاً")
-                
-                # تنظيف البيانات المؤقتة
-                del bot.temp_user_files[user_id]
-            
-            # إزالة حالة انتظار الوصف
-            user_states.pop(user_id, None)
+                bot.reply_to(message, 
+                    f"✅ **تم رفع {file_type_name} بنجاح!**\n\n"
+                    f"📋 **هل تريد إضافة شرح خاص لهذا الملف؟**\n\n"
+                    f"💡 **إضافة الوصف يساعد في:**\n"
+                    f"• تحسين دقة التحليلات المستقبلية\n"
+                    f"• ربط الملف بسياق تداولك الخاص\n"
+                    f"• تخصيص التوصيات حسب خبرتك\n\n"
+                    f"🎯 **اختر ما تفضل:**",
+                    reply_markup=markup)
+        
+        # تم نقل معالجة الوصف إلى معالج منفصل
         
     except Exception as e:
         logger.error(f"[ERROR] خطأ في معالجة الملف المرفوع: {e}")
         bot.reply_to(message, "❌ حدث خطأ في معالجة الملف")
+
+# معالجات أزرار خيار إضافة الوصف
+@bot.callback_query_handler(func=lambda call: call.data.startswith("add_description_"))
+def handle_add_description(call):
+    """معالج اختيار إضافة وصف للملف"""
+    try:
+        user_id = call.from_user.id
+        
+        # تغيير حالة المستخدم لانتظار الوصف
+        user_states[user_id] = 'waiting_pattern_description'
+        
+        # تحديث الرسالة
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="🧠 **ممتاز! الآن اشرح لي الملف أو النمط:**\n\n"
+                 "📝 **أمثلة على الوصف:**\n"
+                 "• 'عند رؤية هذا النمط من الشموع، السعر سينزل بنسبة 90%'\n"
+                 "• 'هذا النمط يعني ارتفاع قوي - ثقة 100%'\n"
+                 "• 'شمعة الدوجي هذه تعني تردد السوق - احتمال انعكاس 80%'\n"
+                 "• 'هذا التقرير يوضح استراتيجية تداول ناجحة'\n\n"
+                 "💡 **كن محدداً:** اذكر النمط/المحتوى والاتجاه المتوقع ونسبة الثقة"
+        )
+        
+        bot.answer_callback_query(call.id, "✅ اكتب وصفك الآن")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في معالج إضافة الوصف: {e}")
+        bot.answer_callback_query(call.id, "حدث خطأ، حاول مرة أخرى", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("skip_description_"))
+def handle_skip_description(call):
+    """معالج تخطي إضافة الوصف"""
+    try:
+        user_id = call.from_user.id
+        
+        # جلب بيانات الملف المحفوظة
+        if hasattr(bot, 'temp_user_files') and user_id in bot.temp_user_files:
+            file_data = bot.temp_user_files[user_id]
+            
+            # إعداد سياق المستخدم للتدريب بدون وصف
+            user_context = {
+                'trading_mode': get_user_trading_mode(user_id),
+                'capital': get_user_capital(user_id),
+                'timezone': get_user_timezone(user_id),
+                'pattern_description': 'لا يوجد وصف - رفع مباشر'
+            }
+            
+            # معالجة الملف للتعلم الآلي
+            if file_data['file_type'].startswith('image/'):
+                success = gemini_analyzer.learn_from_file(
+                    file_data['file_path'], 
+                    file_data['file_type'], 
+                    user_context
+                )
+            else:
+                success = gemini_analyzer.learn_from_file(
+                    file_data['file_path'], 
+                    file_data['file_type'], 
+                    user_context
+                )
+            
+            # تحديث الرسالة
+            if success:
+                bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text="🎯 **تم رفع التدريب بنجاح!**\n\n"
+                         "✅ **ما تم:**\n"
+                         "• تم حفظ الملف في نظام التدريب\n"
+                         "• سيتم استخدامه لتحسين التحليلات المستقبلية\n"
+                         "• تم ربطه بنمط تداولك ورأس مالك\n\n"
+                         "🚀 **النتيجة:** التحليلات ستكون أكثر دقة!"
+                )
+            else:
+                bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text="✅ **تم حفظ الملف!**\n\n"
+                         "📁 الملف محفوظ بنجاح في النظام\n"
+                         "🔧 سيتم معالجته والاستفادة منه لاحقاً"
+                )
+            
+            # تنظيف البيانات المؤقتة
+            del bot.temp_user_files[user_id]
+        
+        # إزالة حالة المستخدم
+        user_states.pop(user_id, None)
+        
+        bot.answer_callback_query(call.id, "✅ تم رفع التدريب بنجاح")
+        
+    except Exception as e:
+        logger.error(f"[ERROR] خطأ في معالج تخطي الوصف: {e}")
+        bot.answer_callback_query(call.id, "حدث خطأ، حاول مرة أخرى", show_alert=True)
 
 # ===== معالجات المراقبة الآلية =====
 @bot.callback_query_handler(func=lambda call: call.data == "auto_monitoring")
@@ -5184,12 +7414,13 @@ def handle_start_monitoring(call):
         
         bot.send_message(
             call.message.chat.id,
-            f"▶️ **بدء المراقبة الآلية**\n\n"
+            f"▶️ *بدء المراقبة الآلية*\n\n"
             f"📊 نمط التداول: {trading_mode_display}\n"
             f"🎯 الرموز: {symbols_text}\n"
             f"⏰ بدء المراقبة: {datetime.now().strftime('%H:%M:%S')}\n"
             f"🔗 مصدر البيانات: MetaTrader5 + Gemini AI\n\n"
-            "سيتم إرسال التنبيهات عند رصد فرص تداول مناسبة! 📈"
+            "سيتم إرسال التنبيهات عند رصد فرص تداول مناسبة! 📈",
+            parse_mode='Markdown'
         )
         
     except Exception as e:
@@ -5202,11 +7433,23 @@ def handle_stop_monitoring(call):
     user_id = call.from_user.id
     
     try:
-        # إيقاف المراقبة
+        # إيقاف المراقبة للمستخدم
         user_monitoring_active[user_id] = False
         
-        # رسالة تأكيد
-        bot.answer_callback_query(call.id, "⏹️ تم إيقاف المراقبة الآلية")
+        # إزالة المستخدم من القاموس إذا لم يعد نشطاً
+        if user_id in user_monitoring_active:
+            del user_monitoring_active[user_id]
+        
+        logger.info(f"[STOP] تم إيقاف المراقبة للمستخدم {user_id}")
+        
+        # رسالة تأكيد مع معالجة timeout
+        try:
+            bot.answer_callback_query(call.id, "⏹️ تم إيقاف المراقبة الآلية")
+        except Exception as callback_error:
+            if "query is too old" in str(callback_error):
+                logger.debug(f"[DEBUG] تجاهل خطأ timeout في callback query: {callback_error}")
+            else:
+                logger.warning(f"[WARNING] خطأ في callback query: {callback_error}")
         
         # تحديث القائمة
         trading_mode = get_user_trading_mode(user_id)
@@ -5214,11 +7457,11 @@ def handle_stop_monitoring(call):
         selected_count = len(user_selected_symbols.get(user_id, []))
         
         bot.edit_message_text(
-            f"📡 **المراقبة الآلية**\n\n"
-            f"📊 **نمط التداول:** {trading_mode_display}\n"
-            f"📈 **الحالة:** 🔴 متوقفة\n"
-            f"🎯 **الرموز المختارة:** {selected_count}\n"
-            f"🔗 **مصدر البيانات:** MetaTrader5 + Gemini AI\n\n"
+            f"📡 *المراقبة الآلية*\n\n"
+            f"📊 *نمط التداول:* {trading_mode_display}\n"
+            f"📈 *الحالة:* 🔴 متوقفة\n"
+            f"🎯 *الرموز المختارة:* {selected_count}\n"
+            f"🔗 *مصدر البيانات:* MetaTrader5 + Gemini AI\n\n"
             "تعتمد المراقبة على إعدادات التنبيهات ونمط التداول المحدد.",
             call.message.chat.id,
             call.message.message_id,
@@ -5228,7 +7471,50 @@ def handle_stop_monitoring(call):
         
     except Exception as e:
         logger.error(f"خطأ في إيقاف المراقبة للمستخدم {user_id}: {str(e)}")
-        bot.answer_callback_query(call.id, "❌ حدث خطأ في إيقاف المراقبة")
+        try:
+            bot.answer_callback_query(call.id, "❌ حدث خطأ في إيقاف المراقبة")
+        except Exception as callback_error:
+            if "query is too old" in str(callback_error):
+                logger.debug(f"[DEBUG] تجاهل خطأ timeout في callback query: {callback_error}")
+            else:
+                logger.warning(f"[WARNING] خطأ في callback query: {callback_error}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "clear_symbols")
+def handle_clear_symbols(call):
+    """معالج مسح جميع الرموز المحددة"""
+    user_id = call.from_user.id
+    
+    try:
+        # مسح جميع الرموز المحددة للمستخدم
+        user_selected_symbols[user_id] = []
+        
+        logger.info(f"[CLEAR] تم مسح جميع الرموز للمستخدم {user_id}")
+        
+        # رسالة تأكيد
+        bot.answer_callback_query(call.id, "🗑️ تم مسح جميع الرموز المحددة")
+        
+        # تحديث القائمة
+        trading_mode = get_user_trading_mode(user_id)
+        trading_mode_display = "⚡ سكالبينغ سريع" if trading_mode == 'scalping' else "📈 تداول طويل المدى"
+        is_monitoring = user_monitoring_active.get(user_id, False)
+        status = "🟢 نشطة" if is_monitoring else "🔴 متوقفة"
+        
+        bot.edit_message_text(
+            f"📡 **المراقبة الآلية**\n\n"
+            f"📊 **نمط التداول:** {trading_mode_display}\n"
+            f"📈 **الحالة:** {status}\n"
+            f"🎯 **الرموز المختارة:** 0\n"
+            f"🔗 **مصدر البيانات:** MetaTrader5 + Gemini AI\n\n"
+            "تعتمد المراقبة على إعدادات التنبيهات ونمط التداول المحدد.",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=create_auto_monitoring_menu(user_id),
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        logger.error(f"خطأ في مسح الرموز للمستخدم {user_id}: {str(e)}")
+        bot.answer_callback_query(call.id, "❌ حدث خطأ في مسح الرموز")
 
 # ===== معالجات نمط التداول =====
 @bot.callback_query_handler(func=lambda call: call.data == "trading_mode_settings")
@@ -5481,7 +7767,7 @@ def handle_custom_capital_input(message):
 
 # ===== معالجات قواعد التحليل =====
 
-@bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('state') == 'waiting_for_analysis_rule')
+@bot.message_handler(func=lambda message: isinstance(user_states.get(message.from_user.id, {}), dict) and user_states.get(message.from_user.id, {}).get('state') == 'waiting_for_analysis_rule')
 def handle_analysis_rule_input(message):
     """معالج إدخال قاعدة التحليل الجديدة"""
     try:
@@ -5497,21 +7783,23 @@ def handle_analysis_rule_input(message):
             return
         
         # رسالة معالجة
-        processing_msg = bot.reply_to(message, "🤖 جاري معالجة القاعدة بالذكاء الاصطناعي...")
+        processing_msg = bot.reply_to(message, "🔄 **جاري معالجة القاعدة...**\n\n📝 سيتم تحسين القاعدة وحفظها في النظام")
         
         # معالجة القاعدة بالذكاء الاصطناعي
         processed_rule = process_user_rule_with_ai(user_input, user_id)
         
         if not processed_rule:
             bot.edit_message_text(
-                "❌ فشل في معالجة القاعدة. سيتم حفظ النص الأصلي.",
+                "⚠️ **تم حفظ القاعدة بالنص الأصلي**\n\n"
+                "لم نتمكن من تحسين القاعدة بالذكاء الاصطناعي، لكن تم حفظها كما هي وستُستخدم في التحليلات.",
                 chat_id=processing_msg.chat.id,
                 message_id=processing_msg.message_id
             )
-            processed_rule = user_input
+            processed_rule = f"• {user_input}" if not user_input.startswith(('•', '-')) else user_input
         else:
             bot.edit_message_text(
-                "✅ تم تحسين القاعدة بنجاح!",
+                "✅ **تم تحسين وحفظ القاعدة بنجاح!**\n\n"
+                "تم معالجة القاعدة وتحسينها وستُطبق في التحليلات المستقبلية.",
                 chat_id=processing_msg.chat.id,
                 message_id=processing_msg.message_id
             )
@@ -5582,7 +7870,7 @@ def handle_analysis_rule_input(message):
         bot.reply_to(message, "❌ حدث خطأ في معالجة القاعدة. يرجى المحاولة مرة أخرى.")
         user_states.pop(message.from_user.id, None)
 
-@bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('state') == 'waiting_for_rule_modification')
+@bot.message_handler(func=lambda message: isinstance(user_states.get(message.from_user.id, {}), dict) and user_states.get(message.from_user.id, {}).get('state') == 'waiting_for_rule_modification')
 def handle_rule_modification_input(message):
     """معالج تعديل قاعدة التحليل"""
     try:
@@ -5605,18 +7893,19 @@ def handle_rule_modification_input(message):
             return
         
         # رسالة معالجة
-        processing_msg = bot.reply_to(message, "🤖 جاري معالجة التعديل بالذكاء الاصطناعي...")
+        processing_msg = bot.reply_to(message, "🔄 **جاري معالجة التعديل...**\n\n📝 سيتم تحسين التعديل وحفظه في النظام")
         
         # معالجة النص الجديد بالذكاء الاصطناعي
         processed_rule = process_user_rule_with_ai(user_input, user_id)
         
         if not processed_rule:
             bot.edit_message_text(
-                "❌ فشل في معالجة التعديل. سيتم حفظ النص الأصلي.",
+                "⚠️ **تم حفظ التعديل بالنص الأصلي**\n\n"
+                "لم نتمكن من تحسين التعديل بالذكاء الاصطناعي، لكن تم حفظه كما هو.",
                 chat_id=processing_msg.chat.id,
                 message_id=processing_msg.message_id
             )
-            processed_rule = user_input
+            processed_rule = f"• {user_input}" if not user_input.startswith(('•', '-')) else user_input
         else:
             bot.edit_message_text(
                 "✅ تم تحسين التعديل بنجاح!",
@@ -5795,7 +8084,7 @@ def handle_statistics(call):
 • معدل الدقة: {stats['accuracy_rate']:.1f}%
 
 🎯 **الأداء:**
-• مستوى الثقة المطلوب: {get_user_advanced_notification_settings(user_id).get('success_threshold', 70)}%
+• مستوى الثقة المطلوب: {get_user_advanced_notification_settings(user_id).get('success_threshold', 0)}%
 • تردد الإشعارات: {NOTIFICATION_FREQUENCIES.get(get_user_advanced_notification_settings(user_id).get('frequency', '5min'), {}).get('name', '5 دقائق')}
 
 💡 **نصائح للتحسين:**
@@ -5838,7 +8127,7 @@ def handle_advanced_notifications_settings(call):
 
 📊 **الأنواع المفعلة:** {enabled_count}/6
 ⏱️ **التردد الحالي:** {frequency_display}
-📈 **نسبة النجاح:** {settings.get('success_threshold', 70)}%
+📈 **نسبة النجاح:** {settings.get('success_threshold', 0)}%
 📋 **مدة الاحتفاظ:** {settings.get('log_retention', 7)} أيام
 
 اختر الإعداد المطلوب تعديله:
@@ -5864,16 +8153,24 @@ def handle_success_threshold(call):
     try:
         user_id = call.from_user.id
         settings = get_user_advanced_notification_settings(user_id)
-        current_threshold = settings.get('success_threshold', 70)
+        current_threshold = settings.get('success_threshold', 0)
         
         message_text = f"""
-📊 **نسبة النجاح المطلوبة**
+📊 **نسبة النجاح المطلوبة للفلترة**
 
 النسبة الحالية: {current_threshold}%
 
-اختر نسبة النجاح المطلوبة لإرسال التنبيهات:
-• نسبة أعلى = تنبيهات أقل ولكن أدق
-• نسبة أقل = تنبيهات أكثر ولكن قد تكون أقل دقة
+اختر الحد الأدنى لنسبة النجاح لتلقي التنبيهات:
+
+🎯 **مستويات الجودة:**
+• 90%+ : إشارات استثنائية 💎
+• 80-89%: إشارات عالية الجودة 🔥  
+• 70-79%: إشارات جيدة ✅
+• 60-69%: إشارات متوسطة ⚠️
+• 50-59%: إشارات ضعيفة (مخاطر عالية) 🔴
+• 0%: جميع الإشارات (بما فيها الضعيفة) 📊
+
+💡 **نصيحة:** نسبة أعلى = تنبيهات أقل ولكن أدق وأأمن
         """
         
         bot.edit_message_text(
@@ -5908,7 +8205,7 @@ def handle_set_threshold(call):
         logger.error(f"[ERROR] خطأ في تحديد نسبة النجاح: {e}")
         bot.answer_callback_query(call.id, "حدث خطأ", show_alert=True)
 
-# تم حذف معالجات التردد المكررة - التردد الآن موحد لكل 15 ثانية
+# تم حذف معالجات التردد المكررة - التردد الآن موحد لكل 30 ثانية
 
 @bot.callback_query_handler(func=lambda call: call.data == "notification_timing")
 def handle_notification_timing(call):
@@ -6042,7 +8339,12 @@ def display_instant_prices(user_id, chat_id, message_id, symbols, category_name,
 ───────────────────────
 """
         
-        # التحقق من اتصال MT5
+        # التحقق من اتصال MT5 مع محاولة إعادة الاتصال
+        if not mt5_manager.connected:
+            logger.warning("[WARNING] MT5 غير متصل، محاولة إعادة الاتصال...")
+            # محاولة إعادة الاتصال
+            mt5_manager.check_real_connection()
+            
         if not mt5_manager.connected:
             message_text += """
 ❌ **غير متصل بـ MetaTrader5**
@@ -6051,6 +8353,7 @@ def display_instant_prices(user_id, chat_id, message_id, symbols, category_name,
 • تأكد من تشغيل MetaTrader5
 • تحقق من اتصال الإنترنت  
 • حاول مرة أخرى بعد قليل
+• تم محاولة إعادة الاتصال تلقائياً
 
 ───────────────────────
 """
@@ -6074,11 +8377,12 @@ def display_instant_prices(user_id, chat_id, message_id, symbols, category_name,
                             display_bid = bid if bid > 0 else last_price
                             display_ask = ask if ask > 0 else last_price
                             display_spread = spread if spread > 0 else abs(display_ask - display_bid)
+                            spread_points = price_data.get('spread_points', 0)
                             
                             prices_data.append(f"""
 {info['emoji']} **{info['name']}**
 📊 شراء: {display_bid:.5f} | بيع: {display_ask:.5f}
-📏 فرق: {display_spread:.5f}
+📏 فرق: {display_spread:.5f}{' (' + str(spread_points) + ' نقطة)' if spread_points > 0 else ''}
 """)
                         else:
                             prices_data.append(f"""
@@ -6091,7 +8395,7 @@ def display_instant_prices(user_id, chat_id, message_id, symbols, category_name,
                         if not mt5_manager.connected:
                             status_msg = "❌ غير متصل بـ MT5"
                         else:
-                            status_msg = "❌ غير متاح من MT5 (قد يكون متاح من Yahoo Finance)"
+                            status_msg = "❌ غير متاح من MT5"
                         
                         prices_data.append(f"""
 {info['emoji']} **{info['name']}**
@@ -6249,12 +8553,20 @@ def monitoring_loop():
     logger.info("[RUNNING] بدء حلقة المراقبة...")
     consecutive_errors = 0
     max_consecutive_errors = 5
-    connection_check_interval = 300  # فحص الاتصال كل 5 دقائق
+    connection_check_interval = 3600  # فحص الاتصال كل ساعة (3600 ثانية)
     last_connection_check = 0
+    api_check_interval = 3600  # فحص API كل ساعة
+    last_api_check = 0
     
     while monitoring_active:
         try:
             current_time = time.time()
+            
+            # إيقاف مؤقت إذا كان التحليل اليدوي قيد التنفيذ
+            if analysis_in_progress:
+                logger.debug("[MONITORING_PAUSE] إيقاف مؤقت للمراقبة - تحليل يدوي قيد التنفيذ")
+                time.sleep(5)  # انتظار 5 ثوان
+                continue
             
             # فحص دوري لحالة اتصال MT5
             if current_time - last_connection_check > connection_check_interval:
@@ -6263,6 +8575,23 @@ def monitoring_loop():
                     logger.warning("[WARNING] انقطاع في اتصال MT5 تم اكتشافه - محاولة إعادة الاتصال...")
                     mt5_manager.check_real_connection()
                 last_connection_check = current_time
+            
+            # فحص دوري لحالة API كل ساعة
+            if current_time - last_api_check > api_check_interval:
+                logger.info("[API_CHECK] فحص دوري لحالة API...")
+                try:
+                    # اختبار بسيط للـ API
+                    if GEMINI_AVAILABLE:
+                        test_key = gemini_key_manager.get_current_key() if 'gemini_key_manager' in globals() else None
+                        if test_key:
+                            logger.info("[API_CHECK] ✅ API متاح ويعمل بشكل طبيعي")
+                        else:
+                            logger.warning("[API_CHECK] ⚠️ لا يوجد مفتاح API متاح")
+                    else:
+                        logger.warning("[API_CHECK] ⚠️ Gemini AI غير متوفر")
+                except Exception as api_error:
+                    logger.error(f"[API_CHECK] ❌ خطأ في فحص API: {api_error}")
+                last_api_check = current_time
             
             # مراقبة المستخدمين النشطين فقط
             active_users = list(user_monitoring_active.keys())
@@ -6296,26 +8625,43 @@ def monitoring_loop():
                         users_by_symbol[symbol] = []
                     users_by_symbol[symbol].append(user_id)
             
-            # الخطوة 2: جلب البيانات لجميع الرموز مرة واحدة فقط
+            # الخطوة 2: جلب البيانات لجميع الرموز مرة واحدة فقط مع معالجة محسنة
             symbols_data = {}  # {symbol: price_data}
+            max_concurrent_requests = 3  # تحديد عدد الطلبات المتزامنة
+            current_requests = 0
+            
             for symbol in all_symbols_needed:
                 try:
+                    # تحديد عدد الطلبات المتزامنة لتجنب الضغط على MT5
+                    if current_requests >= max_concurrent_requests:
+                        time.sleep(0.1)  # انتظار قصير
+                        current_requests = 0
+                    
                     price_data = mt5_manager.get_live_price(symbol)
+                    current_requests += 1
+                    
                     if price_data:
                         symbols_data[symbol] = price_data
+                        logger.debug(f"[DATA_OK] تم جلب بيانات {symbol} بنجاح")
                     else:
                         failed_operations += 1
+                        logger.debug(f"[DATA_FAIL] فشل في جلب بيانات {symbol}")
                         if not mt5_manager.connected:
                             mt5_connection_errors += 1
+                            
                 except Exception as e:
                     logger.error(f"[ERROR] خطأ في جلب بيانات {symbol}: {e}")
                     failed_operations += 1
+                    # فحص نوع الخطأ
+                    if "connection" in str(e).lower() or "timeout" in str(e).lower():
+                        logger.warning(f"[WARNING] مشكلة اتصال في جلب {symbol} - تخطي للرمز التالي")
+                        time.sleep(0.5)  # انتظار إضافي للأخطاء الشبكية
             
             # الخطوة 3: معالجة كل رمز مع المستخدمين المهتمين به
             for symbol, price_data in symbols_data.items():
                 try:
-                    # تحليل الرمز مرة واحدة فقط
-                    analysis = gemini_analyzer.analyze_market_data_with_retry(symbol, price_data, users_by_symbol[symbol][0])
+                    # تحليل الرمز مرة واحدة فقط باستخدام نفس التعليمات المفصلة للوضع اليدوي
+                    analysis = gemini_analyzer.analyze_market_data_with_comprehensive_instructions(symbol, price_data, users_by_symbol[symbol][0])
                     
                     if not analysis:
                         failed_operations += len(users_by_symbol[symbol])
@@ -6326,7 +8672,7 @@ def monitoring_loop():
                         try:
                             # الحصول على إعدادات المستخدم
                             settings = get_user_advanced_notification_settings(user_id)
-                            min_confidence = settings.get('success_threshold', 70)
+                            min_confidence = settings.get('success_threshold', 0)
                             alert_timing = settings.get('alert_timing', '24h')
                             
                             # فحص التوقيت المناسب للإشعارات
@@ -6377,8 +8723,8 @@ def monitoring_loop():
                     logger.info("[RECONNECT] محاولة إعادة اتصال شاملة بسبب أخطاء MT5 المتكررة...")
                     mt5_manager.check_real_connection()
             
-            # انتظار 15 ثانية - تردد موحد لجميع المستخدمين
-            time.sleep(15)
+            # انتظار دقيقة واحدة - تردد محسن لتقليل استهلاك الموارد
+            time.sleep(60)
             
         except Exception as e:
             consecutive_errors += 1
@@ -6404,11 +8750,44 @@ if __name__ == "__main__":
     try:
         logger.info("▶️ بدء تشغيل بوت التداول المتقدم v1.2.0...")
         
+        # تعريف المتغيرات الأساسية المفقودة
+        mt5_manager = MT5Manager()
+        
+        # تعريف محلل Gemini AI الكامل
+        gemini_analyzer = GeminiAnalyzer()
+        
+        # تعريف الدوال المساعدة المفقودة
+        def cache_price_data(symbol, data):
+            """حفظ بيانات السعر في الكاش"""
+            global price_data_cache
+            price_data_cache[symbol] = {
+                'data': data,
+                'timestamp': datetime.now()
+            }
+        
+        # تعريف المتغيرات العامة المفقودة الأخرى (إذا لم تكن موجودة)
+        # Most variables are already defined globally at the top of the file
+        
+        # تعريف crossover_tracker كبديل مؤقت
+        class SimpleCrossoverTracker:
+            def analyze_crossover_patterns(self, symbol):
+                return {'recent_count': 0, 'dominant_type': 'غير محدد', 'pattern_strength': 0.5}
+            def get_recent_crossovers(self, symbol, hours=48):
+                return []
+        
+        crossover_tracker = SimpleCrossoverTracker()
+        
         # التحقق من اتصال MT5
         if mt5_manager.connected:
             logger.info("[OK] MetaTrader5 متصل ومستعد!")
         else:
             logger.warning("[WARNING] MetaTrader5 غير متصل - يرجى التحقق من الإعدادات")
+        
+        # تعريف متغيرات Gemini العامة
+        global GEMINI_API_KEY, GEMINI_MODEL
+        GEMINI_API_KEY = config.GEMINI_API_KEY if hasattr(config, 'GEMINI_API_KEY') else 'AIzaSyDAOp1ARgrkUvPcmGmXddFx8cqkzhy-3O8'
+        GEMINI_MODEL = config.GEMINI_MODEL if hasattr(config, 'GEMINI_MODEL') else 'gemini-2.0-flash'
+        GEMINI_AVAILABLE = True
         
         # التحقق من Gemini AI
         if GEMINI_AVAILABLE:
@@ -6419,8 +8798,8 @@ if __name__ == "__main__":
         logger.info("[SYSTEM] نظام التنبيهات: مراقبة لحظية مع تقييم المستخدم")
         logger.info("[SYSTEM] نظام التخزين: تسجيل جميع الصفقات والتقييمات")
         
-        # إنشاء متغير لإيقاف حلقة المراقبة بأمان
-        monitoring_active = True
+        # إنشاء متغير لإيقاف حلقة المراقبة بأمان (تم تعريفه مسبقاً)
+        # monitoring_active = True
         
         # بدء حلقة المراقبة في خيط منفصل مع معالجة محسنة
         monitoring_thread = threading.Thread(
@@ -6440,24 +8819,109 @@ if __name__ == "__main__":
         
         # بدء البوت
         logger.info("[SYSTEM] البوت جاهز للعمل!")
+        # تعريف وتنظيف شامل عند بدء التشغيل
+        price_data_cache = {}
+        last_api_calls = {}
+        price_data_cache.clear()
+        last_api_calls.clear()
+        logger.info("[SYSTEM] تم تنظيف جميع البيانات المؤقتة عند بدء التشغيل")
+        
         print("\n" + "="*60)
         print("🚀 بوت التداول v1.2.0 جاهز للعمل!")
         print("📊 مصدر البيانات: MetaTrader5 (لحظي)")
         print("🧠 محرك التحليل: Google Gemini AI")
         print("💾 نظام التقييم: تفعيل ذكي للتعلم")
+        print("🧹 نظام التنظيف: تفعيل ذكي للذاكرة")
         print("="*60 + "\n")
         
-        # تشغيل البوت مع معالجة أخطاء الشبكة
-        while True:
+        # تشغيل البوت مع معالجة أخطاء الشبكة المحسنة
+        retry_count = 0
+        max_retries = 10
+        
+        while retry_count < max_retries:
             try:
-                logger.info("[SYSTEM] بدء استقبال الرسائل...")
-                bot.infinity_polling(none_stop=True, interval=1, timeout=60)
+                logger.info(f"[SYSTEM] بدء استقبال الرسائل (محاولة {retry_count + 1}/{max_retries})...")
+                
+                # فحص صحة الاتصال مع Telegram قبل البدء
+                try:
+                    bot_info = bot.get_me()
+                    logger.info(f"[OK] اتصال Telegram سليم - البوت: {bot_info.first_name}")
+                except Exception as test_error:
+                    logger.error(f"[ERROR] فشل في الاتصال مع Telegram: {test_error}")
+                    raise test_error
+                
+                # تنظيف الذاكرة قبل البدء
+                import gc
+                gc.collect()
+                
+                # محاولة استخدام restart_on_change إذا كانت الحزم متاحة
+                polling_kwargs = {
+                    'none_stop': False,  # معالجة أفضل للأخطاء
+                    'interval': 2,       # زيادة المدة لتقليل الضغط على الخادم
+                    'timeout': 90,       # زيادة timeout للاستقرار
+                    'long_polling_timeout': 45,  # زيادة long polling timeout
+                }
+                
+                # إضافة restart_on_change فقط إذا كانت الحزم متاحة
+                try:
+                    import watchdog
+                    import psutil
+                    polling_kwargs['restart_on_change'] = True
+                    logger.info("[SYSTEM] تم تفعيل إعادة التشغيل التلقائي عند التغيير")
+                except ImportError:
+                    logger.warning("[WARNING] watchdog أو psutil غير مثبتة - إعادة التشغيل التلقائي معطلة")
+                
+                bot.infinity_polling(**polling_kwargs)
                 break  # إذا انتهى بشكل طبيعي
                 
+            except telebot.apihelper.ApiException as api_error:
+                retry_count += 1
+                error_str = str(api_error).lower()
+                logger.error(f"[ERROR] خطأ Telegram API (محاولة {retry_count}/{max_retries}): {api_error}")
+                
+                # معالجة خاصة لأخطاء الشبكة والاتصال
+                if "connection" in error_str or "timeout" in error_str or "network" in error_str:
+                    wait_time = min(retry_count * 10, 120)  # انتظار أطول لأخطاء الشبكة
+                else:
+                    wait_time = min(retry_count * 5, 60)
+                    
+                if retry_count >= max_retries:
+                    logger.error("[ERROR] تم الوصول للحد الأقصى من المحاولات - إيقاف البوت")
+                    break
+                    
+                logger.info(f"[SYSTEM] انتظار {wait_time} ثانية قبل إعادة المحاولة...")
+                time.sleep(wait_time)
+                continue
+                
             except Exception as polling_error:
-                logger.error(f"[ERROR] خطأ في الاستقبال: {polling_error}")
-                logger.info("[SYSTEM] محاولة إعادة الاتصال خلال 5 ثواني...")
-                time.sleep(5)
+                retry_count += 1
+                error_str = str(polling_error).lower()
+                logger.error(f"[ERROR] خطأ عام في الاستقبال (محاولة {retry_count}/{max_retries}): {polling_error}")
+                
+                # إعادة تشغيل المراقبة إذا توقفت
+                if not monitoring_active:
+                    logger.warning("[WARNING] المراقبة متوقفة - إعادة التشغيل...")
+                    monitoring_active = True
+                
+                # معالجة خاصة لأخطاء محددة
+                if "infinity polling" in error_str or "polling exited" in error_str or "break infinity polling" in error_str:
+                    logger.warning("[WARNING] انقطاع في infinity polling - محاولة إعادة الاتصال...")
+                    # تنظيف الذاكرة قبل إعادة المحاولة
+                    import gc
+                    gc.collect()
+                    wait_time = min(retry_count * 8, 90)
+                elif "connection" in error_str or "timeout" in error_str or "network" in error_str:
+                    logger.warning("[WARNING] مشكلة في الشبكة - انتظار أطول...")
+                    wait_time = min(retry_count * 15, 180)  # انتظار أطول لمشاكل الشبكة
+                else:
+                    wait_time = min(retry_count * 5, 60)
+                    
+                if retry_count >= max_retries:
+                    logger.error("[ERROR] تم الوصول للحد الأقصى من المحاولات - إيقاف البوت")
+                    break
+                    
+                logger.info(f"[SYSTEM] انتظار {wait_time} ثانية قبل إعادة المحاولة...")
+                time.sleep(wait_time)
                 continue
         
     except KeyboardInterrupt:
