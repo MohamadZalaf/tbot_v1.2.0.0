@@ -988,7 +988,15 @@ def calculate_points_accurately(price_diff, symbol, capital=None, current_price=
 
 # دالة تنسيق رسائل الإشعارات المختصرة
 def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
-    """تنسيق رسائل الإشعارات المختصرة باستخدام أسلوب التحليل اليدوي الشامل مع AI"""
+    """
+    تنسيق رسائل الإشعارات المختصرة باستخدام أسلوب التحليل اليدوي الشامل مع AI
+    
+    ملاحظة مهمة: هذه الدالة تحتفظ بنفس تنسيق الرسالة تماماً كما هو مطلوب
+    المعالجة المحسنة تتم في الخلفية عبر:
+    1. calculate_ai_enhanced_success_rate - لحساب نسبة النجاح بالذكاء الاصطناعي مع جميع معطيات MT5
+    2. النقاط المحسوبة من AI تُستخدم تلقائياً إذا كانت متوفرة (analysis['ai_calculated'])
+    3. قيم pip محسوبة حسب نوع الرمز والشروط المحددة
+    """
     try:
         # استخدام نفس أسلوب جلب البيانات من التحليل اليدوي
         current_price = price_data.get('last', price_data.get('bid', 0))
@@ -7189,7 +7197,16 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
             return calculate_basic_technical_success_rate(technical_data, action) if technical_data else None
 
 def calculate_ai_enhanced_success_rate(analysis: Dict, technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
-    """حساب نسبة النجاح المحسن بإرسال جميع معطيات MT5 للذكاء الاصطناعي"""
+    """
+    حساب نسبة النجاح المحسن بإرسال جميع معطيات MT5 للذكاء الاصطناعي
+    
+    هذه الدالة تقوم بـ:
+    1. جمع جميع البيانات من MT5 (أسعار، مؤشرات فنية، spread، volume، إلخ)
+    2. إرسال البيانات الشاملة للذكاء الاصطناعي لتحليلها
+    3. استخراج نسبة النجاح والنقاط (pip) المحسوبة حسب نوع الرمز
+    4. حفظ النتائج في analysis لاستخدامها في تنسيق الرسالة
+    5. المعالجة تتم في الخلفية دون تغيير تنسيق رسالة الإشعار
+    """
     try:
         if not GEMINI_AVAILABLE or not gemini_analyzer:
             logger.warning("[AI_ENHANCED] Gemini AI غير متوفر - استخدام الحساب الأساسي")
