@@ -7241,17 +7241,47 @@ def calculate_ai_enhanced_success_rate(analysis: Dict, technical_data: Dict, sym
             }
         }
         
-        # إنشاء prompt شامل للـ AI
+        # إنشاء prompt شامل للـ AI مع جميع المؤشرات
         import json
+        indicators = technical_data.get('indicators', {}) if technical_data else {}
+        
         ai_prompt = f"""
-تحليل شامل لحساب نسبة النجاح للصفقة:
+تحليل شامل لحساب نسبة النجاح للصفقة باستخدام جميع المؤشرات الفنية:
 
 الرمز: {symbol}
 نوع الصفقة: {action}
 السعر الحالي: {current_price}
 
-البيانات الفنية:
-{json.dumps(technical_data.get('indicators', {}) if technical_data else {}, indent=2, ensure_ascii=False)}
+📊 المؤشرات الفنية الشاملة:
+
+🔍 مؤشرات الزخم:
+- RSI: {indicators.get('rsi', 'غير متوفر')} ({indicators.get('rsi_interpretation', 'غير محدد')})
+- MACD: {indicators.get('macd', {}).get('macd', 'غير متوفر')} ({indicators.get('macd_interpretation', 'غير محدد')})
+- MACD Signal: {indicators.get('macd', {}).get('signal', 'غير متوفر')}
+- MACD Histogram: {indicators.get('macd', {}).get('histogram', 'غير متوفر')}
+- Stochastic %K: {indicators.get('stochastic', {}).get('k', 'غير متوفر')}
+- Stochastic %D: {indicators.get('stochastic', {}).get('d', 'غير متوفر')} ({indicators.get('stochastic_interpretation', 'غير محدد')})
+
+📈 المتوسطات المتحركة:
+- MA9: {indicators.get('ma_9', 'غير متوفر')}
+- MA21: {indicators.get('ma_21', 'غير متوفر')}
+- MA50: {indicators.get('ma_50', 'غير متوفر')}
+
+📊 التقلبات والدعم/المقاومة:
+- ATR: {indicators.get('atr', 'غير متوفر')} (مؤشر التقلبات)
+- الدعم: {indicators.get('support', 'غير متوفر')}
+- المقاومة: {indicators.get('resistance', 'غير متوفر')}
+
+📈 تحليل الحجم المحسن:
+- الحجم الحالي: {indicators.get('current_volume', 'غير متوفر')}
+- متوسط الحجم: {indicators.get('avg_volume', 'غير متوفر')}
+- نسبة الحجم: {indicators.get('volume_ratio', 'غير متوفر')}
+- VMA 9: {indicators.get('volume_ma_9', 'غير متوفر')}
+- VMA 21: {indicators.get('volume_ma_21', 'غير متوفر')}
+- Volume ROC: {indicators.get('volume_roc', 'غير متوفر')}%
+
+البيانات الفنية الكاملة:
+{json.dumps(indicators, indent=2, ensure_ascii=False)}
 
 بيانات السوق:
 - Spread: {price_data.get('spread', 0)}
