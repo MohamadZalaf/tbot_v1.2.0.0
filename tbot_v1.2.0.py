@@ -59,7 +59,13 @@ try:
         GEMINI_API_KEYS, GEMINI_CONTEXT_TOKEN_LIMIT, GEMINI_CONTEXT_NEAR_LIMIT_RATIO,
         GEMINI_ROTATE_ON_RATE_LIMIT, SAVE_CHAT_LOGS, CHAT_LOG_RETENTION_DAYS
     )
-except ImportError:
+    
+    # استيراد نظام كشف قيم النقاط المحسن
+    from pip_value_detector import (
+        get_pip_value, get_asset_category, list_supported_assets, 
+        calculate_points_from_price_difference as pip_calculate_points
+    )
+except ImportError as import_error:
     # إعدادات احتياطية في حالة عدم وجود ملف config.py
     BOT_TOKEN = 'YOUR_BOT_TOKEN_HERE'
     BOT_PASSWORD = 'tra12345678'
@@ -77,6 +83,19 @@ except ImportError:
     AVAILABLE_TIMEZONES = {}
     DEFAULT_CAPITAL_OPTIONS = [1000, 5000, 10000]
     TRADING_MODE_SETTINGS = {}
+    
+    # دعم احتياطي لـ pip_value_detector في حالة عدم وجوده
+    if 'pip_value_detector' in str(import_error):
+        print("⚠️ تحذير: ملف pip_value_detector.py غير موجود - سيتم استخدام النظام الداخلي")
+        # دوال احتياطية
+        def get_pip_value(asset_name: str) -> float:
+            return get_asset_type_and_pip_size(asset_name)[1]
+        def get_asset_category(asset_name: str) -> str:
+            return get_asset_type_and_pip_size(asset_name)[0]
+        def list_supported_assets() -> dict:
+            return {"message": "استخدام النظام الداخلي"}
+        def pip_calculate_points(price_diff, symbol):
+            return calculate_points_from_price_difference(price_diff, symbol)
 
 # متغير للتحكم في حلقة المراقبة
 monitoring_active = False
@@ -914,7 +933,7 @@ def get_asset_type_and_pip_size(symbol):
             return 'forex', 0.0001  # افتراضي للفوركس
 
 def test_pip_values():
-    """دالة اختبار لتأكيد صحة قيم النقاط الجديدة"""
+    """دالة اختبار لتأكيد صحة قيم النقاط الجديدة - محسنة مع pip_value_detector"""
     test_symbols = [
         # أزواج العملات
         'EURUSD', 'USDJPY', 'GBPUSD', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD',
@@ -926,10 +945,20 @@ def test_pip_values():
         'DOTUSD', 'DOGEUSD', 'AVAXUSD', 'LINKUSD', 'LTCUSD', 'BCHUSD'
     ]
     
-    logger.info("[PIP_TEST] اختبار قيم النقاط الجديدة:")
+    logger.info("[PIP_TEST] اختبار قيم النقاط مع pip_value_detector:")
     for symbol in test_symbols:
-        asset_type, pip_size = get_asset_type_and_pip_size(symbol)
-        logger.info(f"[PIP_TEST] {symbol}: {pip_size} ({asset_type})")
+        try:
+            # محاولة استخدام pip_value_detector
+            try:
+                pip_value = get_pip_value(symbol)
+                category = get_asset_category(symbol)
+                logger.info(f"[PIP_DETECTOR] {symbol}: {pip_value} ({category})")
+            except (NameError, AttributeError):
+                # النظام القديم كبديل
+                asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+                logger.info(f"[PIP_LEGACY] {symbol}: {pip_size} ({asset_type})")
+        except Exception as e:
+            logger.error(f"[PIP_ERROR] فشل اختبار {symbol}: {e}")
 
 def calculate_pip_value(symbol, current_price, contract_size=100000):
     """حساب قيمة النقطة باستخدام المعادلة الصحيحة"""
@@ -973,14 +1002,19 @@ def calculate_pip_value(symbol, current_price, contract_size=100000):
         return 10.0
 
 def calculate_points_from_price_difference(price_diff, symbol):
-    """حساب عدد النقاط من فرق السعر"""
+    """حساب عدد النقاط من فرق السعر - محسن مع pip_value_detector"""
     try:
-        asset_type, pip_size = get_asset_type_and_pip_size(symbol)
-        
-        if pip_size > 0:
-            return abs(price_diff) / pip_size
-        else:
-            return 0
+        # محاولة استخدام pip_value_detector أولاً
+        try:
+            return pip_calculate_points(price_diff, symbol)
+        except (NameError, AttributeError):
+            # في حالة عدم توفر pip_value_detector، استخدام النظام القديم
+            asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+            
+            if pip_size > 0:
+                return abs(price_diff) / pip_size
+            else:
+                return 0
             
     except Exception as e:
         logger.error(f"خطأ في حساب النقاط من فرق السعر: {e}")
