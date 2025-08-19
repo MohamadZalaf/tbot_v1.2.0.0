@@ -36,7 +36,20 @@ apihelper.READ_TIMEOUT = 60     # زيادة إلى 60 ثانية للاستقر
 apihelper.RETRY_TIMEOUT = 5     # زيادة timeout للمحاولات المتكررة
 import pandas as pd
 import numpy as np
-import MetaTrader5 as mt5
+try:
+    import MetaTrader5 as mt5
+    MT5_AVAILABLE = True
+except ImportError:
+    MT5_AVAILABLE = False
+    mt5 = None
+    print("Warning: MetaTrader5 not available on this system")
+    
+# تعريف ثوابت الوقت عند عدم توفر MT5
+if not MT5_AVAILABLE:
+    class MT5Constants:
+        TIMEFRAME_M1 = 1
+        TIMEFRAME_D1 = 1440
+    mt5 = MT5Constants()
 import google.generativeai as genai
 from datetime import datetime, timedelta
 from telebot import types
@@ -2150,6 +2163,11 @@ class MT5Manager:
     
     def initialize_mt5(self):
         """تهيئة الاتصال مع MT5 مع آلية إعادة المحاولة"""
+        if not MT5_AVAILABLE:
+            logger.warning("[MT5] MetaTrader5 غير متوفر على هذا النظام")
+            self.connected = False
+            return False
+            
         with self.connection_lock:
             # منع محاولات الاتصال المتكررة
             current_time = time.time()
@@ -2769,10 +2787,14 @@ class MT5Manager:
     
 
     
-    def get_market_data(self, symbol: str, timeframe: int = mt5.TIMEFRAME_M1, count: int = 100) -> Optional[pd.DataFrame]:
+    def get_market_data(self, symbol: str, timeframe: int = None, count: int = 100) -> Optional[pd.DataFrame]:
         """جلب بيانات السوق من MT5"""
         if not self.connected:
             return None
+        
+        # تعيين timeframe افتراضي إذا لم يتم تحديده
+        if timeframe is None:
+            timeframe = mt5.TIMEFRAME_M1 if MT5_AVAILABLE else 1
         
         try:
             # جلب البيانات
@@ -5830,16 +5852,17 @@ class GeminiAnalyzer:
             message += "📰 تحديث إخباري:\n"
             
             # جلب الأخبار المتعلقة بالرمز
-            news = self.get_symbol_news(symbol)
-            message += f"{news}\n\n"
+            try:
+                news = self.get_symbol_news(symbol)
+                message += f"{news}\n\n"
+            except Exception as e:
+                logger.warning(f"[WARNING] فشل في جلب الأخبار للرمز {symbol}: {e}")
+                message += "• لا توجد أخبار متاحة حالياً\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━"
             
             return message
             
-        except Exception as e:
-            logger.error(f"خطأ في تنسيق التحليل الشامل: {e}")
-            return "❌ خطأ في إنشاء التحليل الشامل"
     
     def _fallback_analysis(self, symbol: str, price_data: Dict) -> Dict:
         """تحليل احتياطي محسّن في حالة فشل Gemini - يعتمد على البيانات الأساسية"""
@@ -12057,6 +12080,9 @@ def is_notification_time_allowed(user_id: int, alert_timing: str) -> bool:
 def monitoring_loop():
     """حلقة مراقبة الأسعار وإرسال التنبيهات مع معالجة محسنة للأخطاء"""
     global monitoring_active
+    global analysis_in_progress, active_users, user_selected_symbols, user_monitoring_active
+    global mt5_operation_lock, crossover_tracker
+    global GEMINI_API_KEY, GEMINI_MODEL
     logger.info("[RUNNING] بدء حلقة المراقبة...")
     consecutive_errors = 0
     max_consecutive_errors = 5
@@ -12204,6 +12230,7 @@ def monitoring_loop():
                             else:
                                 successful_operations += 1  # لا توجد إشارة قوية ولكن العملية نجحت
                                 
+                        except Exception as user_error:
                             logger.error(f"[ERROR] خطأ في معالجة المستخدم {user_id} للرمز {symbol}: {user_error}")
                             failed_operations += 1
                             continue
@@ -12253,8 +12280,35 @@ def monitoring_loop():
 
 # ===== تشغيل البوت =====
 if __name__ == "__main__":
+    # فحص وجود instance آخر من البوت
+    import os
+    import fcntl
+    
+    lock_file_path = "trading_bot.lock"
+    
+    try:
+        # إنشاء ملف القفل
+        lock_file = open(lock_file_path, 'w')
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        
+        # كتابة معرف العملية في الملف
+        lock_file.write(str(os.getpid()))
+        lock_file.flush()
+        
+        logger.info("✅ تم الحصول على قفل البوت - لا يوجد instance آخر يعمل")
+        
+    except (IOError, OSError):
+        logger.error("❌ [CRITICAL] يوجد instance آخر من البوت يعمل حالياً!")
+        logger.error("💡 [SOLUTION] يرجى إيقاف البوت الآخر قبل تشغيل instance جديد")
+        logger.error("🔧 [INFO] إذا كان البوت متوقف ولكن الملف موجود، احذف الملف: trading_bot.lock")
+        exit(1)
+    
     try:
         logger.info("▶️ بدء تشغيل بوت التداول المتقدم v1.2.0...")
+        
+        # التحقق من توفر MetaTrader5
+        if not MT5_AVAILABLE:
+            logger.warning("⚠️ MetaTrader5 غير متوفر على هذا النظام - البوت سيعمل بوظائف محدودة")
         
         # تعريف المتغيرات الأساسية المفقودة
         mt5_manager = MT5Manager()
@@ -12272,9 +12326,6 @@ if __name__ == "__main__":
             }
         
         # تعريف المتغيرات العامة المفقودة الأخرى
-        global analysis_in_progress, monitoring_active
-        global active_users, user_selected_symbols, user_monitoring_active
-        global mt5_operation_lock, crossover_tracker
         
         analysis_in_progress = False
         monitoring_active = True
@@ -12299,9 +12350,11 @@ if __name__ == "__main__":
             logger.warning("[WARNING] MetaTrader5 غير متصل - يرجى التحقق من الإعدادات")
         
         # تعريف متغيرات Gemini العامة
-        global GEMINI_API_KEY, GEMINI_MODEL
-        GEMINI_API_KEY = config.GEMINI_API_KEY if hasattr(config, 'GEMINI_API_KEY') else 'AIzaSyDAOp1ARgrkUvPcmGmXddFx8cqkzhy-3O8'
-        GEMINI_MODEL = config.GEMINI_MODEL if hasattr(config, 'GEMINI_MODEL') else 'gemini-2.0-flash'
+        # استخدام المتغيرات المستوردة من config.py أو القيم الافتراضية
+        if 'GEMINI_API_KEY' not in globals():
+            GEMINI_API_KEY = 'AIzaSyDAOp1ARgrkUvPcmGmXddFx8cqkzhy-3O8'
+        if 'GEMINI_MODEL' not in globals():
+            GEMINI_MODEL = 'gemini-2.0-flash'
         GEMINI_AVAILABLE = True
         
         # التحقق من Gemini AI
@@ -12362,12 +12415,23 @@ if __name__ == "__main__":
                     bot_info = bot.get_me()
                     logger.info(f"[OK] اتصال Telegram سليم - البوت: {bot_info.first_name}")
                 except Exception as test_error:
+                    # فحص خاص لخطأ 409 في مرحلة الاختبار
+                    if "409" in str(test_error) or "conflict" in str(test_error).lower():
+                        logger.error("[CRITICAL] خطأ 409: يوجد instance آخر من البوت يعمل بنفس الـ token!")
+                        logger.error("[SOLUTION] يرجى إيقاف البوت الآخر أو استخدام token مختلف")
+                        raise SystemExit("إيقاف البوت لتجنب التعارض")
                     logger.error(f"[ERROR] فشل في الاتصال مع Telegram: {test_error}")
                     raise test_error
                 
                 # تنظيف الذاكرة قبل البدء
                 import gc
                 gc.collect()
+                
+                # تنظيف أي polling موجود مسبقاً (احتياطي)
+                try:
+                    bot.stop_polling()
+                except:
+                    pass  # تجاهل الأخطاء إذا لم يكن هناك polling نشط
                 
                 # محاولة استخدام restart_on_change إذا كانت الحزم متاحة
                 polling_kwargs = {
@@ -12390,11 +12454,18 @@ if __name__ == "__main__":
                 break  # إذا انتهى بشكل طبيعي
                 
             except telebot.apihelper.ApiException as api_error:
-                retry_count += 1
                 error_str = str(api_error).lower()
-                logger.error(f"[ERROR] خطأ Telegram API (محاولة {retry_count}/{max_retries}): {api_error}")
+                logger.error(f"[ERROR] خطأ Telegram API: {api_error}")
                 
-                # معالجة خاصة لأخطاء الشبكة والاتصال
+                # معالجة خاصة لخطأ 409 - إيقاف نهائي
+                if "409" in str(api_error) or "conflict" in error_str:
+                    logger.error("[CRITICAL] خطأ 409: يوجد instance آخر من البوت يعمل بنفس الـ token!")
+                    logger.error("[SOLUTION] يرجى إيقاف البوت الآخر أو استخدام token مختلف")
+                    logger.error("[SYSTEM] إيقاف البوت لتجنب التعارض...")
+                    break  # إيقاف نهائي - لا محاولة مرة أخرى
+                
+                retry_count += 1
+                # معالجة خاصة لأخطاء الشبكة والاتصال فقط
                 if "connection" in error_str or "timeout" in error_str or "network" in error_str:
                     wait_time = min(retry_count * 10, 120)  # انتظار أطول لأخطاء الشبكة
                 else:
@@ -12409,9 +12480,17 @@ if __name__ == "__main__":
                 continue
                 
             except Exception as polling_error:
-                retry_count += 1
                 error_str = str(polling_error).lower()
-                logger.error(f"[ERROR] خطأ عام في الاستقبال (محاولة {retry_count}/{max_retries}): {polling_error}")
+                logger.error(f"[ERROR] خطأ عام في الاستقبال: {polling_error}")
+                
+                # معالجة خاصة لخطأ 409 - إيقاف نهائي
+                if "409" in str(polling_error) or "conflict" in error_str:
+                    logger.error("[CRITICAL] خطأ 409: يوجد instance آخر من البوت يعمل بنفس الـ token!")
+                    logger.error("[SOLUTION] يرجى إيقاف البوت الآخر أو استخدام token مختلف")
+                    logger.error("[SYSTEM] إيقاف البوت لتجنب التعارض...")
+                    break  # إيقاف نهائي - لا محاولة مرة أخرى
+                
+                retry_count += 1
                 
                 # إعادة تشغيل المراقبة إذا توقفت
                 if not monitoring_active:
@@ -12439,6 +12518,9 @@ if __name__ == "__main__":
                 time.sleep(wait_time)
                 continue
         
+    except SystemExit as e:
+        logger.info(f"[SYSTEM] إيقاف البوت: {e}")
+        monitoring_active = False
     except KeyboardInterrupt:
         logger.info("[SYSTEM] تم الحصول على إشارة إيقاف...")
         monitoring_active = False
