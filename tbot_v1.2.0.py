@@ -1289,15 +1289,15 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                 # حساب النقاط المحسن - خانة واحدة بين 1-9 مع منطق الشراء/البيع
                 import random
                 
-                # حساب النقاط للهدف الأول والثاني (الأول أقل من الثاني دائماً)
+                # حساب النقاط للهدف الأول والثاني
                 if action == 'BUY':
                     # للشراء: الهدف الأول أقل من الثاني
                     points1 = random.randint(3, 5)  # الهدف الأول أقل
                     points2 = random.randint(6, 8)  # الهدف الثاني أكثر
                 elif action == 'SELL':
-                    # للبيع: الهدف الأول أقل من الثاني أيضاً
-                    points1 = random.randint(3, 5)  # الهدف الأول أقل
-                    points2 = random.randint(6, 8)  # الهدف الثاني أكثر
+                    # للبيع: الهدف الأول أكبر من الثاني
+                    points1 = random.randint(6, 8)  # الهدف الأول أكبر
+                    points2 = random.randint(3, 5)  # الهدف الثاني أقل
                 else:
                     points1 = random.randint(3, 5)
                     points2 = random.randint(6, 8)
@@ -2118,7 +2118,7 @@ class GeminiAnalyzer:
 📊 **تحليل شامل - {symbol_info['emoji']} {symbol_info['name']}**
 
 💰 **السعر الحالي:** `{current_price:.5f}`
-💳 **رأس المال:** ${user_capital:,.0f}
+💳 **رأس المال المحدد للتداول:** ${user_capital:,.0f}
 📊 **حجم المركز المقترح:** {recommended_lot_size} لوت
 📈 **التوصية:** {action_emoji} **{action_text}**
 {confidence_emoji} **مستوى الثقة:** {confidence}% ({confidence_text})
@@ -7204,8 +7204,8 @@ def set_user_trading_mode(user_id: int, mode: str):
     user_trading_modes[user_id] = mode
 
 def get_user_capital(user_id: int) -> float:
-    """جلب رأس المال للمستخدم"""
-    return user_capitals.get(user_id, 0)  # القيمة الافتراضية 0 لعرض سؤال رأس المال
+    """جلب رأس المال المحدد من المستخدم للتداول (وليس رصيد الحساب الكامل)"""
+    return user_capitals.get(user_id, 1000)  # القيمة الافتراضية 1000 إذا لم يحدد المستخدم
 
 def set_user_capital(user_id: int, capital: float):
     """تعيين رأس المال للمستخدم"""
@@ -12279,9 +12279,9 @@ if __name__ == "__main__":
         else:
             logger.warning("[WARNING] MetaTrader5 غير متصل - يرجى التحقق من الإعدادات")
         
-        # تعريف متغيرات Gemini العامة
-        GEMINI_API_KEY = config.GEMINI_API_KEY if hasattr(config, 'GEMINI_API_KEY') else 'AIzaSyDAOp1ARgrkUvPcmGmXddFx8cqkzhy-3O8'
-        GEMINI_MODEL = config.GEMINI_MODEL if hasattr(config, 'GEMINI_MODEL') else 'gemini-2.0-flash'
+        # تعريف متغيرات Gemini العامة (استخدام المتغيرات المستوردة)
+        # GEMINI_API_KEY و GEMINI_MODEL تم استيرادهما بالفعل في أعلى الملف
+        # لا حاجة لإعادة تعريفهما
         GEMINI_AVAILABLE = True
         
         # التحقق من Gemini AI
