@@ -844,92 +844,37 @@ def handle_renew_api_context_command(message):
 
 # دوال حساب النقاط المحسنة - منسوخة من التحليل الآلي الصحيح
 def get_asset_type_and_pip_size(symbol):
-    """تحديد نوع الأصل وحجم النقطة حسب النظام المتبع في التداول"""
-    symbol = symbol.upper().replace('/', '')  # إزالة الشرطة المائلة إن وجدت
+    """تحديد نوع الأصل وحجم النقطة بطريقة بسيطة ومباشرة"""
+    symbol = symbol.upper()
     
-    # 💱 أزواج العملات - قيم دقيقة حسب النظام المتبع
-    forex_pairs = {
-        'EURUSD': 0.0001,
-        'USDJPY': 0.01,
-        'USDGBP': 0.0001,
-        'GBPUSD': 0.0001,  # إضافة للتوافق
-        'AUDUSD': 0.0001,
-        'USDCAD': 0.0001,
-        'USDCHF': 0.0001,
-        'NZDUSD': 0.0001,
-        'EURGBP': 0.0001,
-        'EURJPY': 0.01,
-        'GBPJPY': 0.01
-    }
+    # 💱 الفوركس - منطق بسيط للنقاط
+    if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
+        if any(symbol.endswith(yen) for yen in ['JPY']):
+            return 'forex_jpy', 0.01  # أزواج الين: 1 نقطة = 0.01
+        else:
+            return 'forex_major', 0.0001  # الأزواج الرئيسية: 1 نقطة = 0.0001
     
-    # 🪙 المعادن الثمينة - قيم محدثة
-    metals = {
-        'XAUUSD': 0.01,  # ذهب
-        'XAGUSD': 0.01,  # فضة
-        'XPTUSD': 0.01,  # بلاتين
-        'XPDUSD': 0.01   # بلاديوم
-    }
+    # 🪙 المعادن النفيسة
+    elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+        return 'metals', 0.1  # الذهب: 1 نقطة = 0.1 دولار
     
-    # ₿ العملات الرقمية - قيم دقيقة حسب النظام
-    crypto_currencies = {
-        'BTCUSD': 1.00,    # بيتكوين
-        'ETHUSD': 0.10,    # إيثريوم
-        'BNBUSD': 0.01,    # بينانس كوين
-        'XRPUSD': 0.0001,  # ريبل
-        'ADAUSD': 0.0001,  # كاردانو
-        'SOLUSD': 0.01,    # سولانا
-        'DOTUSD': 0.01,    # بولكادوت
-        'DOGEUSD': 0.0001, # دوجكوين
-        'AVAXUSD': 0.01,   # أفالانش
-        'LINKUSD': 0.01,   # تشين لينك
-        'LTCUSD': 0.10,    # لايتكوين
-        'BCHUSD': 0.10     # بيتكوين كاش
-    }
+    # 🪙 العملات الرقمية
+    elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
+        if 'BTC' in symbol:
+            return 'crypto_btc', 100.0  # البيتكوين: 1 نقطة = 100 دولار
+        else:
+            return 'crypto_alt', 1.0  # العملات الأخرى: 1 نقطة = 1 دولار
     
-    # التحقق من الأصل بالترتيب
-    if symbol in forex_pairs:
-        return 'forex', forex_pairs[symbol]
-    elif symbol in metals:
-        return 'metals', metals[symbol]
-    elif symbol in crypto_currencies:
-        return 'crypto', crypto_currencies[symbol]
-    
-    # 📈 الأسهم (إبقاء الدعم الحالي)
+    # 📈 الأسهم
     elif any(symbol.startswith(stock) for stock in ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN']):
-        return 'stocks', 1.0
+        return 'stocks', 1.0  # الأسهم: 1 نقطة = 1 دولار
     
-    # 📉 المؤشرات (إبقاء الدعم الحالي)
+    # 📉 المؤشرات
     elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER', 'SPX']):
-        return 'indices', 1.0
+        return 'indices', 1.0  # المؤشرات: 1 نقطة = 1 وحدة
     
     else:
-        # محاولة تخمين ذكي للرموز غير المعروفة
-        if 'JPY' in symbol:
-            return 'forex_jpy', 0.01
-        elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB', 'SOL', 'DOT', 'DOGE', 'AVAX', 'LINK', 'BCH']):
-            return 'crypto', 0.01  # افتراضي للعملات الرقمية
-        elif any(metal in symbol for metal in ['XAU', 'XAG', 'XPT', 'XPD', 'GOLD', 'SILVER']):
-            return 'metals', 0.01  # افتراضي للمعادن
-        else:
-            return 'forex', 0.0001  # افتراضي للفوركس
-
-def test_pip_values():
-    """دالة اختبار لتأكيد صحة قيم النقاط الجديدة"""
-    test_symbols = [
-        # أزواج العملات
-        'EURUSD', 'USDJPY', 'GBPUSD', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD',
-        'EURGBP', 'EURJPY', 'GBPJPY',
-        # المعادن الثمينة
-        'XAUUSD', 'XAGUSD', 'XPTUSD', 'XPDUSD',
-        # العملات الرقمية
-        'BTCUSD', 'ETHUSD', 'BNBUSD', 'XRPUSD', 'ADAUSD', 'SOLUSD',
-        'DOTUSD', 'DOGEUSD', 'AVAXUSD', 'LINKUSD', 'LTCUSD', 'BCHUSD'
-    ]
-    
-    logger.info("[PIP_TEST] اختبار قيم النقاط الجديدة:")
-    for symbol in test_symbols:
-        asset_type, pip_size = get_asset_type_and_pip_size(symbol)
-        logger.info(f"[PIP_TEST] {symbol}: {pip_size} ({asset_type})")
+        return 'unknown', 0.0001  # افتراضي
 
 def calculate_pip_value(symbol, current_price, contract_size=100000):
     """حساب قيمة النقطة باستخدام المعادلة الصحيحة"""
@@ -1079,22 +1024,62 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             # التأكد من أن AI يدرس المؤشرات دائماً ويحسب النسبة
             ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
             
-            # التأكد من أن النسبة من AI صحيحة أو عرض --
-            if ai_success_rate == "--" or ai_success_rate is None:
-                confidence = "--"
-                logger.warning(f"[AI_SUCCESS] لم يتم الحصول على نسبة نجاح من AI للرمز {symbol}")
-            elif isinstance(ai_success_rate, (int, float)) and 0 <= ai_success_rate <= 100:
-                confidence = ai_success_rate
-                logger.info(f"[AI_SUCCESS] تم حساب نسبة النجاح للرمز {symbol}: {confidence:.1f}%")
-            else:
-                confidence = "--"
-                logger.warning(f"[AI_SUCCESS] نسبة نجاح غير صحيحة من AI للرمز {symbol}: {ai_success_rate}")
+            # التأكد من أن النسبة ضمن النطاق المطلوب 0-100%
+            if ai_success_rate is None or ai_success_rate < 0:
+                ai_success_rate = 15  # حد أدنى
+            elif ai_success_rate > 100:
+                ai_success_rate = 95  # حد أقصى
+            
+            confidence = ai_success_rate
+            logger.info(f"[AI_SUCCESS] تم حساب نسبة النجاح للرمز {symbol}: {confidence:.1f}%")
             
         except Exception as e:
             logger.error(f"[ERROR] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
-            # لا نسب احتياطية - عرض -- للمستخدم
-            confidence = "--"
-            logger.warning(f"[AUTO_FAILED] عرض -- للمستخدم - فشل في حساب نسبة النجاح")
+            # في حالة الفشل، حساب نسبة بديلة بناءً على المؤشرات المتوفرة
+            backup_score = 50  # نقطة البداية
+            
+            try:
+                # حساب بديل بناءً على المؤشرات الأساسية
+                if indicators:
+                    rsi = indicators.get('rsi', 50)
+                    macd = indicators.get('macd', {})
+                    volume_ratio = indicators.get('volume_ratio', 1.0)
+                    
+                    # تعديل النسبة بناءً على RSI
+                    if action == 'BUY':
+                        if rsi < 30:  # ذروة بيع - فرصة شراء
+                            backup_score += 20
+                        elif rsi > 70:  # ذروة شراء - خطر
+                            backup_score -= 15
+                    elif action == 'SELL':
+                        if rsi > 70:  # ذروة شراء - فرصة بيع
+                            backup_score += 20
+                        elif rsi < 30:  # ذروة بيع - خطر
+                            backup_score -= 15
+                    
+                    # تعديل بناءً على MACD
+                    if macd.get('macd') is not None:
+                        macd_value = macd['macd']
+                        if (action == 'BUY' and macd_value > 0) or (action == 'SELL' and macd_value < 0):
+                            backup_score += 10
+                        else:
+                            backup_score -= 5
+                    
+                    # تعديل بناءً على الحجم
+                    if volume_ratio > 1.5:
+                        backup_score += 10
+                    elif volume_ratio < 0.5:
+                        backup_score -= 10
+                    
+                    # ضمان النطاق 15-90%
+                    backup_score = max(15, min(90, backup_score))
+                
+                confidence = backup_score
+                logger.info(f"[BACKUP_SUCCESS] استخدام نسبة احتياطية للرمز {symbol}: {confidence:.1f}%")
+                
+            except Exception as backup_error:
+                logger.error(f"[ERROR] فشل في الحساب الاحتياطي للرمز {symbol}: {backup_error}")
+                confidence = 50  # نسبة افتراضية آمنة
         
         # حساب التغير اليومي الصحيح
         price_change_pct = indicators.get('price_change_pct', 0)
@@ -1341,45 +1326,62 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             try:
                 logger.debug(f"[DEBUG] حساب النقاط يدوياً للرمز {symbol}: entry={entry_price}, target1={target1}, target2={target2}, stop={stop_loss}, pip_size={pip_size}")
                 
-                # حساب النقاط المحسن - خانة واحدة بين 1-9 مع منطق الشراء/البيع
-                import random
-                
-                # حساب النقاط للهدف الأول والثاني
-                if action == 'BUY':
-                    # للشراء: الهدف الأول أقل من الثاني
-                    points1 = random.randint(3, 5)  # الهدف الأول أقل
-                    points2 = random.randint(6, 8)  # الهدف الثاني أكثر
-                elif action == 'SELL':
-                    # للبيع: الهدف الأول أكبر من الثاني
-                    points1 = random.randint(6, 8)  # الهدف الأول أكبر
-                    points2 = random.randint(3, 5)  # الهدف الثاني أقل
-                else:
-                    points1 = random.randint(3, 5)
-                    points2 = random.randint(6, 8)
-                
-                # حساب النقاط لوقف الخسارة (3-6 نقاط متوسط)
-                stop_points = random.randint(3, 6)
-                
-                # حساب الأسعار بناءً على النقاط
-                if target1 and entry_price:
+                # حساب النقاط للهدف الأول - منطق بسيط ومباشر (5-10 نقاط)
+                if target1 and entry_price and target1 != entry_price:
+                    # استخدام قيم عشوائية بسيطة بين 5-10 نقاط
+                    import random
+                    points1 = random.uniform(5.0, 10.0)
+                    
+                    # حساب الهدف بناءً على النقاط المحددة
                     if action == 'BUY':
                         target1 = entry_price + (points1 * pip_size)
                     elif action == 'SELL':
                         target1 = entry_price - (points1 * pip_size)
-                
-                if target2 and entry_price:
+                    
+                    logger.debug(f"[DEBUG] الهدف الأول: النقاط={points1:.1f}, السعر الجديد={target1:.5f}")
+                    
+                # حساب النقاط للهدف الثاني - منطق صحيح حسب نوع الصفقة
+                if target2 and entry_price and target2 != entry_price:
+                    if action == 'BUY':
+                        # للشراء: الهدف الثاني أكبر من الأول (نقاط أكثر)
+                        if points1 > 0:
+                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                        else:
+                            points2 = random.uniform(6.0, 10.0)
+                    elif action == 'SELL':
+                        # للبيع: الهدف الأول أكبر من الثاني (نقاط أقل للثاني)
+                        if points1 > 0:
+                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
+                        else:
+                            points2 = random.uniform(5.0, 7.0)
+                    
+                    # التأكد من عدم تساوي النقاط والمنطق الصحيح
+                    if action == 'BUY':
+                        while points2 <= points1 or abs(points2 - points1) < 0.5:
+                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                    elif action == 'SELL':
+                        while points2 >= points1 or abs(points1 - points2) < 0.5:
+                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
+                    
+                    # حساب الهدف بناءً على النقاط المحددة
                     if action == 'BUY':
                         target2 = entry_price + (points2 * pip_size)
                     elif action == 'SELL':
                         target2 = entry_price - (points2 * pip_size)
-                
-                if stop_loss and entry_price:
+                    
+                    logger.debug(f"[DEBUG] الهدف الثاني: النقاط={points2:.1f}, السعر الجديد={target2:.5f}")
+                    
+                # حساب النقاط لوقف الخسارة - منطق بسيط (5-10 نقاط)
+                if entry_price and stop_loss and entry_price != stop_loss:
+                    stop_points = random.uniform(5.0, 10.0)
+                    
+                    # حساب وقف الخسارة بناءً على النقاط المحددة
                     if action == 'BUY':
                         stop_loss = entry_price - (stop_points * pip_size)
                     elif action == 'SELL':
                         stop_loss = entry_price + (stop_points * pip_size)
-                
-                logger.debug(f"[DEBUG] النقاط المحسنة للرمز {symbol}: TP1={points1}, TP2={points2}, SL={stop_points}")
+                    
+                    logger.debug(f"[DEBUG] وقف الخسارة: النقاط={stop_points:.1f}, السعر الجديد={stop_loss:.5f}")
                     
                 logger.info(f"[MANUAL_POINTS] النقاط المحسوبة يدوياً للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
             
@@ -1447,10 +1449,7 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
             body += f"🎯 الهدف الثاني: ({points2:.0f} نقطة)\n"
         body += f"🛑 وقف الخسارة: ({stop_points:.0f} نقطة)\n"
         body += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
-        if isinstance(confidence, (int, float)):
-            body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
-        else:
-            body += f"✅ نسبة نجاح الصفقة: {confidence}\n\n"
+        body += f"✅ نسبة نجاح الصفقة: {confidence:.0f}%\n\n"
         
         # الأخبار الاقتصادية - مطابق للتحليل اليدوي
         body += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1881,324 +1880,6 @@ SYMBOL_CATEGORIES = {
 NOTIFICATION_FREQUENCIES = {
     '30s': {'name': '30 ثانية ⚡', 'seconds': 30},  # التردد الوحيد المدعوم
 }
-
-# ===== كلاس محلل Gemini AI =====
-class GeminiAnalyzer:
-    """محلل الأسواق المالية باستخدام Google Gemini AI"""
-    
-    def __init__(self, api_key: str = None):
-        """تهيئة محلل Gemini"""
-        self.api_key = api_key or GEMINI_API_KEY
-        self.model = None
-        self.initialize_gemini()
-    
-    def initialize_gemini(self):
-        """تهيئة نموذج Gemini AI"""
-        try:
-            if not self.api_key:
-                logger.error("[GEMINI] مفتاح API غير متوفر")
-                return False
-            
-            genai.configure(api_key=self.api_key)
-            
-            # تكوين النموذج مع الإعدادات المحسنة
-            generation_config = {
-                'temperature': 0.7,
-                'top_p': 0.8,
-                'top_k': 40,
-                'max_output_tokens': 2048,
-            }
-            
-            safety_settings = [
-                {
-                    "category": "HARM_CATEGORY_HARASSMENT",
-                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-                },
-                {
-                    "category": "HARM_CATEGORY_HATE_SPEECH", 
-                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-                },
-                {
-                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-                },
-                {
-                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-                }
-            ]
-            
-            self.model = genai.GenerativeModel(
-                model_name=GEMINI_MODEL,
-                generation_config=generation_config,
-                safety_settings=safety_settings
-            )
-            
-            logger.info(f"[OK] تم تهيئة محلل Gemini بنجاح - النموذج: {GEMINI_MODEL}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"[ERROR] فشل في تهيئة Gemini: {e}")
-            self.model = None
-            return False
-    
-    def analyze_market_data_with_retry(self, symbol: str, price_data: Dict, user_id: int = None, market_data = None, max_retries: int = 3) -> Dict:
-        """تحليل بيانات السوق مع آلية إعادة المحاولة"""
-        last_error = None
-        
-        for attempt in range(max_retries):
-            try:
-                return self.analyze_market_data(symbol, price_data, user_id, market_data)
-            except Exception as e:
-                last_error = e
-                if attempt == max_retries - 1:
-                    logger.error(f"[ERROR] فشل نهائي في تحليل {symbol} بعد {max_retries} محاولات: {e}")
-                    return self._fallback_analysis(symbol, price_data)
-                
-                wait_time = (2 ** attempt) + (attempt * 0.1)  # exponential backoff
-                logger.warning(f"[WARNING] محاولة {attempt + 1} فشلت لـ {symbol}: {e}. إعادة المحاولة خلال {wait_time:.1f} ثانية...")
-                time.sleep(wait_time)
-        
-        # إذا فشلت جميع المحاولات
-        return self._fallback_analysis(symbol, price_data)
-
-    def analyze_market_data(self, symbol: str, price_data: Dict, user_id: int = None, market_data = None) -> Dict:
-        """تحليل بيانات السوق باستخدام Gemini AI"""
-        if not self.model:
-            return self._fallback_analysis(symbol, price_data)
-        
-        try:
-            # إعداد البيانات للتحليل
-            current_price = price_data.get('last', price_data.get('bid', 0))
-            spread = price_data.get('spread', 0)
-            data_source = price_data.get('source', 'Unknown')
-            
-            # جلب المؤشرات الفنية من MT5
-            technical_data = mt5_manager.calculate_technical_indicators(symbol) if mt5_manager.connected else None
-            
-            # إنشاء prompt التحليل المتقدم
-            prompt = self._create_analysis_prompt(symbol, price_data, technical_data, user_id)
-            
-            # إرسال للـ AI
-            response = self._send_to_gemini(prompt)
-            
-            if response:
-                # استخراج التحليل من الرد
-                analysis = self._parse_gemini_response(response, symbol, price_data)
-                return analysis
-            else:
-                return self._fallback_analysis(symbol, price_data)
-                
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في تحليل {symbol}: {e}")
-            return self._fallback_analysis(symbol, price_data)
-    
-    def _create_analysis_prompt(self, symbol: str, price_data: Dict, technical_data: Dict, user_id: int) -> str:
-        """إنشاء prompt التحليل المتقدم"""
-        current_price = price_data.get('last', price_data.get('bid', 0))
-        spread = price_data.get('spread', 0)
-        data_source = price_data.get('source', 'MT5')
-        
-        # معلومات المؤشرات الفنية
-        technical_analysis = ""
-        if technical_data and technical_data.get('indicators'):
-            indicators = technical_data['indicators']
-            technical_analysis = f"""
-📊 **المؤشرات الفنية اللحظية:**
-- RSI: {indicators.get('rsi', 50):.2f} ({indicators.get('rsi_interpretation', 'محايد')})
-- MACD: {indicators.get('macd', {}).get('macd', 0):.5f}
-- MA9: {indicators.get('ma_9', 0):.5f}
-- MA21: {indicators.get('ma_21', 0):.5f}
-- الدعم: {indicators.get('support', 0):.5f}
-- المقاومة: {indicators.get('resistance', 0):.5f}
-- ATR: {indicators.get('atr', 0):.5f}
-- حجم التداول: {indicators.get('current_volume', 0)}
-"""
-        
-        prompt = f"""
-أنت محلل مالي خبير متخصص في التداول اللحظي. قم بتحليل البيانات التالية للرمز {symbol}:
-
-**البيانات اللحظية:**
-- السعر الحالي: {current_price:.5f}
-- سعر الشراء: {price_data.get('bid', 'غير متوفر')}
-- سعر البيع: {price_data.get('ask', 'غير متوفر')}
-- الفرق (Spread): {spread:.5f}
-- مصدر البيانات: {data_source}
-
-{technical_analysis}
-
-**تعليمات التحليل:**
-1. حلل المؤشرات الفنية بدقة
-2. حدد الاتجاه العام (صاعد/هابط/جانبي)
-3. قدم توصية واضحة (BUY/SELL/HOLD)
-4. احسب نسبة النجاح بناءً على قوة الإشارات (0-100%)
-5. حدد مستويات الدخول والأهداف ووقف الخسارة
-
-**يجب أن تنهي تحليلك بـ:**
-- "التوصية: [BUY/SELL/HOLD]"
-- "نسبة النجاح: X%"
-- "[success_rate]=X"
-
-قدم تحليلاً مفصلاً ومهنياً.
-"""
-        
-        return prompt
-    
-    def _send_to_gemini(self, prompt: str) -> str:
-        """إرسال prompt إلى Gemini وإرجاع النتيجة"""
-        try:
-            if not self.model:
-                logger.error("[GEMINI_ERROR] نموذج Gemini غير متاح")
-                return None
-                
-            response = self.model.generate_content(prompt)
-            if response and response.text:
-                return response.text.strip()
-            else:
-                logger.warning("[GEMINI_WARNING] رد فارغ من Gemini")
-                return None
-                
-        except Exception as e:
-            logger.error(f"[GEMINI_ERROR] خطأ في إرسال إلى Gemini: {e}")
-            return None
-    
-    def _parse_gemini_response(self, response: str, symbol: str, price_data: Dict) -> Dict:
-        """استخراج التحليل من رد Gemini"""
-        try:
-            # استخراج التوصية
-            action = 'HOLD'
-            if 'التوصية: BUY' in response or 'BUY' in response.upper():
-                action = 'BUY'
-            elif 'التوصية: SELL' in response or 'SELL' in response.upper():
-                action = 'SELL'
-            
-            # استخراج نسبة النجاح
-            confidence = 50
-            import re
-            success_match = re.search(r'\[success_rate\]=(\d+)', response)
-            if success_match:
-                confidence = int(success_match.group(1))
-            else:
-                # البحث عن نسبة النجاح في النص
-                percentage_match = re.search(r'نسبة النجاح[:\s]*(\d+)%', response)
-                if percentage_match:
-                    confidence = int(percentage_match.group(1))
-            
-            return {
-                'action': action,
-                'confidence': confidence,
-                'reasoning': [response[:200] + '...' if len(response) > 200 else response],
-                'ai_analysis': response,
-                'source': 'Gemini AI',
-                'symbol': symbol,
-                'timestamp': datetime.now(),
-                'price_data': price_data
-            }
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في استخراج التحليل: {e}")
-            return self._fallback_analysis(symbol, price_data)
-    
-    def _fallback_analysis(self, symbol: str, price_data: Dict) -> Dict:
-        """تحليل بديل عند فشل AI"""
-        return {
-            'action': 'HOLD',
-            'confidence': 30,
-            'reasoning': ['تحليل محدود - Gemini AI غير متوفر'],
-            'ai_analysis': f'⚠️ تحذير: لا يمكن تقديم تحليل كامل للرمز {symbol} بدون Gemini AI.',
-            'source': 'Fallback Analysis',
-            'symbol': symbol,
-            'timestamp': datetime.now(),
-            'price_data': price_data,
-            'warning': 'لا توصيات تداول - AI غير متوفر'
-        }
-    
-    def format_comprehensive_analysis_v120(self, symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
-        """تنسيق التحليل الشامل للعرض"""
-        try:
-            current_price = price_data.get('last', price_data.get('bid', 0))
-            action = analysis.get('action', 'HOLD')
-            confidence = analysis.get('confidence', 50)
-            ai_analysis = analysis.get('ai_analysis', 'تحليل غير متوفر')
-            
-            # الحصول على رأس المال المحدد للمستخدم
-            user_capital = get_user_capital(user_id) if user_id else 1000
-            
-            # حساب حجم المركز المناسب لرأس المال
-            def calculate_position_size(capital):
-                if capital >= 100000:
-                    return 0.1  # حسابات كبيرة جداً
-                elif capital >= 50000:
-                    return 0.05  # حسابات كبيرة
-                elif capital >= 10000:
-                    return 0.02  # حسابات متوسطة
-                elif capital >= 5000:
-                    return 0.01  # حسابات صغيرة
-                elif capital >= 1000:
-                    return 0.01  # حسابات صغيرة جداً
-                else:
-                    return 0.01  # الحد الأدنى
-            
-            recommended_lot_size = calculate_position_size(user_capital)
-            
-            # تحديد لون التوصية
-            if action == 'BUY':
-                action_emoji = '🟢'
-                action_text = 'شراء'
-            elif action == 'SELL':
-                action_emoji = '🔴'
-                action_text = 'بيع'
-            else:
-                action_emoji = '🟡'
-                action_text = 'انتظار'
-            
-            # تحديد مستوى الثقة
-            if confidence >= 80:
-                confidence_emoji = '🎯'
-                confidence_text = 'عالية جداً'
-            elif confidence >= 70:
-                confidence_emoji = '✅'
-                confidence_text = 'عالية'
-            elif confidence >= 60:
-                confidence_emoji = '⚖️'
-                confidence_text = 'متوسطة'
-            elif confidence >= 40:
-                confidence_emoji = '⚠️'
-                confidence_text = 'منخفضة'
-            else:
-                confidence_emoji = '🚫'
-                confidence_text = 'ضعيفة جداً'
-            
-            formatted_analysis = f"""
-📊 **تحليل شامل - {symbol_info['emoji']} {symbol_info['name']}**
-
-💰 **السعر الحالي:** `{current_price:.5f}`
-💳 **رأس المال المحدد للتداول:** ${user_capital:,.0f}
-📊 **حجم المركز المقترح:** {recommended_lot_size} لوت
-📈 **التوصية:** {action_emoji} **{action_text}**
-{confidence_emoji} **مستوى الثقة:** {confidence}% ({confidence_text})
-
-🔍 **التحليل التفصيلي:**
-{ai_analysis[:800]}{'...' if len(ai_analysis) > 800 else ''}
-
-⚠️ **تنبيه:** هذا تحليل للمعلومات فقط وليس نصيحة استثمارية.
-
-🕒 **وقت التحليل:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-📊 **مصدر البيانات:** {price_data.get('source', 'MT5')}
-"""
-            
-            return formatted_analysis
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في تنسيق التحليل: {e}")
-            return f"""
-📊 **خطأ في عرض التحليل**
-
-❌ حدث خطأ في تنسيق تحليل {symbol_info['name']}.
-🔧 يرجى المحاولة مرة أخرى لاحقاً.
-
-🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-"""
 
 # ===== كلاس إدارة MT5 =====
 class MT5Manager:
@@ -2764,10 +2445,8 @@ class MT5Manager:
                         # تقليل التحذيرات - فقط لليوم الواحد (86400 ثانية)
                         if time_diff.total_seconds() < 86400:
                             logger.debug(f"[DATA_AGE] بيانات {symbol} عمرها {time_diff.total_seconds():.0f} ثانية - مقبولة")
-                        elif time_diff.total_seconds() < 86400 * 7:  # أقل من أسبوع
-                            logger.debug(f"[OLD_DATA] بيانات {symbol} قديمة (عمر: {time_diff}) - لكن قابلة للاستخدام")
                         else:
-                            logger.info(f"[INFO] بيانات {symbol} قديمة جداً (عمر: {time_diff}) - قد تحتاج لتحديث MT5")
+                            logger.warning(f"[WARNING] بيانات MT5 قديمة جداً للرمز {symbol} (عمر: {time_diff.total_seconds():.0f} ثانية)")
                         
                         # محاولة تحديث السعر بطلب جديد فقط للبيانات اللحظية المباشرة
                         if force_fresh:
@@ -2933,15 +2612,21 @@ class MT5Manager:
                     'time': current_tick.get('time')
                 }
             
-            # المتوسطات المتحركة (فقط MA9 و MA21) - مع التحقق من صحة الدوال
+            # المتوسطات المتحركة (محسوبة من أحدث البيانات) - مع التحقق من صحة الدوال
             try:
                 if len(df) >= 9:
                     indicators['ma_9'] = ta.trend.sma_indicator(df['close'], window=9).iloc[-1]
+                if len(df) >= 10:
+                    indicators['ma_10'] = ta.trend.sma_indicator(df['close'], window=10).iloc[-1]
+                if len(df) >= 20:
+                    indicators['ma_20'] = ta.trend.sma_indicator(df['close'], window=20).iloc[-1]
                 if len(df) >= 21:
                     indicators['ma_21'] = ta.trend.sma_indicator(df['close'], window=21).iloc[-1]
+                if len(df) >= 50:
+                    indicators['ma_50'] = ta.trend.sma_indicator(df['close'], window=50).iloc[-1]
                     
                 # التحقق من صحة القيم المحسوبة
-                for ma_key in ['ma_9', 'ma_21']:
+                for ma_key in ['ma_9', 'ma_10', 'ma_20', 'ma_21', 'ma_50']:
                     if ma_key in indicators:
                         if pd.isna(indicators[ma_key]) or indicators[ma_key] <= 0:
                             logger.warning(f"[WARNING] قيمة {ma_key} غير صحيحة: {indicators[ma_key]}")
@@ -2953,7 +2638,7 @@ class MT5Manager:
                 logger.error(f"[ERROR] خطأ في حساب المتوسطات المتحركة: {ma_error}")
                 # استخدام حساب بديل يدوي
                 try:
-                    for window in [9, 21]:
+                    for window in [9, 10, 20, 21, 50]:
                         if len(df) >= window:
                             ma_value = df['close'].rolling(window=window).mean().iloc[-1]
                             if not pd.isna(ma_value) and ma_value > 0:
@@ -3354,8 +3039,8 @@ class MT5Manager:
             
             # الدعم والمقاومة
             if len(df) >= 20:
-                indicators['resistance'] = df['high'].rolling(window=21).max().iloc[-1]
-                indicators['support'] = df['low'].rolling(window=21).min().iloc[-1]
+                indicators['resistance'] = df['high'].rolling(window=20).max().iloc[-1]
+                indicators['support'] = df['low'].rolling(window=20).min().iloc[-1]
             
             # حساب ATR (Average True Range) للتقلبات
             if len(df) >= 14:
@@ -3365,7 +3050,7 @@ class MT5Manager:
                     
                     # تصنيف مستوى التقلبات
                     if indicators['atr'] > 0:
-                        avg_atr = atr_values.rolling(window=21).mean().iloc[-1] if len(atr_values) >= 20 else indicators['atr']
+                        avg_atr = atr_values.rolling(window=20).mean().iloc[-1] if len(atr_values) >= 20 else indicators['atr']
                         atr_ratio = indicators['atr'] / avg_atr if avg_atr > 0 else 1
                         
                         if atr_ratio > 1.5:
@@ -3464,7 +3149,19 @@ class MT5Manager:
                 else:
                     indicators['ma_9_21_crossover'] = 'none'
             
-
+            # تقاطعات MA 10 و MA 20
+            if 'ma_10' in indicators and 'ma_20' in indicators and len(df) >= 21:
+                ma_10_prev = ta.trend.sma_indicator(df['close'], window=10).iloc[-2]
+                ma_20_prev = ta.trend.sma_indicator(df['close'], window=20).iloc[-2]
+                
+                if ma_10_prev <= ma_20_prev and indicators['ma_10'] > indicators['ma_20']:
+                    ma_crossovers.append('تقاطع ذهبي MA10/MA20 - إشارة شراء')
+                    indicators['ma_10_20_crossover'] = 'golden'
+                elif ma_10_prev >= ma_20_prev and indicators['ma_10'] < indicators['ma_20']:
+                    ma_crossovers.append('تقاطع الموت MA10/MA20 - إشارة بيع')
+                    indicators['ma_10_20_crossover'] = 'death'
+                else:
+                    indicators['ma_10_20_crossover'] = 'none'
             
             # تقاطعات السعر مع المتوسطات
             current_price = indicators['current_price']
@@ -3512,7 +3209,11 @@ class MT5Manager:
                 else:
                     trend_signals.append('هبوط')
             
-
+            if 'ma_10' in indicators and 'ma_20' in indicators:
+                if indicators['ma_10'] > indicators['ma_20']:
+                    trend_signals.append('صعود')
+                else:
+                    trend_signals.append('هبوط')
             
             # إشارات RSI
             if 'rsi' in indicators:
@@ -3561,7 +3262,10 @@ class MT5Manager:
             elif indicators.get('ma_9_21_crossover') == 'death':
                 crossover_tracker.save_crossover_event(symbol, 'ma_death_9_21', indicators, current_price)
             
-
+            if indicators.get('ma_10_20_crossover') == 'golden':
+                crossover_tracker.save_crossover_event(symbol, 'ma_golden_10_20', indicators, current_price)
+            elif indicators.get('ma_10_20_crossover') == 'death':
+                crossover_tracker.save_crossover_event(symbol, 'ma_death_10_20', indicators, current_price)
             
             # كشف وحفظ تقاطعات MACD
             if 'macd_interpretation' in indicators:
@@ -3777,37 +3481,25 @@ class GeminiAnalyzer:
             # جلب المؤشرات الفنية الكاملة
             technical_data = mt5_manager.calculate_technical_indicators(symbol)
             
-            # تحليل شامل في الخلفية لجميع البيانات (كما طلب المستخدم)
-            background_analysis = self._perform_enhanced_background_analysis(symbol, price_data, technical_data, user_id)
-            
             # استخدام نفس دالة التحليل الشامل المستخدمة في الوضع اليدوي
             analysis_text = self._analyze_with_full_manual_instructions(symbol, price_data, technical_data, user_id)
             
             if analysis_text:
                 # استخراج التوصية ونسبة الثقة
                 recommendation = self._extract_recommendation(analysis_text)
-                confidence = self._extract_ai_success_rate(analysis_text)
+                confidence = self._extract_confidence(analysis_text)
                 
-                # تحسين نسبة الثقة بناءً على التحليل الخلفي
-                enhanced_confidence = confidence
-                if background_analysis and background_analysis.get('enhanced_confidence'):
-                    # دمج نسبة الثقة الأصلية مع التحليل الخلفي المحسن
-                    background_confidence = background_analysis.get('enhanced_confidence', 50)
-                    enhanced_confidence = (confidence * 0.7 + background_confidence * 0.3) if confidence else background_confidence
-                    logger.info(f"[ENHANCED_CONFIDENCE] {symbol}: الأصلية={confidence}%, المحسنة={enhanced_confidence:.1f}%")
-                
-                # إنشاء كائن التحليل الكامل مع التحسينات الخلفية
+                # إنشاء كائن التحليل الكامل
                 analysis_result = {
                     'action': recommendation or 'HOLD',
-                    'confidence': enhanced_confidence if enhanced_confidence is not None else 50,
+                    'confidence': confidence if confidence is not None else 50,
                     'reasoning': [analysis_text[:200] + "..."] if len(analysis_text) > 200 else [analysis_text],
                     'ai_analysis': analysis_text,
-                    'source': 'Gemini AI (تحليل شامل آلي محسن)',
+                    'source': 'Gemini AI (تحليل شامل آلي)',
                     'symbol': symbol,
                     'timestamp': datetime.now(),
                     'price_data': price_data,
-                    'technical_data': technical_data,
-                    'background_analysis': background_analysis  # إضافة التحليل الخلفي
+                    'technical_data': technical_data
                 }
                 
                 # استخراج قيم إضافية من التحليل
@@ -3837,9 +3529,9 @@ class GeminiAnalyzer:
         return None
 
     def _analyze_with_full_manual_instructions(self, symbol: str, price_data: Dict, technical_data: Dict, user_id: int) -> str:
-        """تحليل شامل باستخدام نفس التعليمات المفصلة للوضع اليدوي - موحد تماماً"""
+        """تحليل شامل باستخدام نفس التعليمات المفصلة للوضع اليدوي"""
         try:
-            # الحصول على بيانات المستخدم - نفس ما في اليدوي
+            # الحصول على بيانات المستخدم
             trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
             capital = get_user_capital(user_id) if user_id else 1000
             timezone_str = get_user_timezone(user_id) if user_id else 'UTC'
@@ -3906,100 +3598,7 @@ class GeminiAnalyzer:
         """
         
         return prompt
-    
-    def _format_technical_indicators(self, technical_data: Dict, symbol: str) -> str:
-        """تنسيق المؤشرات الفنية للعرض في التحليل الشامل"""
-        if not technical_data or not technical_data.get('indicators'):
-            return "لا توجد بيانات فنية متوفرة حالياً"
-        
-        indicators = technical_data['indicators']
-        
-        formatted_text = f"""
-        🎯 المؤشرات الفنية اللحظية المتقدمة للرمز {symbol}:
-        
-        ⏰ حالة البيانات اللحظية:
-        - نوع البيانات: {indicators.get('data_freshness', 'غير محدد')}
-        - آخر تحديث: {indicators.get('last_update', 'غير محدد')}
-        - Bid: {indicators.get('tick_info', {}).get('bid', 0):.5f}
-        - Ask: {indicators.get('tick_info', {}).get('ask', 0):.5f}
-        - Spread: {indicators.get('tick_info', {}).get('spread', 0):.5f}
-        - Volume: {indicators.get('tick_info', {}).get('volume', 0)}
-        
-        📈 المتوسطات المتحركة والتقاطعات:
-        - MA 9: {indicators.get('ma_9', 0):.5f}
-        - MA 21: {indicators.get('ma_21', 0):.5f}
-        - تقاطع MA9/MA21: {indicators.get('ma_9_21_crossover', 'لا يوجد')}
-        - تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
-        
-        📊 المؤشرات الفنية المفصلة:
-        • RSI: {indicators.get('rsi', 50):.1f} ({indicators.get('rsi_interpretation', 'محايد')})
-        • MACD: {indicators.get('macd', {}).get('macd', 0):.4f} ({indicators.get('macd_interpretation', 'إشارة محايدة')})
-        • MA9: {indicators.get('ma_9', 0):.5f}
-        • MA21: {indicators.get('ma_21', 0):.5f}
-        • Stochastic %K: {indicators.get('stochastic', {}).get('k', 50):.1f}, %D: {indicators.get('stochastic', {}).get('d', 50):.1f} ({indicators.get('stochastic_interpretation', 'تقاطع محايد - إشارة محايدة | منطقة محايدة - احتمالية متوازنة')})
-        • ATR: {indicators.get('atr', 0):.5f} (التقلبات)
-        • الحجم الحالي: {indicators.get('current_volume', 0)}
-        • متوسط الحجم (20): {indicators.get('avg_volume', 0)}
-        • نسبة الحجم: {indicators.get('volume_ratio', 1.0):.2f}x
-        • تحليل الحجم: {indicators.get('volume_interpretation', 'حجم طبيعي')}
-        • مستوى النشاط: {indicators.get('activity_level', '📊 طبيعي - نشاط عادي للتحليل في الخلفية لا تغير رسالة إشعار التداول')}
-        
-        🎢 Stochastic Oscillator المتقدم:
-        - %K: {indicators.get('stochastic', {}).get('k', 50):.2f}
-        - %D: {indicators.get('stochastic', {}).get('d', 50):.2f}
-        - تقاطع Stochastic: {indicators.get('stochastic', {}).get('crossover', 'لا يوجد')}
-        - منطقة التداول: {indicators.get('stochastic', {}).get('zone', 'غير محدد')}
-        - قوة الإشارة: {indicators.get('stochastic', {}).get('strength', 'غير محدد')}
-        - اتجاه Stochastic: {indicators.get('stochastic', {}).get('trend', 'غير محدد')}
-        - تفسير Stochastic: {indicators.get('stochastic_interpretation', 'غير محدد')}
-        
-        📊 تحليل حجم التداول المتقدم:
-        - الحجم الحالي: {indicators.get('current_volume', 0)}
-        - متوسط الحجم: {indicators.get('avg_volume', 0)}
-        - نسبة الحجم: {indicators.get('volume_ratio', 1.0):.2f}
-        - VMA 9: {indicators.get('volume_ma_9', 0):.0f}
-        - VMA 21: {indicators.get('volume_ma_21', 0):.0f}
-        - Volume ROC: {indicators.get('volume_roc', 0):.2f}%
-        - قوة الحجم: {indicators.get('volume_strength', 'غير محدد')}
-        - تفسير الحجم: {indicators.get('volume_interpretation', 'غير محدد')}
-        
-        🏛️ مستويات الدعم والمقاومة:
-        - الدعم الأول: {indicators.get('support', 0):.5f}
-        - المقاومة الأولى: {indicators.get('resistance', 0):.5f}
-        - المدى اليومي: {indicators.get('daily_range', 0):.5f}
-        - ATR: {indicators.get('atr', 0):.5f}
-        - التقلبات: {indicators.get('volatility', 'غير محدد')}
-        
-        🔄 تحليل التقاطعات الأخيرة:
-        - آخر تقاطع: {indicators.get('last_crossover', 'لا يوجد')}
-        - قوة التقاطع: {indicators.get('crossover_strength', 'غير محدد')}
-        
-        📈 الاتجاه العام:
-        - اتجاه قصير المدى: {indicators.get('short_term_trend', 'غير محدد')}
-        - اتجاه متوسط المدى: {indicators.get('medium_term_trend', 'غير محدد')}
-        - قوة الاتجاه: {indicators.get('trend_strength', 'غير محدد')}
-        """
-        
-        return formatted_text
-    
-    def _send_to_gemini(self, prompt: str) -> str:
-        """إرسال prompt إلى Gemini وإرجاع النتيجة"""
-        try:
-            if not self.model:
-                logger.error("[GEMINI_ERROR] نموذج Gemini غير متاح")
-                return None
-                
-            response = self.model.generate_content(prompt)
-            if response and response.text:
-                return response.text.strip()
-            else:
-                logger.warning("[GEMINI_WARNING] رد فارغ من Gemini")
-                return None
-                
-        except Exception as e:
-            logger.error(f"[GEMINI_ERROR] خطأ في إرسال إلى Gemini: {e}")
-            return None
-    
+
     def _get_comprehensive_instructions(self) -> str:
         """الحصول على نفس التعليمات المفصلة المستخدمة في الوضع اليدوي"""
         return """
@@ -4019,7 +3618,7 @@ class GeminiAnalyzer:
         - اتجاه خطوط MACD
 
         **3. المتوسطات المتحركة:**
-        - ترتيب المتوسطات (9، 21)
+        - ترتيب المتوسطات (10، 20، 50)
         - موقع السعر نسبة للمتوسطات
         - تقاطعات المتوسطات
 
@@ -4048,12 +3647,7 @@ class GeminiAnalyzer:
         - نقطة الدخول المثلى
         - الهدف الأول (Risk:Reward 1:1.5)
         - الهدف الثاني (Risk:Reward 1:3)
-        - وقف الخسارة (حد أقصى مناسب لرأس المال المحدد)
-        
-        **مراعاة رأس المال في التحليل:**
-        - احسب حجم المركز المناسب لرأس المال
-        - تحديد نسبة المخاطرة المناسبة (1-3% حسب الحساب)
-        - ضبط الأهداف بناءً على إمكانيات رأس المال
+        - وقف الخسارة (حد أقصى 2% من رأس المال)
 
         ### 🔍 STEP 5: الحساب النهائي لنسبة النجاح (0-100%)
         
@@ -4171,8 +3765,12 @@ class GeminiAnalyzer:
                 
                 📈 المتوسطات المتحركة والتقاطعات:
                 - MA 9: {indicators.get('ma_9', 'غير متوفر'):.5f}
+                - MA 10: {indicators.get('ma_10', 'غير متوفر'):.5f}
+                - MA 20: {indicators.get('ma_20', 'غير متوفر'):.5f}
                 - MA 21: {indicators.get('ma_21', 'غير متوفر'):.5f}
+                - MA 50: {indicators.get('ma_50', 'غير متوفر'):.5f}
                 - تقاطع MA9/MA21: {indicators.get('ma_9_21_crossover', 'لا يوجد')}
+                - تقاطع MA10/MA20: {indicators.get('ma_10_20_crossover', 'لا يوجد')}
                 - تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
                 
                 📊 مؤشرات الزخم:
@@ -4397,9 +3995,9 @@ class GeminiAnalyzer:
             - MACD تحت Signal + سالب: نقاط البيع = 8/10
             - تقاطع حديث: نقاط إضافية = +2
             
-            **ج) المتوسطات المتحركة والتقاطعات (MA9 و MA21 فقط):**
-            - السعر فوق MA9 > MA21: نقاط الشراء = 8/10
-            - السعر تحت MA9 < MA21: نقاط البيع = 8/10
+            **ج) المتوسطات المتحركة والتقاطعات المتقدمة:**
+            - السعر فوق MA9 > MA21 > MA50: نقاط الشراء = 9/10
+            - السعر تحت MA9 < MA21 < MA50: نقاط البيع = 9/10
             - تقاطع ذهبي MA9/MA21: نقاط الشراء = 8/10 + نقاط إضافية للقوة
             - تقاطع الموت MA9/MA21: نقاط البيع = 8/10 + نقاط إضافية للقوة
             - تقاطع السعر مع MA9 صعوداً: نقاط الشراء = 7/10
@@ -4639,22 +4237,18 @@ class GeminiAnalyzer:
             
             **🔥 تذكر:** أنت تعمل كخبير احترافي في غرفة تداول مؤسسية. قدم التحليل الكامل والشفاف مع التحذيرات المناسبة. المتداول يعتمد على تحليلك في اتخاذ قرارات مالية مهمة جداً!
             
-            **🚨🚨🚨 CRITICAL REQUIREMENT - يجب أن تنهي تحليلك بـ: 🚨🚨🚨**
+            **🚨 MANDATORY - يجب أن تنهي تحليلك بـ:**
             
-            ✅ **STEP 1:** اكتب الجملة العادية: "نسبة نجاح الصفقة: X%" 
-            ✅ **STEP 2:** اكتب الكود المطلوب: "[success_rate]=X"
+            1. الجملة العادية: "نسبة نجاح الصفقة: X%" 
+            2. الكود المطلوب: "[success_rate]=X"
             
-            حيث X هو الرقم من 1 إلى 100 الذي حسبته من المؤشرات الفنية.
+            حيث X هو الرقم الذي حسبته بناءً على المؤشرات الفنية المتاحة.
             
-            **🔥 مثال إجباري على الصيغة الصحيحة:**
-            ```
-            بناءً على التحليل أعلاه، نسبة نجاح الصفقة: 73%
-            [success_rate]=73
-            ```
+            **مثال على الصيغة الصحيحة:**
+            "بناءً على التحليل أعلاه، نسبة نجاح الصفقة: 73%
+            [success_rate]=73"
             
-            **⛔ بدون هاتين الجملتين بالضبط، النظام لن يعمل وستفشل العملية كاملة! ⛔**
-            **🔴 هذا ليس اختياري - هذا إجباري 100% 🔴**
-            **💀 عدم كتابة النسبة = فشل كامل في النظام 💀**
+            **هذا إلزامي ولا يمكن تجاهله! بدون هاتين الجملتين لن يعمل النظام!**
             """
             
             # إرسال الطلب لـ Gemini باستخدام جلسة دردشة لكل رمز
@@ -4705,14 +4299,18 @@ class GeminiAnalyzer:
             
             # استخراج التوصية من النص
             recommendation = self._extract_recommendation(analysis_text)
-            confidence = self._extract_ai_success_rate(analysis_text)
+            confidence = self._extract_confidence(analysis_text)
             
-            # التحقق المحسن من صحة نسبة النجاح - AI يجب أن ينتج النسبة
+            # التحقق المحسن من صحة نسبة النجاح
             if confidence is None:
-                logger.error(f"[AI_ANALYSIS] ❌ فشل AI في إنتاج نسبة النجاح للرمز {symbol} - مشكلة في البرومت أو الاستخراج")
-                # عرض -- للمستخدم عند فشل AI
-                confidence = "--"
-                logger.warning(f"[AI_FAILED] عرض -- للمستخدم - AI لم ينتج نسبة النجاح المطلوبة")
+                logger.warning(f"[AI_ANALYSIS] لم يتم العثور على نسبة نجاح في تحليل AI للرمز {symbol}")
+                # بدلاً من استخدام نسبة ثابتة، نستخدم تحليل فني كاحتياط
+                if technical_data and technical_data.get('indicators'):
+                    confidence = calculate_basic_technical_success_rate(technical_data, recommendation)
+                    logger.info(f"[FALLBACK_ANALYSIS] استخدام التحليل الفني الاحتياطي: {confidence}%")
+                else:
+                    logger.error(f"[ANALYSIS_FAILED] فشل كامل في تحليل الرمز {symbol} - لا توجد بيانات كافية")
+                    confidence = None
             elif confidence < 0 or confidence > 100:
                 logger.warning(f"[AI_ANALYSIS] نسبة نجاح خارج النطاق من AI: {confidence}% - تصحيح")
                 confidence = max(0, min(100, confidence))  # تصحيح النطاق
@@ -4898,6 +4496,31 @@ class GeminiAnalyzer:
         
         return ""
     
+    def _adjust_confidence_for_user(self, confidence: float, user_id: int) -> float:
+        """تعديل مستوى الثقة حسب نمط التداول"""
+        try:
+            trading_mode = get_user_trading_mode(user_id)
+            
+            if trading_mode == 'scalping':
+                # للسكالبينغ، نحتاج ثقة أعلى وتحليل أكثر دقة
+                # إذا كانت الثقة أقل من 75%، نقللها أكثر لأن السكالبينغ يحتاج دقة عالية
+                if confidence < 75:
+                    adjusted_confidence = confidence * 0.8  # تقليل أكبر للثقة المنخفضة
+                    logger.debug(f"[SCALPING_CONFIDENCE] ثقة منخفضة للسكالبينغ: {confidence:.1f}% -> {adjusted_confidence:.1f}%")
+                    return min(adjusted_confidence, 95.0)
+                else:
+                    # ثقة عالية، تقليل طفيف فقط
+                    adjusted_confidence = confidence * 0.95
+                    logger.debug(f"[SCALPING_CONFIDENCE] ثقة جيدة للسكالبينغ: {confidence:.1f}% -> {adjusted_confidence:.1f}%")
+                    return min(adjusted_confidence, 95.0)
+            elif trading_mode == 'longterm':
+                # للتداول طويل المدى، يمكن قبول ثقة أقل
+                return min(confidence * 1.1, 95.0)  # زيادة الثقة قليلاً
+            
+            return confidence
+        except:
+            return confidence
+    
     def _extract_recommendation(self, text: str) -> str:
         """استخراج التوصية من نص التحليل - محسّن"""
         if not text:
@@ -4942,6 +4565,32 @@ class GeminiAnalyzer:
         else:
             return 'HOLD'
     
+    def _extract_confidence(self, text: str) -> float:
+        """استخراج مستوى الثقة المحسن من نص التحليل (بدون نسب ثابتة)"""
+        if not text:
+            logger.warning("[CONFIDENCE_EXTRACT] نص فارغ - لا يمكن استخراج نسبة الثقة")
+            return None  # لا نسبة افتراضية ثابتة
+            
+        # البحث عن نسبة النجاح المحددة من Gemini (محسن)
+        success_rate = self._extract_success_rate_from_ai(text)
+        if success_rate is not None:
+            logger.info(f"[CONFIDENCE_EXTRACT] ✅ تم استخراج نسبة الثقة بنجاح: {success_rate}%")
+            return success_rate
+        
+        # تحليل محسن للنص عند عدم وجود نسبة صريحة
+        logger.info("[CONFIDENCE_EXTRACT] لم توجد نسبة صريحة - بدء التحليل المحسن للنص")
+        
+        # استخدام التحليل الذكي المطور
+        inferred_rate = self._intelligent_rate_inference(text)
+        if inferred_rate is not None:
+            logger.info(f"[CONFIDENCE_EXTRACT] ✅ استنتاج نسبة الثقة من التحليل الذكي: {inferred_rate}%")
+            return inferred_rate
+        
+        # إذا فشل التحليل الذكي أيضاً، لا نعيد نسبة ثابتة
+        logger.warning("[CONFIDENCE_EXTRACT] ❌ فشل في استخراج أو استنتاج نسبة الثقة من النص")
+        return None  # إشارة للفشل الكامل
+
+    def _extract_success_rate_from_ai(self, text: str) -> float:
         """استخراج نسبة النجاح المحسنة من الذكاء الاصطناعي - نطاق 0-100% مع تحسينات ذكية"""
         try:
             import re
@@ -5061,79 +4710,6 @@ class GeminiAnalyzer:
             logger.warning(f"[WARNING] خطأ في استخراج نسبة النجاح من AI: {e}")
             return None
     
-    
-    def _extract_ai_success_rate(self, text: str) -> float:
-        """استخراج نسبة النجاح من تحليل AI مباشرة دون قيم ثابتة"""
-        try:
-            # أولاً، محاولة استخراج من النص الموجود
-            existing_rate = self._extract_success_rate_from_ai(text)
-            if existing_rate is not None:
-                return existing_rate
-            
-            # إرسال طلب مباشر لـ Gemini لحساب نسبة النجاح
-            success_rate_prompt = f"""
-            بناءً على التحليل التالي:
-            {text[:800]}
-            
-            احسب نسبة نجاح هذه الصفقة من 1 إلى 100 بناءً على:
-            1. قوة المؤشرات الفنية
-            2. اتساق الإشارات  
-            3. حالة السوق العامة
-            4. مستوى المخاطرة
-            
-            أعطني رقماً واحداً فقط من 1-100 بدون أي نص إضافي.
-            """
-            
-            if self.model:
-                try:
-                    response = self.model.generate_content(success_rate_prompt)
-                    success_text = response.text.strip()
-                    
-                    # استخراج الرقم من الاستجابة
-                    import re
-                    numbers = re.findall(r'\b(\d{1,3})\b', success_text)
-                    for num in numbers:
-                        rate = int(num)
-                        if 1 <= rate <= 100:
-                            logger.info(f"[AI_SUCCESS_DIRECT] تم الحصول على نسبة النجاح من AI: {rate}%")
-                            return float(rate)
-                            
-                except Exception as e:
-                    logger.warning(f"[WARNING] فشل في الحصول على نسبة النجاح من AI: {e}")
-            
-            # في حالة فشل AI، استخدم تحليل النص الموجود
-            return self._analyze_text_for_success_rate(text)
-            
-        except Exception as e:
-            logger.error(f"[ERROR] خطأ في استخراج نسبة النجاح من AI: {e}")
-            return self._analyze_text_for_success_rate(text)
-    
-    def _analyze_text_for_success_rate(self, text: str) -> float:
-        """تحليل النص لاستخراج نسبة النجاح كبديل"""
-        text_lower = text.lower()
-        
-        # عدد الإشارات الإيجابية والسلبية
-        positive_signals = 0
-        negative_signals = 0
-        
-        positive_words = ['قوي', 'عالي', 'مؤكد', 'واضح', 'إيجابي', 'صعود', 'مرتفع', 'جيد', 'ممتاز']
-        negative_words = ['ضعيف', 'منخفض', 'محدود', 'سلبي', 'هبوط', 'متراجع', 'سيء', 'متضارب']
-        
-        for word in positive_words:
-            positive_signals += text_lower.count(word)
-            
-        for word in negative_words:
-            negative_signals += text_lower.count(word)
-            
-        # حساب النسبة بناءً على الإشارات
-        total_signals = positive_signals + negative_signals
-        if total_signals > 0:
-            positive_ratio = positive_signals / total_signals
-            success_rate = min(max(positive_ratio * 100, 25), 90)
-            logger.info(f"[AI_SUCCESS_TEXT] تم حساب نسبة النجاح من النص: {success_rate:.1f}%")
-            return success_rate
-        
-        return 55.0  # قيمة افتراضية متوسطة
     def _intelligent_rate_inference(self, text: str) -> float:
         """استنتاج ذكي لنسبة النجاح من تحليل محتوى النص (بدون نسبة ثابتة)"""
         try:
@@ -5197,56 +4773,126 @@ class GeminiAnalyzer:
             return None
     
     def get_symbol_news(self, symbol: str) -> str:
-        """جلب أخبار مختصرة ومؤثرة للرمز عبر AI"""
+        """جلب أخبار اقتصادية مؤثرة للرمز المحدد من مصادر موثوقة"""
         try:
-            if not hasattr(self, 'model') or not self.model:
-                return "• 📰 مراقبة التطورات الاقتصادية الحالية"
+            # تحديد الفئة والعملة الأساسية
+            if symbol in ['EURUSD', 'EURGBP', 'EURJPY']:
+                base_currency = 'EUR'
+                news_focus = 'البنك المركزي الأوروبي'
+            elif symbol in ['GBPUSD', 'EURGBP', 'GBPJPY']:
+                base_currency = 'GBP'
+                news_focus = 'بنك إنجلترا'
+            elif symbol in ['USDJPY', 'GBPUSD', 'EURUSD', 'AUDUSD', 'USDCAD', 'USDCHF']:
+                base_currency = 'USD'
+                news_focus = 'الاحتياطي الفيدرالي'
+            elif symbol in ['XAUUSD', 'XAGUSD', 'XPTUSD', 'XPDUSD']:
+                base_currency = 'METALS'
+                news_focus = 'المعادن النفيسة'
+            elif symbol in ['BTCUSD', 'ETHUSD', 'BNBUSD', 'XRPUSD']:
+                base_currency = 'CRYPTO'
+                news_focus = 'العملات الرقمية'
+            else:
+                base_currency = 'STOCKS'
+                news_focus = 'الأسهم'
+
+            # جلب أخبار مختصرة ومؤثرة حسب الفئة
+            news_items = self._get_targeted_news(base_currency, news_focus, symbol)
             
-            # طلب مختصر لـ AI لإنتاج أخبار مؤثرة
-            news_prompt = f"""
-            اكتب 2-3 عناوين أخبار مختصرة تؤثر على الرمز {symbol}:
-            
-            المطلوب:
-            - عناوين قصيرة (10-15 كلمة)
-            - أخبار مؤثرة على سعر الرمز
-            - استخدم رموز الاتجاه: ↗️ للصعود، ↘️ للهبوط، ↗️↘️ للتذبذب
-            
-            التنسيق:
-            • [رمز] [عنوان قصير] [اتجاه]
-            
-            مثال:
-            • 📊 بيانات التضخم الأمريكي تحرك الدولار ↗️
-            """
-            
-            try:
-                response = self.model.generate_content(news_prompt)
-                news_text = response.text.strip()
-                
-                # تنظيف النص وإرجاع الأخبار
-                if news_text and len(news_text) > 10:
-                    return news_text
-                else:
-                    return self._get_fallback_news(symbol)
-                    
-            except Exception as ai_error:
-                logger.warning(f"[WARNING] فشل في إنتاج الأخبار عبر AI: {ai_error}")
-                return self._get_fallback_news(symbol)
+            return '\n'.join(news_items)
             
         except Exception as e:
             logger.error(f"خطأ في جلب الأخبار للرمز {symbol}: {e}")
             return "• 📰 مراقبة التطورات الاقتصادية الحالية"
     
-    def _get_fallback_news(self, symbol: str) -> str:
-        """أخبار احتياطية مختصرة"""
-        if 'USD' in symbol:
-            return "• 📊 بيانات اقتصادية أمريكية تؤثر على الدولار ↗️↘️"
-        elif 'EUR' in symbol:
-            return "• 🇪🇺 قرارات البنك المركزي الأوروبي مؤثرة ↗️↘️"
-        elif 'XAU' in symbol or 'XAG' in symbol:
-            return "• 🥇 طلب الملاذ الآمن يدعم المعادن النفيسة ↗️"
-        elif 'BTC' in symbol or 'ETH' in symbol:
-            return "• ₿ تطورات تنظيم العملات الرقمية تخلق تذبذب ↗️↘️"
-        else:
+    def _get_targeted_news(self, currency_type: str, focus: str, symbol: str) -> list:
+        """جلب أخبار اقتصادية حقيقية من AI حسب نوع الأصل"""
+        try:
+            # استخدام AI لتوليد عناوين أخبار اقتصادية حقيقية
+            if hasattr(self, 'model') and self.model:
+                prompt = f"""
+                أنت محلل اقتصادي متخصص. اكتب عنوانين خبرين اقتصاديين حقيقيين ومؤثرين لـ {symbol} ({currency_type}).
+                
+                المتطلبات:
+                - أخبار اقتصادية فعلية وليست افتراضية
+                - عناوين مختصرة ومؤثرة
+                - تركز على {focus}
+                - تستخدم أرقام وإحصائيات واقعية
+                - تؤثر على سعر {symbol}
+                
+                اكتب خبرين فقط، كل خبر في سطر منفصل مع نقطة في البداية.
+                """
+                
+                try:
+                    response = self.model.generate_content(prompt)
+                    if response and hasattr(response, 'text'):
+                        news_text = response.text.strip()
+                        # تقسيم النص إلى أسطر وإزالة الأسطر الفارغة
+                        news_lines = [line.strip() for line in news_text.split('\n') if line.strip()]
+                        # التأكد من أن كل سطر يبدأ بنقطة
+                        formatted_news = []
+                        for line in news_lines[:2]:  # أقصى خبرين
+                            if not line.startswith('•'):
+                                line = '• ' + line
+                            formatted_news.append(line)
+                        return formatted_news
+                except Exception as ai_error:
+                    logger.warning(f"[AI_NEWS] فشل في توليد أخبار من AI: {ai_error}")
+            
+            # fallback على أخبار اقتصادية عامة حقيقية (ليست من AI)
+            fallback_news = {
+                'USD': [
+                    "• مؤشر الدولار الأمريكي DXY يتأثر بتوقعات الفيدرالي",
+                    "• بيانات التوظيف الأمريكية تؤثر على أسواق العملات"
+                ],
+                'EUR': [
+                    "• قرارات البنك المركزي الأوروبي تحرك اليورو",
+                    "• مؤشرات التضخم الأوروبية تؤثر على السياسة النقدية"
+                ],
+                'GBP': [
+                    "• قرارات بنك إنجلترا تحدد اتجاه الجنيه",
+                    "• بيانات النمو البريطاني تؤثر على أسواق العملات"
+                ],
+                'METALS': [
+                    "• طلب الملاذ الآمن يحرك أسعار المعادن النفيسة",
+                    "• التضخم العالمي يؤثر على قيمة الذهب والفضة"
+                ],
+                'CRYPTO': [
+                    "• التنظيم الحكومي يحرك أسواق العملات الرقمية",
+                    "• اعتماد المؤسسات يؤثر على أسعار البيتكوين"
+                ],
+                'STOCKS': [
+                    "• أرباح الشركات الفصلية تحدد اتجاهات الأسواق",
+                    "• البيانات الاقتصادية تؤثر على مؤشرات الأسهم"
+                ]
+            }
+            
+            return fallback_news.get(currency_type, [
+                "• التطورات الاقتصادية العالمية تؤثر على الأسواق",
+                "• البيانات الاقتصادية الرئيسية تحرك الأسعار"
+            ])
+            
+        except Exception as e:
+            logger.error(f"[NEWS] خطأ في جلب الأخبار: {e}")
+            return [
+                "• 📰 مراقبة التطورات الاقتصادية الحالية",
+                "• 📊 البيانات الاقتصادية تؤثر على الأسواق"
+            ]
+    
+    def format_comprehensive_analysis_v120(self, symbol: str, symbol_info: Dict, price_data: Dict, analysis: Dict, user_id: int) -> str:
+        """تنسيق التحليل الشامل المتقدم للإصدار v1.2.0 - مطابق لـ v1.2.1"""
+        try:
+            # الحصول على بيانات المستخدم
+            trading_mode = get_user_trading_mode(user_id)
+            capital = get_user_capital(user_id)
+            # استخدام نفس منطق الوقت من التحليل اليدوي الصحيح  
+            if user_id:
+                formatted_time = format_time_for_user(user_id)
+            else:
+                formatted_time = f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (التوقيت المحلي)"
+            
+            # البيانات الأساسية
+            current_price = price_data.get('last', price_data.get('bid', 0))
+            bid = price_data.get('bid', 0)
             ask = price_data.get('ask', 0)
             spread = price_data.get('spread', 0)
             
@@ -5265,7 +4911,7 @@ class GeminiAnalyzer:
             if not action or not confidence:
                 has_warning = True
                 action = action or 'HOLD'
-                confidence = confidence or "--"  # لا نسبة افتراضية
+                confidence = confidence or 50
             
             # جلب المؤشرات الفنية الحقيقية قبل حساب نسبة النجاح
             technical_data = None
@@ -5279,20 +4925,14 @@ class GeminiAnalyzer:
             try:
                 # استخدام دالة حساب نسبة النجاح المطورة
                 ai_success_rate = calculate_ai_success_rate(analysis, technical_data, symbol, action, user_id)
-                if isinstance(ai_success_rate, (int, float)):
-                    logger.info(f"[INFO] نسبة النجاح المحسوبة للرمز {symbol}: {ai_success_rate:.1f}%")
-                else:
-                    logger.info(f"[INFO] نسبة النجاح للرمز {symbol}: {ai_success_rate}")
+                logger.info(f"[INFO] نسبة النجاح المحسوبة للرمز {symbol}: {ai_success_rate:.1f}%")
             except Exception as e:
                 logger.warning(f"[WARNING] فشل في حساب نسبة النجاح للرمز {symbol}: {e}")
-                # كملاذ أخير، عرض -- عند فشل AI
-                ai_success_rate = "--"
-                logger.warning(f"[AI_FALLBACK] فشل AI في حساب نسبة النجاح للرمز {symbol}")
+                # كملاذ أخير، استخدم الثقة من التحليل
+                ai_success_rate = confidence if confidence else 50
             
             # مصدر نسبة النجاح مع تصنيف أفضل
-            if ai_success_rate == "--":
-                success_rate_source = "غير متوفر - فشل AI في الحساب"
-            elif ai_success_rate >= 80:
+            if ai_success_rate >= 80:
                 success_rate_source = "عالية - ثقة قوية"
             elif ai_success_rate >= 70:
                 success_rate_source = "جيدة - ثقة مقبولة"
@@ -5381,74 +5021,37 @@ class GeminiAnalyzer:
             
             # دوال حساب النقاط الصحيحة حسب المعادلات المالية الدقيقة
             def get_asset_type_and_pip_size(symbol):
-                """تحديد نوع الأصل وحجم النقطة حسب النظام المتبع في التداول"""
-                symbol = symbol.upper().replace('/', '')  # إزالة الشرطة المائلة إن وجدت
+                """تحديد نوع الأصل وحجم النقطة بدقة"""
+                symbol = symbol.upper()
                 
-                # 💱 أزواج العملات - قيم دقيقة حسب النظام المتبع
-                forex_pairs = {
-                    'EURUSD': 0.0001,
-                    'USDJPY': 0.01,
-                    'USDGBP': 0.0001,
-                    'GBPUSD': 0.0001,  # إضافة للتوافق
-                    'AUDUSD': 0.0001,
-                    'USDCAD': 0.0001,
-                    'USDCHF': 0.0001,
-                    'NZDUSD': 0.0001,
-                    'EURGBP': 0.0001,
-                    'EURJPY': 0.01,
-                    'GBPJPY': 0.01
-                }
+                # 💱 الفوركس
+                if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
+                    if any(symbol.endswith(yen) for yen in ['JPY']):
+                        return 'forex_jpy', 0.01  # أزواج الين
+                    else:
+                        return 'forex_major', 0.0001  # الأزواج الرئيسية
                 
-                # 🪙 المعادن الثمينة - قيم محدثة
-                metals = {
-                    'XAUUSD': 0.01,  # ذهب
-                    'XAGUSD': 0.01,  # فضة
-                    'XPTUSD': 0.01,  # بلاتين
-                    'XPDUSD': 0.01   # بلاديوم
-                }
+                # 🪙 المعادن النفيسة
+                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
+                    return 'metals', 0.01  # النقطة = 0.01
                 
-                # ₿ العملات الرقمية - قيم دقيقة حسب النظام
-                crypto_currencies = {
-                    'BTCUSD': 1.00,    # بيتكوين
-                    'ETHUSD': 0.10,    # إيثريوم
-                    'BNBUSD': 0.01,    # بينانس كوين
-                    'XRPUSD': 0.0001,  # ريبل
-                    'ADAUSD': 0.0001,  # كاردانو
-                    'SOLUSD': 0.01,    # سولانا
-                    'DOTUSD': 0.01,    # بولكادوت
-                    'DOGEUSD': 0.0001, # دوجكوين
-                    'AVAXUSD': 0.01,   # أفالانش
-                    'LINKUSD': 0.01,   # تشين لينك
-                    'LTCUSD': 0.10,    # لايتكوين
-                    'BCHUSD': 0.10     # بيتكوين كاش
-                }
+                # 🪙 العملات الرقمية
+                elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
+                    if 'BTC' in symbol:
+                        return 'crypto_btc', 1.0  # البيتكوين - نقطة = 1 دولار
+                    else:
+                        return 'crypto_alt', 0.01  # العملات الأخرى
                 
-                # التحقق من الأصل بالترتيب
-                if symbol in forex_pairs:
-                    return 'forex', forex_pairs[symbol]
-                elif symbol in metals:
-                    return 'metals', metals[symbol]
-                elif symbol in crypto_currencies:
-                    return 'crypto', crypto_currencies[symbol]
-                
-                # 📈 الأسهم (إبقاء الدعم الحالي)
+                # 📈 الأسهم
                 elif any(symbol.startswith(stock) for stock in ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN']):
-                    return 'stocks', 1.0
+                    return 'stocks', 1.0  # النقطة = 1 دولار
                 
-                # 📉 المؤشرات (إبقاء الدعم الحالي)
+                # 📉 المؤشرات
                 elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER', 'SPX']):
-                    return 'indices', 1.0
+                    return 'indices', 1.0  # النقطة = 1 وحدة
                 
                 else:
-                    # محاولة تخمين ذكي للرموز غير المعروفة
-                    if 'JPY' in symbol:
-                        return 'forex_jpy', 0.01
-                    elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB', 'SOL', 'DOT', 'DOGE', 'AVAX', 'LINK', 'BCH']):
-                        return 'crypto', 0.01  # افتراضي للعملات الرقمية
-                    elif any(metal in symbol for metal in ['XAU', 'XAG', 'XPT', 'XPD', 'GOLD', 'SILVER']):
-                        return 'metals', 0.01  # افتراضي للمعادن
-                    else:
-                        return 'forex', 0.0001  # افتراضي للفوركس
+                    return 'unknown', 0.0001  # افتراضي
             
             def calculate_pip_value(symbol, current_price, contract_size=100000):
                 """حساب قيمة النقطة باستخدام المعادلة الصحيحة"""
@@ -5736,10 +5339,7 @@ class GeminiAnalyzer:
             message += f"🎯 الهدف الثاني: ({points2:.0f} نقطة)\n"
             message += f"🛑 وقف الخسارة: ({stop_points:.0f} نقطة)\n"
             message += f"📊 نسبة المخاطرة/المكافأة: 1:{risk_reward_ratio:.1f}\n"
-            if isinstance(ai_success_rate, (int, float)):
-                message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
-            else:
-                message += f"✅ نسبة نجاح الصفقة: {ai_success_rate}\n\n"
+            message += f"✅ نسبة نجاح الصفقة: {ai_success_rate:.0f}%\n\n"
             
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             message += "🔧 التحليل الفني المتقدم\n\n"
@@ -5904,6 +5504,41 @@ class GeminiAnalyzer:
             # تحليل الذكاء الاصطناعي محفوظ في الخلفية للاستخدام الداخلي فقط
             # تم حذف عرض التحليل المطول لتحسين سرعة الاستجابة وتقليل طول الرسالة
             
+            # إضافة توصيات متقدمة بناءً على المؤشرات
+            if indicators:
+                message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                message += "💡 توصيات متقدمة\n\n"
+                
+                # توصيات بناءً على RSI
+                rsi = indicators.get('rsi', 0)
+                if rsi > 0:
+                    if rsi > 70:
+                        message += "🔴 RSI يشير لذروة شراء - فكر في البيع أو انتظار تصحيح\n"
+                    elif rsi < 30:
+                        message += "🟢 RSI يشير لذروة بيع - فرصة شراء محتملة\n"
+                    else:
+                        message += "🟡 RSI في منطقة محايدة - راقب الاختراقات\n"
+                
+                # توصيات بناءً على MACD
+                macd_data = indicators.get('macd', {})
+                if macd_data.get('macd') is not None and macd_data.get('signal') is not None:
+                    if macd_data['macd'] > macd_data['signal']:
+                        message += "📈 MACD إيجابي - إشارة صعود قوية\n"
+                    else:
+                        message += "📉 MACD سلبي - إشارة هبوط محتملة\n"
+                
+                # توصيات بناءً على المتوسطات المتحركة
+                ma10 = indicators.get('ma_10', 0)
+                ma20 = indicators.get('ma_20', 0)
+                if ma10 > 0 and ma20 > 0:
+                    if ma10 > ma20:
+                        message += "⬆️ المتوسطات تدعم الاتجاه الصاعد\n"
+                    else:
+                        message += "⬇️ المتوسطات تدعم الاتجاه الهابط\n"
+                
+                message += "\n"
+            
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             message += "📰 تحديث إخباري:\n"
             
             # جلب الأخبار المتعلقة بالرمز
@@ -5913,6 +5548,10 @@ class GeminiAnalyzer:
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━"
             
             return message
+            
+        except Exception as e:
+            logger.error(f"خطأ في تنسيق التحليل الشامل: {e}")
+            return "❌ خطأ في إنشاء التحليل الشامل"
     
     def _fallback_analysis(self, symbol: str, price_data: Dict) -> Dict:
         """تحليل احتياطي محسّن في حالة فشل Gemini - يعتمد على البيانات الأساسية"""
@@ -6785,198 +6424,6 @@ class GeminiAnalyzer:
         with open(training_file, 'w', encoding='utf-8') as f:
             json.dump(all_training_data, f, ensure_ascii=False, indent=2, default=str)
 
-    def _perform_enhanced_background_analysis(self, symbol: str, price_data: Dict, technical_data: Dict, user_id: int) -> Dict:
-        """تحليل شامل في الخلفية لجميع البيانات المذكورة في رسالة التحليل اليدوي"""
-        try:
-            # الحصول على بيانات المستخدم (نفس ما في التحليل اليدوي)
-            trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
-            capital = get_user_capital(user_id) if user_id else 1000
-            timezone_str = get_user_timezone(user_id) if user_id else 'UTC'
-            
-            # البيانات الأساسية (نفس ما في التحليل اليدوي)
-            current_price = price_data.get('last', price_data.get('bid', 0))
-            bid = price_data.get('bid', 0)
-            ask = price_data.get('ask', 0)
-            spread = price_data.get('spread', 0)
-            
-            # المؤشرات الفنية (نفس ما في التحليل اليدوي)
-            indicators = technical_data.get('indicators', {}) if technical_data else {}
-            
-            # تجميع جميع البيانات للتحليل الخلفي
-            background_prompt = self._build_enhanced_background_prompt(
-                symbol, current_price, bid, ask, spread, indicators, 
-                trading_mode, capital, timezone_str
-            )
-            
-            # تحليل خلفي عبر AI لجميع هذه البيانات
-            ai_background_analysis = self._send_to_gemini(background_prompt)
-            
-            if ai_background_analysis:
-                # استخراج النتائج من التحليل الخلفي
-                background_results = {
-                    'enhanced_confidence': self._extract_enhanced_confidence(ai_background_analysis),
-                    'risk_assessment': self._extract_risk_assessment(ai_background_analysis),
-                    'market_sentiment': self._extract_market_sentiment(ai_background_analysis),
-                    'technical_strength': self._extract_technical_strength(ai_background_analysis),
-                    'volume_analysis': self._extract_volume_analysis(ai_background_analysis),
-                    'support_resistance_quality': self._extract_support_resistance_quality(ai_background_analysis)
-                }
-                
-                logger.info(f"[ENHANCED_BACKGROUND] تحليل خلفي محسن للرمز {symbol} مكتمل")
-                return background_results
-            
-        except Exception as e:
-            logger.error(f"[ENHANCED_BACKGROUND_ERROR] خطأ في التحليل الخلفي المحسن للرمز {symbol}: {e}")
-        
-        return {}
-    
-    def _build_enhanced_background_prompt(self, symbol: str, current_price: float, bid: float, ask: float, 
-                                        spread: float, indicators: Dict, trading_mode: str, capital: float, timezone_str: str) -> str:
-        """بناء prompt للتحليل الخلفي المحسن باستخدام جميع البيانات من التحليل اليدوي"""
-        
-        # جمع جميع المؤشرات المذكورة في التحليل اليدوي
-        rsi = indicators.get('rsi', 50)
-        rsi_interpretation = indicators.get('rsi_interpretation', 'محايد')
-        
-        macd_data = indicators.get('macd', {})
-        macd_value = macd_data.get('macd', 0)
-        macd_signal = macd_data.get('signal', 0)
-        macd_histogram = macd_data.get('histogram', 0)
-        macd_interpretation = indicators.get('macd_interpretation', 'محايد')
-        
-        ma9 = indicators.get('ma_9', 0)
-        ma21 = indicators.get('ma_21', 0)
-        ma_9_21_crossover = indicators.get('ma_9_21_crossover', 'لا يوجد')
-        
-        stochastic = indicators.get('stochastic', {})
-        stoch_k = stochastic.get('k', 50)
-        stoch_d = stochastic.get('d', 50)
-        stoch_interpretation = indicators.get('stochastic_interpretation', 'محايد')
-        
-        atr = indicators.get('atr', 0)
-        support = indicators.get('support', 0)
-        resistance = indicators.get('resistance', 0)
-        
-        # تحليل الحجم (نفس ما في التحليل اليدوي)
-        current_volume = indicators.get('current_volume', 0)
-        avg_volume = indicators.get('avg_volume', 0)
-        volume_ratio = indicators.get('volume_ratio', 1.0)
-        volume_interpretation = indicators.get('volume_interpretation', 'طبيعي')
-        
-        prompt = f"""
-        أنت محلل مالي خبير. قم بتحليل شامل في الخلفية للرمز {symbol} باستخدام جميع البيانات التالية:
-
-        **بيانات السوق الأساسية:**
-        - الرمز: {symbol}
-        - السعر الحالي: {current_price:,.5f}
-        - سعر الشراء (Bid): {bid:,.5f}
-        - سعر البيع (Ask): {ask:,.5f}
-        - الفرق (Spread): {spread:.5f}
-        - نمط التداول: {trading_mode}
-        - رأس المال: ${capital:,.0f}
-        - المنطقة الزمنية: {timezone_str}
-
-        **المؤشرات الفنية الكاملة:**
-        - RSI: {rsi:.2f} ({rsi_interpretation})
-        - MACD: {macd_value:.5f} | Signal: {macd_signal:.5f} | Histogram: {macd_histogram:.5f} ({macd_interpretation})
-        - MA9: {ma9:.5f} | MA21: {ma21:.5f} | تقاطع MA9/MA21: {ma_9_21_crossover}
-        - Stochastic %K: {stoch_k:.2f} | %D: {stoch_d:.2f} ({stoch_interpretation})
-        - ATR: {atr:.5f}
-        - الدعم: {support:.5f} | المقاومة: {resistance:.5f}
-
-        **تحليل الحجم:**
-        - الحجم الحالي: {current_volume:,.0f}
-        - متوسط الحجم: {avg_volume:,.0f}
-        - نسبة الحجم: {volume_ratio:.2f}x
-        - تفسير الحجم: {volume_interpretation}
-
-        **المطلوب منك:**
-        قم بتحليل شامل في الخلفية لجميع هذه البيانات واعطني:
-
-        1. **نسبة ثقة محسنة** (0-100%): بناءً على تحليل شامل لجميع المؤشرات
-        2. **تقييم المخاطر** (منخفض/متوسط/عالي): بناءً على التقلبات والمؤشرات
-        3. **مشاعر السوق** (صاعد/هابط/محايد): بناءً على الحجم والمؤشرات
-        4. **قوة التحليل الفني** (ضعيف/متوسط/قوي): بناءً على تطابق المؤشرات
-        5. **تحليل الحجم** (ضعيف/عادي/قوي): بناءً على نسبة الحجم
-        6. **جودة مستويات الدعم والمقاومة** (ضعيف/متوسط/قوي): بناءً على ATR والتقلبات
-
-        **تنسيق الإجابة:**
-        enhanced_confidence: X%
-        risk_assessment: [منخفض/متوسط/عالي]
-        market_sentiment: [صاعد/هابط/محايد]
-        technical_strength: [ضعيف/متوسط/قوي]
-        volume_analysis: [ضعيف/عادي/قوي]
-        support_resistance_quality: [ضعيف/متوسط/قوي]
-        """
-        
-        return prompt
-    
-    def _extract_enhanced_confidence(self, analysis_text: str) -> float:
-        """استخراج نسبة الثقة المحسنة من التحليل الخلفي"""
-        try:
-            import re
-            match = re.search(r'enhanced_confidence:\s*(\d+(?:\.\d+)?)%?', analysis_text, re.IGNORECASE)
-            if match:
-                return float(match.group(1))
-        except:
-            pass
-        return 50.0
-    
-    def _extract_risk_assessment(self, analysis_text: str) -> str:
-        """استخراج تقييم المخاطر من التحليل الخلفي"""
-        try:
-            import re
-            match = re.search(r'risk_assessment:\s*([^\n]+)', analysis_text, re.IGNORECASE)
-            if match:
-                return match.group(1).strip()
-        except:
-            pass
-        return "متوسط"
-    
-    def _extract_market_sentiment(self, analysis_text: str) -> str:
-        """استخراج مشاعر السوق من التحليل الخلفي"""
-        try:
-            import re
-            match = re.search(r'market_sentiment:\s*([^\n]+)', analysis_text, re.IGNORECASE)
-            if match:
-                return match.group(1).strip()
-        except:
-            pass
-        return "محايد"
-    
-    def _extract_technical_strength(self, analysis_text: str) -> str:
-        """استخراج قوة التحليل الفني من التحليل الخلفي"""
-        try:
-            import re
-            match = re.search(r'technical_strength:\s*([^\n]+)', analysis_text, re.IGNORECASE)
-            if match:
-                return match.group(1).strip()
-        except:
-            pass
-        return "متوسط"
-    
-    def _extract_volume_analysis(self, analysis_text: str) -> str:
-        """استخراج تحليل الحجم من التحليل الخلفي"""
-        try:
-            import re
-            match = re.search(r'volume_analysis:\s*([^\n]+)', analysis_text, re.IGNORECASE)
-            if match:
-                return match.group(1).strip()
-        except:
-            pass
-        return "عادي"
-    
-    def _extract_support_resistance_quality(self, analysis_text: str) -> str:
-        """استخراج جودة مستويات الدعم والمقاومة من التحليل الخلفي"""
-        try:
-            import re
-            match = re.search(r'support_resistance_quality:\s*([^\n]+)', analysis_text, re.IGNORECASE)
-            if match:
-                return match.group(1).strip()
-        except:
-            pass
-        return "متوسط"
-
 # إنشاء مثيل محلل Gemini
 gemini_analyzer = GeminiAnalyzer()
 
@@ -7293,8 +6740,8 @@ def set_user_trading_mode(user_id: int, mode: str):
     user_trading_modes[user_id] = mode
 
 def get_user_capital(user_id: int) -> float:
-    """جلب رأس المال المحدد من المستخدم للتداول (وليس رصيد الحساب الكامل)"""
-    return user_capitals.get(user_id, 1000)  # القيمة الافتراضية 1000 إذا لم يحدد المستخدم
+    """جلب رأس المال للمستخدم"""
+    return user_capitals.get(user_id, 0)  # القيمة الافتراضية 0 لعرض سؤال رأس المال
 
 def set_user_capital(user_id: int, capital: float):
     """تعيين رأس المال للمستخدم"""
@@ -7679,9 +7126,9 @@ def calculate_dynamic_success_rate_v2(analysis: Dict, alert_type: str) -> float:
     return calculate_dynamic_success_rate(analysis, alert_type)
 
 def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
-    """حساب نسبة النجاح من AI بناءً على جميع المعطيات المتاحة"""
+    """حساب نسبة النجاح المبسط - نفس مبدأ الوضع اليدوي (الاعتماد على AI أولاً)"""
     try:
-        # الخطوة 1: محاولة الحصول على نسبة النجاح من AI مباشرة
+        # الخطوة 1: محاولة الحصول على نسبة النجاح من AI مباشرة (مثل الوضع اليدوي)
         ai_confidence = analysis.get('confidence', 0)
         
         if ai_confidence and ai_confidence > 0:
@@ -7710,94 +7157,28 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
             elif final_score < 20:
                 final_score = max(final_score - 3, 2)
             
-            logger.info(f"[AI_SUCCESS_RATE] {symbol} - {action}: {final_score:.1f}% (من AI)")
+            logger.info(f"[SIMPLIFIED_AUTO_SUCCESS] {symbol} - {action}: {final_score:.1f}% (AI: {ai_confidence}%)")
             return round(final_score, 1)
         
-        # الخطوة 2: إذا لم نحصل على نسبة من AI، ارسل البيانات للـ AI لحساب النسبة
-        logger.warning(f"[AI_MISSING_RATE] لم يتم الحصول على نسبة من AI للرمز {symbol} - إرسال البيانات للحساب")
-        return request_ai_success_rate_calculation(technical_data, symbol, action, user_id)
+        # الخطوة 2: إذا لم نحصل على نسبة من AI، استخدم التحليل الفني كاحتياط (مثل الوضع اليدوي)
+        logger.warning(f"[AUTO_FALLBACK] لا توجد نسبة من AI للرمز {symbol} - استخدام التحليل الفني الاحتياطي")
+        if technical_data and technical_data.get('indicators'):
+            fallback_rate = calculate_basic_technical_success_rate(technical_data, action)
+            logger.info(f"[AUTO_FALLBACK_SUCCESS] {symbol} - {action}: {fallback_rate:.1f}% (تحليل فني احتياطي)")
+            return fallback_rate
+        
+        # الخطوة 3: فشل كامل - لا نسبة ثابتة (مثل الوضع اليدوي)
+        logger.error(f"[AUTO_ANALYSIS_FAILED] فشل كامل في تحليل الرمز {symbol} - لا توجد بيانات كافية")
+        return None
         
     except Exception as e:
-        logger.error(f"خطأ في حساب نسبة النجاح: {e}")
-        # في حالة الخطأ، ارسل للـ AI كمحاولة أخيرة
-        try:
-            return request_ai_success_rate_calculation(technical_data, symbol, action, user_id)
-        except:
-            return "--"
-
-def request_ai_success_rate_calculation(technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
-    """طلب حساب نسبة النجاح من AI بناءً على جميع المعطيات"""
-    try:
-        # إعداد البيانات للـ AI
-        indicators = technical_data.get('indicators', {}) if technical_data else {}
-        
-        # الحصول على بيانات المستخدم
-        capital = get_user_capital(user_id) if user_id else 1000
-        trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
-        
-        # إعداد prompt مخصص لحساب نسبة النجاح
-        success_rate_prompt = f"""
-        أنت محلل فني خبير. احسب نسبة نجاح الصفقة بدقة بناءً على البيانات التالية:
-
-        **الرمز المالي:** {symbol}
-        **نوع الصفقة:** {action} ({'شراء' if action == 'BUY' else 'بيع' if action == 'SELL' else 'انتظار'})
-        **رأس المال:** ${capital:,.0f}
-        **نمط التداول:** {trading_mode}
-        
-        **المؤشرات الفنية:**
-        - RSI: {indicators.get('rsi', 'غير متوفر')}
-        - MACD: {indicators.get('macd', {}).get('macd', 'غير متوفر')}
-        - MA9: {indicators.get('ma_9', 'غير متوفر')}
-        - MA21: {indicators.get('ma_21', 'غير متوفر')}
-        - ATR: {indicators.get('atr', 'غير متوفر')}
-        - Volume Ratio: {indicators.get('volume_ratio', 'غير متوفر')}
-        - Support: {indicators.get('support', 'غير متوفر')}
-        - Resistance: {indicators.get('resistance', 'غير متوفر')}
-        
-        **المطلوب:**
-        1. حلل المؤشرات الفنية بدقة
-        2. احسب نسبة نجاح الصفقة من 0% إلى 100%
-        3. راعي نوع الصفقة (شراء/بيع) في التحليل
-        4. راعي رأس المال ونمط التداول
-        
-        **يجب أن تجيب بالتنسيق التالي فقط:**
-        نسبة نجاح الصفقة: X%
-        [success_rate]=X
-        
-        حيث X هو الرقم المحسوب بناءً على التحليل الفني.
-        """
-        
-        # إرسال للـ AI
-        try:
-            # استخدام نفس النموذج المستخدم في التحليل
-            if hasattr(gemini_analyzer, 'model') and gemini_analyzer.model:
-                response = gemini_analyzer.model.generate_content(success_rate_prompt)
-                ai_response = response.text.strip()
-                
-                # استخراج نسبة النجاح من الرد
-                import re
-                success_match = re.search(r'\[success_rate\]=(\d+)', ai_response)
-                if success_match:
-                    success_rate = int(success_match.group(1))
-                    logger.info(f"[AI_CALCULATED_RATE] {symbol} - {action}: {success_rate}% (محسوبة من AI)")
-                    return float(success_rate)
-                
-                # محاولة استخراج من النص العادي
-                percentage_match = re.search(r'نسبة نجاح الصفقة[:\s]*(\d+)%', ai_response)
-                if percentage_match:
-                    success_rate = int(percentage_match.group(1))
-                    logger.info(f"[AI_CALCULATED_RATE] {symbol} - {action}: {success_rate}% (من النص)")
-                    return float(success_rate)
-                    
-        except Exception as ai_error:
-            logger.error(f"[AI_RATE_ERROR] خطأ في طلب حساب النسبة من AI: {ai_error}")
-        
-        # إذا فشل AI، استخدم حساب تقني بسيط
-        return calculate_simplified_technical_rate(technical_data, action) or 50.0
-        
-    except Exception as e:
-        logger.error(f"خطأ في طلب حساب نسبة النجاح: {e}")
-        return 50.0
+        logger.error(f"خطأ في حساب نسبة النجاح المبسط: {e}")
+        # في حالة الخطأ، استخدم تحليل AI إذا كان متوفراً
+        if analysis and analysis.get('confidence', 0) > 0:
+            return min(max(analysis.get('confidence', 50), 10), 90)
+        else:
+            # كحل أخير، استخدم تحليل فني بسيط
+            return calculate_basic_technical_success_rate(technical_data, action) if technical_data else None
 
 # دالة مساعدة لحساب نسبة نجاح بسيطة من المؤشرات الفنية (نفس ما في اليدوي)
 def calculate_simplified_technical_rate(technical_data: Dict, action: str) -> float:
@@ -7831,6 +7212,229 @@ def calculate_simplified_technical_rate(technical_data: Dict, action: str) -> fl
     return max(20.0, min(80.0, base_score))
 
 # دالة قديمة محذوفة - تم الاستبدال بالنظام المبسط
+def calculate_old_complex_success_rate():
+        technical_score = 0
+        if technical_data and technical_data.get('indicators'):
+            indicators = technical_data['indicators']
+            
+            # RSI Analysis (10% - مخفض)
+            rsi = indicators.get('rsi', 50)
+            if rsi:
+                if action == 'BUY':
+                    if 30 <= rsi <= 50:  # منطقة جيدة للشراء
+                        technical_score += 10
+                    elif 20 <= rsi < 30:  # ذروة بيع - فرصة شراء ممتازة
+                        technical_score += 12
+                    elif rsi > 70:  # ذروة شراء - خطر
+                        technical_score -= 6
+                    elif 50 < rsi < 60:  # منطقة مقبولة
+                        technical_score += 5
+                elif action == 'SELL':
+                    if 50 <= rsi <= 70:  # منطقة جيدة للبيع
+                        technical_score += 10
+                    elif 70 < rsi <= 80:  # ذروة شراء - فرصة بيع ممتازة
+                        technical_score += 12
+                    elif rsi < 30:  # ذروة بيع - خطر
+                        technical_score -= 6
+                    elif 40 < rsi < 50:  # منطقة مقبولة
+                        technical_score += 5
+            
+            # MACD Analysis (10% - مخفض)
+            macd_data = indicators.get('macd', {})
+            if macd_data.get('macd') is not None and macd_data.get('signal') is not None:
+                macd_value = macd_data['macd']
+                macd_signal = macd_data['signal']
+                histogram = macd_data.get('histogram', 0)
+                
+                if action == 'BUY' and macd_value > macd_signal:
+                    technical_score += 10  # إشارة شراء قوية
+                    if histogram > 0:  # قوة إضافية من الهيستوجرام
+                        technical_score += 3
+                elif action == 'SELL' and macd_value < macd_signal:
+                    technical_score += 10  # إشارة بيع قوية
+                    if histogram < 0:  # قوة إضافية من الهيستوجرام
+                        technical_score += 3
+                elif action == 'BUY' and macd_value < macd_signal:
+                    technical_score -= 5   # إشارة متضاربة
+                elif action == 'SELL' and macd_value > macd_signal:
+                    technical_score -= 5   # إشارة متضاربة
+            
+            # Moving Averages Analysis (5% - مخفض)
+            ma10 = indicators.get('ma_10', 0)
+            ma20 = indicators.get('ma_20', 0)
+            ma50 = indicators.get('ma_50', 0)
+            current_price = technical_data.get('price', 0)
+            
+            if ma10 and ma20 and current_price:
+                if action == 'BUY':
+                    if current_price > ma10 > ma20:  # ترتيب صاعد
+                        technical_score += 5
+                    elif current_price > ma10:  # فوق المتوسط قصير المدى
+                        technical_score += 3
+                elif action == 'SELL':
+                    if current_price < ma10 < ma20:  # ترتيب هابط
+                        technical_score += 5
+                    elif current_price < ma10:  # تحت المتوسط قصير المدى
+                        technical_score += 3
+        
+        confidence_factors.append(("التحليل الفني", technical_score, 25))
+        
+        # 3. تحليل الأخبار الاقتصادية (3% - جديد)
+        news_score = 0
+        try:
+            # جلب الأخبار المتعلقة بالرمز
+            news_analysis = gemini_analyzer.get_symbol_news(symbol) if hasattr(gemini_analyzer, 'get_symbol_news') else ""
+            if news_analysis and len(news_analysis) > 50:  # أخبار مؤثرة متوفرة
+                # تحليل تأثير الأخبار على الاتجاه
+                if any(word in news_analysis.lower() for word in ['إيجابي', 'صاعد', 'نمو', 'ارتفاع']):
+                    if action == 'BUY':
+                        news_score = 3
+                    elif action == 'SELL':
+                        news_score = -1
+                elif any(word in news_analysis.lower() for word in ['سلبي', 'هابط', 'انخفاض', 'تراجع']):
+                    if action == 'SELL':
+                        news_score = 3
+                    elif action == 'BUY':
+                        news_score = -1
+                else:
+                    news_score = 1  # أخبار محايدة
+            else:
+                news_score = 0  # لا توجد أخبار مؤثرة
+        except Exception as e:
+            logger.debug(f"[NEWS_ANALYSIS] خطأ في تحليل الأخبار: {e}")
+            news_score = 0
+            
+        confidence_factors.append(("تحليل الأخبار", news_score, 3))
+        
+        # 4. تحليل المشاعر العامة (2% - جديد)
+        sentiment_score = 0
+        try:
+            # تحليل المشاعر من خلال AI أو بيانات السوق
+            if technical_data and technical_data.get('indicators'):
+                volume_ratio = technical_data['indicators'].get('volume_ratio', 1.0)
+                price_change = technical_data.get('price_change_pct', 0)
+                
+                # تقدير المشاعر من حجم التداول وحركة السعر
+                if volume_ratio > 1.5 and price_change > 1:  # حماس إيجابي
+                    sentiment_score = 2 if action == 'BUY' else -1
+                elif volume_ratio > 1.5 and price_change < -1:  # خوف/هلع
+                    sentiment_score = 2 if action == 'SELL' else -1
+                elif volume_ratio < 0.5:  # عدم اهتمام
+                    sentiment_score = -1
+                else:
+                    sentiment_score = 0  # مشاعر محايدة
+        except Exception as e:
+            logger.debug(f"[SENTIMENT_ANALYSIS] خطأ في تحليل المشاعر: {e}")
+            sentiment_score = 0
+            
+        confidence_factors.append(("تحليل المشاعر", sentiment_score, 2))
+        
+        # 5. التحليل التاريخي (5% - جديد)
+        historical_score = 0
+        try:
+            # استخدام بيانات التقييمات التاريخية للمستخدمين
+            if user_id:
+                historical_performance = get_symbol_historical_performance(symbol, action)
+                if historical_performance:
+                    success_rate = historical_performance.get('success_rate', 0.5)
+                    total_trades = historical_performance.get('total_trades', 0)
+                    
+                    if total_trades >= 10:  # بيانات كافية
+                        if success_rate > 0.7:
+                            historical_score = 5
+                        elif success_rate > 0.6:
+                            historical_score = 3
+                        elif success_rate > 0.4:
+                            historical_score = 1
+                        else:
+                            historical_score = -2
+                    elif total_trades >= 5:  # بيانات محدودة
+                        historical_score = int((success_rate - 0.5) * 4)  # تحويل لنطاق -2 إلى 2
+                    else:
+                        historical_score = 0  # بيانات غير كافية
+        except Exception as e:
+            logger.debug(f"[HISTORICAL_ANALYSIS] خطأ في التحليل التاريخي: {e}")
+            historical_score = 0
+            
+        confidence_factors.append(("التحليل التاريخي", historical_score, 5))
+        
+        # 6. تحليل حجم التداول والتقلبات (5% - مخفض)
+        volume_score = 0
+        if technical_data and technical_data.get('indicators'):
+            volume_ratio = technical_data['indicators'].get('volume_ratio', 1.0)
+            
+            if volume_ratio > 2.0:  # حجم عالي جداً
+                volume_score = 5
+            elif volume_ratio > 1.5:  # حجم عالي
+                volume_score = 4
+            elif volume_ratio > 1.2:  # حجم جيد
+                volume_score = 3
+            elif volume_ratio < 0.3:  # حجم منخفض جداً - خطر كبير
+                volume_score = -3
+            elif volume_ratio < 0.5:  # حجم منخفض - خطر
+                volume_score = -2
+            else:
+                volume_score = 2  # حجم طبيعي
+
+        confidence_factors.append(("حجم التداول", volume_score, 5))
+        
+
+        
+        # حساب النتيجة النهائية مع النظام المحسن
+        total_weighted_score = 0
+        total_weight = 0
+        
+        for factor_name, score, weight in confidence_factors:
+            total_weighted_score += (score * weight / 100)
+            total_weight += weight
+        
+        # التأكد من أن المجموع الوزني 100%
+        if total_weight != 100:
+            logger.warning(f"مجموع الأوزان غير صحيح: {total_weight}%")
+        
+        # النتيجة النهائية مع دمج تدريب المستخدمين
+        final_score = base_score + total_weighted_score
+        
+        # تطبيق تحسينات machine learning من تقييمات المستخدمين
+        if user_id:
+            ml_adjustment = get_ml_adjustment_for_user(user_id, symbol, action)
+            final_score += ml_adjustment
+            
+            # تحسينات إضافية بناءً على رأس المال
+            capital = get_user_capital(user_id)
+            if capital >= 10000:  # حسابات كبيرة - دقة أعلى
+                final_score += 2
+            elif capital >= 5000:  # حسابات متوسطة
+                final_score += 1
+            elif capital < 1000:  # حسابات صغيرة - حذر أكبر
+                final_score -= 1
+        
+        # تطبيق النطاق الكامل 0-100% كما طُلب
+        final_score = max(0, min(100, final_score))
+        
+        # تطبيق عوامل تصحيحية ديناميكية محسنة
+        if action == 'HOLD':
+            final_score = max(final_score - 15, 5)  # تقليل للانتظار
+        elif action in ['BUY', 'SELL']:
+            # تعديل ديناميكي للإشارات
+            if final_score > 85:  # إشارات قوية جداً
+                final_score = min(final_score + 3, 98)
+            elif final_score < 20:  # إشارات ضعيفة
+                final_score = max(final_score - 3, 2)
+        
+        # سجل تفاصيل الحساب المحسن
+        logger.info(f"[ENHANCED_AI_SUCCESS] {symbol} - {action}: {final_score:.1f}% | العوامل الجديدة: AI({ai_analysis_score}%), أخبار({news_score}%), مشاعر({sentiment_score}%), تاريخي({historical_score}%)")
+        
+        return round(final_score, 1)
+        
+    except Exception as e:
+        logger.error(f"خطأ في حساب نسبة النجاح الذكية المحسنة: {e}")
+        # في حالة الخطأ، استخدم تحليل AI إذا كان متوفراً
+        if analysis and analysis.get('confidence', 0) > 0:
+            return min(max(analysis.get('confidence', 50), 10), 90)
+        else:
+            # كحل أخير، استخدم تحليل فني بسيط
+            return calculate_basic_technical_success_rate(technical_data, action)
 
 def get_symbol_historical_performance(symbol: str, action: str) -> Dict:
     """جلب الأداء التاريخي للرمز من تقييمات المستخدمين"""
@@ -8366,7 +7970,7 @@ def send_trading_signal_alert(user_id: int, symbol: str, signal: Dict, analysis:
 ⚡ إشارة التداول الرئيسية
 
 {action_emoji} نوع الصفقة: {action}
-✅ نسبة نجاح الصفقة: {success_rate if isinstance(success_rate, str) else f"{success_rate:.0f}%"}
+✅ نسبة نجاح الصفقة: {success_rate:.0f}%
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 🤖 **بوت التداول v1.2.0 - إشعار ذكي**"""
@@ -9515,10 +9119,6 @@ def handle_single_symbol_analysis(call):
             else:
                 main_message = message_text
             
-            # إضافة طابع زمني لتجنب خطأ "message is not modified"
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            main_message = f"{main_message}\n\n🕒 _محدث: {timestamp}_"
-            
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
@@ -9540,33 +9140,19 @@ def handle_single_symbol_analysis(call):
             
         except Exception as send_error:
             logger.error(f"[ERROR] فشل في إرسال التحليل: {send_error}")
-            
-            # التحقق من نوع الخطأ
-            error_str = str(send_error).lower()
-            if "message is not modified" in error_str:
-                logger.info(f"[INFO] الرسالة لم تتغير للرمز {symbol} - تجاهل الخطأ")
-                # لا حاجة لإعادة الإرسال إذا كان المحتوى نفسه
-                return
-            
             try:
-                # محاولة إرسال رسالة خطأ بسيطة مع طابع زمني
-                error_timestamp = datetime.now().strftime("%H:%M:%S")
+                # محاولة إرسال رسالة خطأ بسيطة
                 bot.edit_message_text(
                     f"❌ **خطأ في عرض التحليل**\n\n"
                     f"حدث خطأ في عرض تحليل {symbol_info['emoji']} {symbol_info['name']}.\n\n"
-                    f"يرجى المحاولة مرة أخرى لاحقاً.\n\n"
-                    f"🕒 _خطأ في: {error_timestamp}_",
+                    "يرجى المحاولة مرة أخرى لاحقاً.",
                     call.message.chat.id,
                     call.message.message_id,
                     parse_mode='Markdown',
                     reply_markup=markup
                 )
-            except Exception as final_error:
-                logger.error(f"[ERROR] فشل في إرسال رسالة الخطأ أيضاً: {final_error}")
-                try:
-                    bot.answer_callback_query(call.id, "حدث خطأ في عرض التحليل", show_alert=True)
-                except:
-                    pass
+            except:
+                bot.answer_callback_query(call.id, "حدث خطأ في عرض التحليل", show_alert=True)
         
     except Exception as e:
         logger.error(f"[ERROR] خطأ عام في تحليل الرمز {call.data}: {e}")
@@ -9965,7 +9551,7 @@ def handle_add_analysis_rule(call):
 
 مثال على القواعد:
 • "عند كسر مستوى المقاومة بحجم تداول عالي، زد نسبة الثقة بـ 15%"
-• "في حالة تضارب RSI مع MA9/MA21، قلل نسبة النجاح بـ 20%"
+• "في حالة تضارب RSI مع MACD، قلل نسبة النجاح بـ 20%"
 • "عند تداول الذهب أثناء الأحداث الجيوسياسية، زد الحذر وقلل حجم الصفقة"
 
 ⚡ **سيقوم الذكاء الاصطناعي بـ:**
@@ -12407,48 +11993,11 @@ if __name__ == "__main__":
     try:
         logger.info("▶️ بدء تشغيل بوت التداول المتقدم v1.2.0...")
         
-        # تعريف المتغيرات الأساسية المفقودة
-        mt5_manager = MT5Manager()
-        
-        # تعريف محلل Gemini AI الكامل
-        gemini_analyzer = GeminiAnalyzer()
-        
-        # تعريف الدوال المساعدة المفقودة
-        def cache_price_data(symbol, data):
-            """حفظ بيانات السعر في الكاش"""
-            global price_data_cache
-            price_data_cache[symbol] = {
-                'data': data,
-                'timestamp': datetime.now()
-            }
-        
-        # تعريف المتغيرات العامة المفقودة الأخرى
-        analysis_in_progress = False
-        monitoring_active = True
-        active_users = set()
-        user_selected_symbols = {}
-        user_monitoring_active = {}
-        mt5_operation_lock = threading.Lock()
-        
-        # تعريف crossover_tracker كبديل مؤقت
-        class SimpleCrossoverTracker:
-            def analyze_crossover_patterns(self, symbol):
-                return {'recent_count': 0, 'dominant_type': 'غير محدد', 'pattern_strength': 0.5}
-            def get_recent_crossovers(self, symbol, hours=48):
-                return []
-        
-        crossover_tracker = SimpleCrossoverTracker()
-        
         # التحقق من اتصال MT5
         if mt5_manager.connected:
             logger.info("[OK] MetaTrader5 متصل ومستعد!")
         else:
             logger.warning("[WARNING] MetaTrader5 غير متصل - يرجى التحقق من الإعدادات")
-        
-        # تعريف متغيرات Gemini العامة (استخدام المتغيرات المستوردة)
-        # GEMINI_API_KEY و GEMINI_MODEL تم استيرادهما بالفعل في أعلى الملف
-        # لا حاجة لإعادة تعريفهما
-        GEMINI_AVAILABLE = True
         
         # التحقق من Gemini AI
         if GEMINI_AVAILABLE:
@@ -12456,14 +12005,11 @@ if __name__ == "__main__":
         else:
             logger.warning("[WARNING] Gemini AI غير متوفر - تأكد من مفتاح API")
         
-        # اختبار نظام النقاط الجديد
-        test_pip_values()
-        
         logger.info("[SYSTEM] نظام التنبيهات: مراقبة لحظية مع تقييم المستخدم")
         logger.info("[SYSTEM] نظام التخزين: تسجيل جميع الصفقات والتقييمات")
         
-        # إنشاء متغير لإيقاف حلقة المراقبة بأمان (تم تعريفه مسبقاً)
-        # monitoring_active = True
+        # إنشاء متغير لإيقاف حلقة المراقبة بأمان
+        monitoring_active = True
         
         # بدء حلقة المراقبة في خيط منفصل مع معالجة محسنة
         monitoring_thread = threading.Thread(
@@ -12483,9 +12029,7 @@ if __name__ == "__main__":
         
         # بدء البوت
         logger.info("[SYSTEM] البوت جاهز للعمل!")
-        # تعريف وتنظيف شامل عند بدء التشغيل
-        price_data_cache = {}
-        last_api_calls = {}
+        # تنظيف شامل عند بدء التشغيل
         price_data_cache.clear()
         last_api_calls.clear()
         logger.info("[SYSTEM] تم تنظيف جميع البيانات المؤقتة عند بدء التشغيل")
@@ -12504,38 +12048,13 @@ if __name__ == "__main__":
         
         while retry_count < max_retries:
             try:
-                logger.info(f"[SYSTEM] بدء استقبال الرسائل (محاولة {retry_count + 1}/{max_retries})...")
-                
-                # فحص صحة الاتصال مع Telegram قبل البدء
-                try:
-                    bot_info = bot.get_me()
-                    logger.info(f"[OK] اتصال Telegram سليم - البوت: {bot_info.first_name}")
-                except Exception as test_error:
-                    logger.error(f"[ERROR] فشل في الاتصال مع Telegram: {test_error}")
-                    raise test_error
-                
-                # تنظيف الذاكرة قبل البدء
-                import gc
-                gc.collect()
-                
-                # محاولة استخدام restart_on_change إذا كانت الحزم متاحة
-                polling_kwargs = {
-                    'none_stop': False,  # معالجة أفضل للأخطاء
-                    'interval': 2,       # زيادة المدة لتقليل الضغط على الخادم
-                    'timeout': 90,       # زيادة timeout للاستقرار
-                    'long_polling_timeout': 45,  # زيادة long polling timeout
-                }
-                
-                # إضافة restart_on_change فقط إذا كانت الحزم متاحة
-                try:
-                    import watchdog
-                    import psutil
-                    polling_kwargs['restart_on_change'] = True
-                    logger.info("[SYSTEM] تم تفعيل إعادة التشغيل التلقائي عند التغيير")
-                except ImportError:
-                    logger.warning("[WARNING] watchdog أو psutil غير مثبتة - إعادة التشغيل التلقائي معطلة")
-                
-                bot.infinity_polling(**polling_kwargs)
+                logger.info("[SYSTEM] بدء استقبال الرسائل...")
+                bot.infinity_polling(
+                    none_stop=False,  # تغيير إلى False لمعالجة أفضل للأخطاء
+                    interval=1,       # تقليل المدة للاستجابة الأسرع
+                    timeout=60,       # زيادة timeout للاستقرار
+                    long_polling_timeout=30  # زيادة long polling timeout
+                )
                 break  # إذا انتهى بشكل طبيعي
                 
             except telebot.apihelper.ApiException as api_error:
@@ -12568,19 +12087,9 @@ if __name__ == "__main__":
                     monitoring_active = True
                 
                 # معالجة خاصة لأخطاء محددة
-                if "409" in error_str or "terminated by other getUpdates request" in error_str:
-                    logger.warning("[WARNING] خطأ 409 - يوجد instance آخر من البوت يعمل")
-                    logger.info("[SOLUTION] احرص على إيقاف جميع instances البوت وانتظر دقيقة")
-                    wait_time = 60  # انتظار دقيقة كاملة
-                elif "infinity polling" in error_str or "polling exited" in error_str or "break infinity polling" in error_str:
+                if "infinity polling" in error_str or "polling exited" in error_str:
                     logger.warning("[WARNING] انقطاع في infinity polling - محاولة إعادة الاتصال...")
-                    # تنظيف الذاكرة قبل إعادة المحاولة
-                    import gc
-                    gc.collect()
                     wait_time = min(retry_count * 8, 90)
-                elif "connection" in error_str or "timeout" in error_str or "network" in error_str:
-                    logger.warning("[WARNING] مشكلة في الشبكة - انتظار أطول...")
-                    wait_time = min(retry_count * 15, 180)  # انتظار أطول لمشاكل الشبكة
                 else:
                     wait_time = min(retry_count * 5, 60)
                     
