@@ -36,7 +36,20 @@ apihelper.READ_TIMEOUT = 60     # زيادة إلى 60 ثانية للاستقر
 apihelper.RETRY_TIMEOUT = 5     # زيادة timeout للمحاولات المتكررة
 import pandas as pd
 import numpy as np
-import MetaTrader5 as mt5
+try:
+    import MetaTrader5 as mt5
+    MT5_AVAILABLE = True
+except ImportError:
+    MT5_AVAILABLE = False
+    mt5 = None
+    print("Warning: MetaTrader5 not available on this system")
+    
+# تعريف ثوابت الوقت عند عدم توفر MT5
+if not MT5_AVAILABLE:
+    class MT5Constants:
+        TIMEFRAME_M1 = 1
+        TIMEFRAME_D1 = 1440
+    mt5 = MT5Constants()
 import google.generativeai as genai
 from datetime import datetime, timedelta
 from telebot import types
@@ -2150,6 +2163,11 @@ class MT5Manager:
     
     def initialize_mt5(self):
         """تهيئة الاتصال مع MT5 مع آلية إعادة المحاولة"""
+        if not MT5_AVAILABLE:
+            logger.warning("[MT5] MetaTrader5 غير متوفر على هذا النظام")
+            self.connected = False
+            return False
+            
         with self.connection_lock:
             # منع محاولات الاتصال المتكررة
             current_time = time.time()
@@ -2769,10 +2787,14 @@ class MT5Manager:
     
 
     
-    def get_market_data(self, symbol: str, timeframe: int = mt5.TIMEFRAME_M1, count: int = 100) -> Optional[pd.DataFrame]:
+    def get_market_data(self, symbol: str, timeframe: int = None, count: int = 100) -> Optional[pd.DataFrame]:
         """جلب بيانات السوق من MT5"""
         if not self.connected:
             return None
+        
+        # تعيين timeframe افتراضي إذا لم يتم تحديده
+        if timeframe is None:
+            timeframe = mt5.TIMEFRAME_M1 if MT5_AVAILABLE else 1
         
         try:
             # جلب البيانات
@@ -12261,6 +12283,10 @@ if __name__ == "__main__":
     try:
         logger.info("▶️ بدء تشغيل بوت التداول المتقدم v1.2.0...")
         
+        # التحقق من توفر MetaTrader5
+        if not MT5_AVAILABLE:
+            logger.warning("⚠️ MetaTrader5 غير متوفر على هذا النظام - البوت سيعمل بوظائف محدودة")
+        
         # تعريف المتغيرات الأساسية المفقودة
         mt5_manager = MT5Manager()
         
@@ -12301,7 +12327,11 @@ if __name__ == "__main__":
             logger.warning("[WARNING] MetaTrader5 غير متصل - يرجى التحقق من الإعدادات")
         
         # تعريف متغيرات Gemini العامة
-        GEMINI_MODEL = config.GEMINI_MODEL if hasattr(config, 'GEMINI_MODEL') else 'gemini-2.0-flash'
+        # استخدام المتغيرات المستوردة من config.py أو القيم الافتراضية
+        if 'GEMINI_API_KEY' not in globals():
+            GEMINI_API_KEY = 'AIzaSyDAOp1ARgrkUvPcmGmXddFx8cqkzhy-3O8'
+        if 'GEMINI_MODEL' not in globals():
+            GEMINI_MODEL = 'gemini-2.0-flash'
         GEMINI_AVAILABLE = True
         
         # التحقق من Gemini AI

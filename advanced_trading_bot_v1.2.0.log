@@ -1,1 +1,68 @@
 2025-08-18 17:25:07 - __main__ - INFO - [OK] تم تهيئة Gemini AI بنجاح
+2025-08-19 08:29:46 - __main__ - INFO - [OK] تم تهيئة Gemini AI بنجاح
+2025-08-19 08:30:28 - __main__ - INFO - [OK] تم تهيئة Gemini AI بنجاح
+2025-08-19 08:30:28 - __main__ - WARNING - [MT5] MetaTrader5 غير متوفر على هذا النظام
+2025-08-19 08:30:28 - __main__ - INFO - [OK] تم تهيئة محلل Gemini بنجاح - النموذج: gemini-2.0-flash
+2025-08-19 08:30:28 - __main__ - INFO - ▶️ بدء تشغيل بوت التداول المتقدم v1.2.0...
+2025-08-19 08:30:28 - __main__ - WARNING - ⚠️ MetaTrader5 غير متوفر على هذا النظام - البوت سيعمل بوظائف محدودة
+2025-08-19 08:30:28 - __main__ - WARNING - [MT5] MetaTrader5 غير متوفر على هذا النظام
+2025-08-19 08:30:28 - __main__ - INFO - [OK] تم تهيئة محلل Gemini بنجاح - النموذج: gemini-2.0-flash
+2025-08-19 08:30:28 - __main__ - WARNING - [WARNING] MetaTrader5 غير متصل - يرجى التحقق من الإعدادات
+2025-08-19 08:30:28 - __main__ - INFO - [OK] Gemini AI جاهز للتحليل!
+2025-08-19 08:30:28 - __main__ - INFO - [SYSTEM] نظام التنبيهات: مراقبة لحظية مع تقييم المستخدم
+2025-08-19 08:30:28 - __main__ - INFO - [SYSTEM] نظام التخزين: تسجيل جميع الصفقات والتقييمات
+2025-08-19 08:30:28 - __main__ - INFO - [RUNNING] بدء حلقة المراقبة...
+2025-08-19 08:30:28 - __main__ - INFO - [RUNNING] تم بدء حلقة المراقبة في الخلفية
+2025-08-19 08:30:28 - __main__ - DEBUG - [DEBUG] فحص دوري لحالة اتصال MT5...
+2025-08-19 08:30:28 - __main__ - WARNING - [WARNING] انقطاع في اتصال MT5 تم اكتشافه - محاولة إعادة الاتصال...
+2025-08-19 08:30:28 - __main__ - ERROR - [ERROR] خطأ في التحقق من الاتصال الحقيقي: 'MT5Constants' object has no attribute 'account_info'
+2025-08-19 08:30:28 - __main__ - INFO - [RECONNECT] محاولة إعادة الاتصال التلقائية...
+2025-08-19 08:30:28 - __main__ - INFO - [RECONNECT] محاولة رقم 1 من 3
+2025-08-19 08:30:28 - __main__ - WARNING - [MT5] MetaTrader5 غير متوفر على هذا النظام
+2025-08-19 08:30:28 - __main__ - INFO - [RECONNECT] انتظار 2 ثانية قبل المحاولة التالية...
+2025-08-19 08:30:29 - __main__ - INFO - [OK] خيط المراقبة يعمل بشكل صحيح
+2025-08-19 08:30:29 - __main__ - INFO - [SYSTEM] البوت جاهز للعمل!
+2025-08-19 08:30:29 - __main__ - INFO - [SYSTEM] تم تنظيف جميع البيانات المؤقتة عند بدء التشغيل
+2025-08-19 08:30:29 - __main__ - INFO - [SYSTEM] بدء استقبال الرسائل (محاولة 1/10)...
+2025-08-19 08:30:29 - __main__ - INFO - [OK] اتصال Telegram سليم - البوت: Trading Bot_v1.2.0
+2025-08-19 08:30:29 - __main__ - WARNING - [WARNING] watchdog أو psutil غير مثبتة - إعادة التشغيل التلقائي معطلة
+2025-08-19 08:30:30 - __main__ - INFO - [RECONNECT] محاولة رقم 2 من 3
+2025-08-19 08:30:30 - __main__ - WARNING - [MT5] MetaTrader5 غير متوفر على هذا النظام
+2025-08-19 08:30:30 - __main__ - INFO - [RECONNECT] انتظار 4 ثانية قبل المحاولة التالية...
+2025-08-19 08:30:34 - __main__ - INFO - [RECONNECT] محاولة رقم 3 من 3
+2025-08-19 08:30:34 - __main__ - WARNING - [MT5] MetaTrader5 غير متوفر على هذا النظام
+2025-08-19 08:30:34 - __main__ - ERROR - [ERROR] فشل في إعادة الاتصال بعد عدة محاولات
+2025-08-19 08:30:34 - __main__ - INFO - [API_CHECK] فحص دوري لحالة API...
+2025-08-19 08:30:34 - __main__ - INFO - [API_CHECK] ✅ API متاح ويعمل بشكل طبيعي
+2025-08-19 08:30:34 - __main__ - DEBUG - [DEBUG] المستخدمون النشطون: []
+2025-08-19 08:30:34 - __main__ - DEBUG - [DEBUG] لا يوجد مستخدمين نشطين - انتظار 30 ثانية
+2025-08-19 08:30:36 - TeleBot - ERROR - Threaded polling exception: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-08-19 08:30:36 - TeleBot - ERROR - Exception traceback:
+Traceback (most recent call last):
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/__init__.py", line 1234, in __threaded_polling
+    polling_thread.raise_exceptions()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/util.py", line 112, in raise_exceptions
+    raise self.exception_info
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/util.py", line 94, in run
+    task(*args, **kwargs)
+    ~~~~^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/__init__.py", line 688, in __retrieve_updates
+    updates = self.get_updates(offset=(self.last_update_id + 1),
+                               allowed_updates=allowed_updates,
+                               timeout=timeout, long_polling_timeout=long_polling_timeout)
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/__init__.py", line 660, in get_updates
+    json_updates = apihelper.get_updates(
+        self.token, offset=offset, limit=limit, timeout=timeout, allowed_updates=allowed_updates,
+        long_polling_timeout=long_polling_timeout)
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/apihelper.py", line 332, in get_updates
+    return _make_request(token, method_url, params=payload)
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/apihelper.py", line 168, in _make_request
+    json_result = _check_result(method_name, result)
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/apihelper.py", line 195, in _check_result
+    raise ApiTelegramException(method_name, result, result_json)
+telebot.apihelper.ApiTelegramException: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+
+2025-08-19 08:30:36 - TeleBot - ERROR - Infinity polling: polling exited
+2025-08-19 08:30:36 - TeleBot - ERROR - Break infinity polling
+2025-08-19 08:30:36 - __main__ - INFO - [SYSTEM] تم إنهاء البوت بأمان
