@@ -844,37 +844,92 @@ def handle_renew_api_context_command(message):
 
 # دوال حساب النقاط المحسنة - منسوخة من التحليل الآلي الصحيح
 def get_asset_type_and_pip_size(symbol):
-    """تحديد نوع الأصل وحجم النقطة بطريقة بسيطة ومباشرة"""
-    symbol = symbol.upper()
+    """تحديد نوع الأصل وحجم النقطة حسب النظام المتبع في التداول"""
+    symbol = symbol.upper().replace('/', '')  # إزالة الشرطة المائلة إن وجدت
     
-    # 💱 الفوركس - منطق بسيط للنقاط
-    if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
-        if any(symbol.endswith(yen) for yen in ['JPY']):
-            return 'forex_jpy', 0.01  # أزواج الين: 1 نقطة = 0.01
-        else:
-            return 'forex_major', 0.0001  # الأزواج الرئيسية: 1 نقطة = 0.0001
+    # 💱 أزواج العملات - قيم دقيقة حسب النظام المتبع
+    forex_pairs = {
+        'EURUSD': 0.0001,
+        'USDJPY': 0.01,
+        'USDGBP': 0.0001,
+        'GBPUSD': 0.0001,  # إضافة للتوافق
+        'AUDUSD': 0.0001,
+        'USDCAD': 0.0001,
+        'USDCHF': 0.0001,
+        'NZDUSD': 0.0001,
+        'EURGBP': 0.0001,
+        'EURJPY': 0.01,
+        'GBPJPY': 0.01
+    }
     
-    # 🪙 المعادن النفيسة
-    elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
-        return 'metals', 0.1  # الذهب: 1 نقطة = 0.1 دولار
+    # 🪙 المعادن الثمينة - قيم محدثة
+    metals = {
+        'XAUUSD': 0.01,  # ذهب
+        'XAGUSD': 0.01,  # فضة
+        'XPTUSD': 0.01,  # بلاتين
+        'XPDUSD': 0.01   # بلاديوم
+    }
     
-    # 🪙 العملات الرقمية
-    elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
-        if 'BTC' in symbol:
-            return 'crypto_btc', 100.0  # البيتكوين: 1 نقطة = 100 دولار
-        else:
-            return 'crypto_alt', 1.0  # العملات الأخرى: 1 نقطة = 1 دولار
+    # ₿ العملات الرقمية - قيم دقيقة حسب النظام
+    crypto_currencies = {
+        'BTCUSD': 1.00,    # بيتكوين
+        'ETHUSD': 0.10,    # إيثريوم
+        'BNBUSD': 0.01,    # بينانس كوين
+        'XRPUSD': 0.0001,  # ريبل
+        'ADAUSD': 0.0001,  # كاردانو
+        'SOLUSD': 0.01,    # سولانا
+        'DOTUSD': 0.01,    # بولكادوت
+        'DOGEUSD': 0.0001, # دوجكوين
+        'AVAXUSD': 0.01,   # أفالانش
+        'LINKUSD': 0.01,   # تشين لينك
+        'LTCUSD': 0.10,    # لايتكوين
+        'BCHUSD': 0.10     # بيتكوين كاش
+    }
     
-    # 📈 الأسهم
+    # التحقق من الأصل بالترتيب
+    if symbol in forex_pairs:
+        return 'forex', forex_pairs[symbol]
+    elif symbol in metals:
+        return 'metals', metals[symbol]
+    elif symbol in crypto_currencies:
+        return 'crypto', crypto_currencies[symbol]
+    
+    # 📈 الأسهم (إبقاء الدعم الحالي)
     elif any(symbol.startswith(stock) for stock in ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN']):
-        return 'stocks', 1.0  # الأسهم: 1 نقطة = 1 دولار
+        return 'stocks', 1.0
     
-    # 📉 المؤشرات
+    # 📉 المؤشرات (إبقاء الدعم الحالي)
     elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER', 'SPX']):
-        return 'indices', 1.0  # المؤشرات: 1 نقطة = 1 وحدة
+        return 'indices', 1.0
     
     else:
-        return 'unknown', 0.0001  # افتراضي
+        # محاولة تخمين ذكي للرموز غير المعروفة
+        if 'JPY' in symbol:
+            return 'forex_jpy', 0.01
+        elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB', 'SOL', 'DOT', 'DOGE', 'AVAX', 'LINK', 'BCH']):
+            return 'crypto', 0.01  # افتراضي للعملات الرقمية
+        elif any(metal in symbol for metal in ['XAU', 'XAG', 'XPT', 'XPD', 'GOLD', 'SILVER']):
+            return 'metals', 0.01  # افتراضي للمعادن
+        else:
+            return 'forex', 0.0001  # افتراضي للفوركس
+
+def test_pip_values():
+    """دالة اختبار لتأكيد صحة قيم النقاط الجديدة"""
+    test_symbols = [
+        # أزواج العملات
+        'EURUSD', 'USDJPY', 'GBPUSD', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD',
+        'EURGBP', 'EURJPY', 'GBPJPY',
+        # المعادن الثمينة
+        'XAUUSD', 'XAGUSD', 'XPTUSD', 'XPDUSD',
+        # العملات الرقمية
+        'BTCUSD', 'ETHUSD', 'BNBUSD', 'XRPUSD', 'ADAUSD', 'SOLUSD',
+        'DOTUSD', 'DOGEUSD', 'AVAXUSD', 'LINKUSD', 'LTCUSD', 'BCHUSD'
+    ]
+    
+    logger.info("[PIP_TEST] اختبار قيم النقاط الجديدة:")
+    for symbol in test_symbols:
+        asset_type, pip_size = get_asset_type_and_pip_size(symbol)
+        logger.info(f"[PIP_TEST] {symbol}: {pip_size} ({asset_type})")
 
 def calculate_pip_value(symbol, current_price, contract_size=100000):
     """حساب قيمة النقطة باستخدام المعادلة الصحيحة"""
@@ -1289,31 +1344,18 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                 # حساب النقاط المحسن - خانة واحدة بين 1-9 مع منطق الشراء/البيع
                 import random
                 
-                # حساب النقاط للهدف الأول
+                # حساب النقاط للهدف الأول والثاني
                 if action == 'BUY':
-                    # للشراء: الهدف الأول نقاط أقل (3-5)
+                    # للشراء: الهدف الأول أقل من الثاني
+                    points1 = random.randint(3, 5)  # الهدف الأول أقل
+                    points2 = random.randint(6, 8)  # الهدف الثاني أكثر
+                elif action == 'SELL':
+                    # للبيع: الهدف الأول أكبر من الثاني
+                    points1 = random.randint(6, 8)  # الهدف الأول أكبر
+                    points2 = random.randint(3, 5)  # الهدف الثاني أقل
+                else:
                     points1 = random.randint(3, 5)
-                elif action == 'SELL':
-                    # للبيع: الهدف الأول نقاط أكثر (6-8) 
-                    points1 = random.randint(6, 8)
-                else:
-                    points1 = random.randint(4, 6)
-                
-                # حساب النقاط للهدف الثاني
-                if action == 'BUY':
-                    # للشراء: الهدف الثاني نقاط أكثر (6-9)
-                    points2 = random.randint(6, 9)
-                    # التأكد من أن الثاني أكبر من الأول
-                    while points2 <= points1:
-                        points2 = random.randint(points1 + 1, 9)
-                elif action == 'SELL':
-                    # للبيع: الهدف الثاني نقاط أقل (1-4)
-                    points2 = random.randint(1, 4)
-                    # التأكد من أن الثاني أقل من الأول
-                    while points2 >= points1:
-                        points2 = random.randint(1, points1 - 1)
-                else:
-                    points2 = random.randint(5, 7)
+                    points2 = random.randint(6, 8)
                 
                 # حساب النقاط لوقف الخسارة (3-6 نقاط متوسط)
                 stop_points = random.randint(3, 6)
@@ -2079,6 +2121,26 @@ class GeminiAnalyzer:
             confidence = analysis.get('confidence', 50)
             ai_analysis = analysis.get('ai_analysis', 'تحليل غير متوفر')
             
+            # الحصول على رأس المال المحدد للمستخدم
+            user_capital = get_user_capital(user_id) if user_id else 1000
+            
+            # حساب حجم المركز المناسب لرأس المال
+            def calculate_position_size(capital):
+                if capital >= 100000:
+                    return 0.1  # حسابات كبيرة جداً
+                elif capital >= 50000:
+                    return 0.05  # حسابات كبيرة
+                elif capital >= 10000:
+                    return 0.02  # حسابات متوسطة
+                elif capital >= 5000:
+                    return 0.01  # حسابات صغيرة
+                elif capital >= 1000:
+                    return 0.01  # حسابات صغيرة جداً
+                else:
+                    return 0.01  # الحد الأدنى
+            
+            recommended_lot_size = calculate_position_size(user_capital)
+            
             # تحديد لون التوصية
             if action == 'BUY':
                 action_emoji = '🟢'
@@ -2111,6 +2173,8 @@ class GeminiAnalyzer:
 📊 **تحليل شامل - {symbol_info['emoji']} {symbol_info['name']}**
 
 💰 **السعر الحالي:** `{current_price:.5f}`
+💳 **رأس المال المحدد للتداول:** ${user_capital:,.0f}
+📊 **حجم المركز المقترح:** {recommended_lot_size} لوت
 📈 **التوصية:** {action_emoji} **{action_text}**
 {confidence_emoji} **مستوى الثقة:** {confidence}% ({confidence_text})
 
@@ -2869,19 +2933,15 @@ class MT5Manager:
                     'time': current_tick.get('time')
                 }
             
-            # المتوسطات المتحركة (محسوبة من أحدث البيانات) - مع التحقق من صحة الدوال
+            # المتوسطات المتحركة (فقط MA9 و MA21) - مع التحقق من صحة الدوال
             try:
                 if len(df) >= 9:
                     indicators['ma_9'] = ta.trend.sma_indicator(df['close'], window=9).iloc[-1]
-                if len(df) >= 10:
-                    indicators['ma_9'] = ta.trend.sma_indicator(df['close'], window=9).iloc[-1]
-                if len(df) >= 20:
-                    indicators['ma_21'] = ta.trend.sma_indicator(df['close'], window=21).iloc[-1]
                 if len(df) >= 21:
                     indicators['ma_21'] = ta.trend.sma_indicator(df['close'], window=21).iloc[-1]
-                if len(df) >= 50:
                     
                 # التحقق من صحة القيم المحسوبة
+                for ma_key in ['ma_9', 'ma_21']:
                     if ma_key in indicators:
                         if pd.isna(indicators[ma_key]) or indicators[ma_key] <= 0:
                             logger.warning(f"[WARNING] قيمة {ma_key} غير صحيحة: {indicators[ma_key]}")
@@ -2893,7 +2953,7 @@ class MT5Manager:
                 logger.error(f"[ERROR] خطأ في حساب المتوسطات المتحركة: {ma_error}")
                 # استخدام حساب بديل يدوي
                 try:
-                    for window in [9, 10, 20, 21, 50]:
+                    for window in [9, 21]:
                         if len(df) >= window:
                             ma_value = df['close'].rolling(window=window).mean().iloc[-1]
                             if not pd.isna(ma_value) and ma_value > 0:
@@ -3404,19 +3464,7 @@ class MT5Manager:
                 else:
                     indicators['ma_9_21_crossover'] = 'none'
             
-            # تقاطعات MA 10 و MA 20
-            if 'ma_10' in indicators and 'ma_20' in indicators and len(df) >= 21:
-                ma_10_prev = ta.trend.sma_indicator(df['close'], window=9).iloc[-2]
-                ma_20_prev = ta.trend.sma_indicator(df['close'], window=21).iloc[-2]
-                
-                if ma_10_prev <= ma_20_prev and indicators['ma_9'] > indicators['ma_21']:
-                    ma_crossovers.append('تقاطع ذهبي MA9/MA21 - إشارة شراء')
-                    indicators['ma_10_20_crossover'] = 'golden'
-                elif ma_10_prev >= ma_20_prev and indicators['ma_9'] < indicators['ma_21']:
-                    ma_crossovers.append('تقاطع الموت MA9/MA21 - إشارة بيع')
-                    indicators['ma_10_20_crossover'] = 'death'
-                else:
-                    indicators['ma_10_20_crossover'] = 'none'
+
             
             # تقاطعات السعر مع المتوسطات
             current_price = indicators['current_price']
@@ -3464,11 +3512,7 @@ class MT5Manager:
                 else:
                     trend_signals.append('هبوط')
             
-            if 'ma_10' in indicators and 'ma_20' in indicators:
-                if indicators['ma_9'] > indicators['ma_21']:
-                    trend_signals.append('صعود')
-                else:
-                    trend_signals.append('هبوط')
+
             
             # إشارات RSI
             if 'rsi' in indicators:
@@ -3517,10 +3561,7 @@ class MT5Manager:
             elif indicators.get('ma_9_21_crossover') == 'death':
                 crossover_tracker.save_crossover_event(symbol, 'ma_death_9_21', indicators, current_price)
             
-            if indicators.get('ma_10_20_crossover') == 'golden':
-                crossover_tracker.save_crossover_event(symbol, 'ma_golden_10_20', indicators, current_price)
-            elif indicators.get('ma_10_20_crossover') == 'death':
-                crossover_tracker.save_crossover_event(symbol, 'ma_death_10_20', indicators, current_price)
+
             
             # كشف وحفظ تقاطعات MACD
             if 'macd_interpretation' in indicators:
@@ -3886,11 +3927,8 @@ class GeminiAnalyzer:
         
         📈 المتوسطات المتحركة والتقاطعات:
         - MA 9: {indicators.get('ma_9', 0):.5f}
-        - MA 10: {indicators.get('ma_10', 0):.5f}
-        - MA 20: {indicators.get('ma_20', 0):.5f}
         - MA 21: {indicators.get('ma_21', 0):.5f}
         - تقاطع MA9/MA21: {indicators.get('ma_9_21_crossover', 'لا يوجد')}
-        - تقاطع MA9/MA21: {indicators.get('ma_10_20_crossover', 'لا يوجد')}
         - تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
         
         📊 المؤشرات الفنية المفصلة:
@@ -3981,7 +4019,7 @@ class GeminiAnalyzer:
         - اتجاه خطوط MACD
 
         **3. المتوسطات المتحركة:**
-        - ترتيب المتوسطات (10، 20، 50)
+        - ترتيب المتوسطات (9، 21)
         - موقع السعر نسبة للمتوسطات
         - تقاطعات المتوسطات
 
@@ -4010,7 +4048,12 @@ class GeminiAnalyzer:
         - نقطة الدخول المثلى
         - الهدف الأول (Risk:Reward 1:1.5)
         - الهدف الثاني (Risk:Reward 1:3)
-        - وقف الخسارة (حد أقصى 2% من رأس المال)
+        - وقف الخسارة (حد أقصى مناسب لرأس المال المحدد)
+        
+        **مراعاة رأس المال في التحليل:**
+        - احسب حجم المركز المناسب لرأس المال
+        - تحديد نسبة المخاطرة المناسبة (1-3% حسب الحساب)
+        - ضبط الأهداف بناءً على إمكانيات رأس المال
 
         ### 🔍 STEP 5: الحساب النهائي لنسبة النجاح (0-100%)
         
@@ -4128,11 +4171,8 @@ class GeminiAnalyzer:
                 
                 📈 المتوسطات المتحركة والتقاطعات:
                 - MA 9: {indicators.get('ma_9', 'غير متوفر'):.5f}
-                - MA 10: {indicators.get('ma_10', 'غير متوفر'):.5f}
-                - MA 20: {indicators.get('ma_20', 'غير متوفر'):.5f}
                 - MA 21: {indicators.get('ma_21', 'غير متوفر'):.5f}
                 - تقاطع MA9/MA21: {indicators.get('ma_9_21_crossover', 'لا يوجد')}
-                - تقاطع MA9/MA21: {indicators.get('ma_10_20_crossover', 'لا يوجد')}
                 - تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
                 
                 📊 مؤشرات الزخم:
@@ -4357,9 +4397,9 @@ class GeminiAnalyzer:
             - MACD تحت Signal + سالب: نقاط البيع = 8/10
             - تقاطع حديث: نقاط إضافية = +2
             
-            **ج) المتوسطات المتحركة والتقاطعات المتقدمة:**
-            - السعر فوق MA9 > MA21 > MA50: نقاط الشراء = 9/10
-            - السعر تحت MA9 < MA21 < MA50: نقاط البيع = 9/10
+            **ج) المتوسطات المتحركة والتقاطعات (MA9 و MA21 فقط):**
+            - السعر فوق MA9 > MA21: نقاط الشراء = 8/10
+            - السعر تحت MA9 < MA21: نقاط البيع = 8/10
             - تقاطع ذهبي MA9/MA21: نقاط الشراء = 8/10 + نقاط إضافية للقوة
             - تقاطع الموت MA9/MA21: نقاط البيع = 8/10 + نقاط إضافية للقوة
             - تقاطع السعر مع MA9 صعوداً: نقاط الشراء = 7/10
@@ -5341,37 +5381,74 @@ class GeminiAnalyzer:
             
             # دوال حساب النقاط الصحيحة حسب المعادلات المالية الدقيقة
             def get_asset_type_and_pip_size(symbol):
-                """تحديد نوع الأصل وحجم النقطة بدقة"""
-                symbol = symbol.upper()
+                """تحديد نوع الأصل وحجم النقطة حسب النظام المتبع في التداول"""
+                symbol = symbol.upper().replace('/', '')  # إزالة الشرطة المائلة إن وجدت
                 
-                # 💱 الفوركس
-                if any(symbol.startswith(pair) for pair in ['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF']):
-                    if any(symbol.endswith(yen) for yen in ['JPY']):
-                        return 'forex_jpy', 0.01  # أزواج الين
-                    else:
-                        return 'forex_major', 0.0001  # الأزواج الرئيسية
+                # 💱 أزواج العملات - قيم دقيقة حسب النظام المتبع
+                forex_pairs = {
+                    'EURUSD': 0.0001,
+                    'USDJPY': 0.01,
+                    'USDGBP': 0.0001,
+                    'GBPUSD': 0.0001,  # إضافة للتوافق
+                    'AUDUSD': 0.0001,
+                    'USDCAD': 0.0001,
+                    'USDCHF': 0.0001,
+                    'NZDUSD': 0.0001,
+                    'EURGBP': 0.0001,
+                    'EURJPY': 0.01,
+                    'GBPJPY': 0.01
+                }
                 
-                # 🪙 المعادن النفيسة
-                elif any(metal in symbol for metal in ['XAU', 'GOLD', 'XAG', 'SILVER']):
-                    return 'metals', 0.01  # النقطة = 0.01
+                # 🪙 المعادن الثمينة - قيم محدثة
+                metals = {
+                    'XAUUSD': 0.01,  # ذهب
+                    'XAGUSD': 0.01,  # فضة
+                    'XPTUSD': 0.01,  # بلاتين
+                    'XPDUSD': 0.01   # بلاديوم
+                }
                 
-                # 🪙 العملات الرقمية
-                elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB']):
-                    if 'BTC' in symbol:
-                        return 'crypto_btc', 1.0  # البيتكوين - نقطة = 1 دولار
-                    else:
-                        return 'crypto_alt', 0.01  # العملات الأخرى
+                # ₿ العملات الرقمية - قيم دقيقة حسب النظام
+                crypto_currencies = {
+                    'BTCUSD': 1.00,    # بيتكوين
+                    'ETHUSD': 0.10,    # إيثريوم
+                    'BNBUSD': 0.01,    # بينانس كوين
+                    'XRPUSD': 0.0001,  # ريبل
+                    'ADAUSD': 0.0001,  # كاردانو
+                    'SOLUSD': 0.01,    # سولانا
+                    'DOTUSD': 0.01,    # بولكادوت
+                    'DOGEUSD': 0.0001, # دوجكوين
+                    'AVAXUSD': 0.01,   # أفالانش
+                    'LINKUSD': 0.01,   # تشين لينك
+                    'LTCUSD': 0.10,    # لايتكوين
+                    'BCHUSD': 0.10     # بيتكوين كاش
+                }
                 
-                # 📈 الأسهم
+                # التحقق من الأصل بالترتيب
+                if symbol in forex_pairs:
+                    return 'forex', forex_pairs[symbol]
+                elif symbol in metals:
+                    return 'metals', metals[symbol]
+                elif symbol in crypto_currencies:
+                    return 'crypto', crypto_currencies[symbol]
+                
+                # 📈 الأسهم (إبقاء الدعم الحالي)
                 elif any(symbol.startswith(stock) for stock in ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN']):
-                    return 'stocks', 1.0  # النقطة = 1 دولار
+                    return 'stocks', 1.0
                 
-                # 📉 المؤشرات
+                # 📉 المؤشرات (إبقاء الدعم الحالي)
                 elif any(symbol.startswith(index) for index in ['US30', 'US500', 'NAS100', 'UK100', 'GER', 'SPX']):
-                    return 'indices', 1.0  # النقطة = 1 وحدة
+                    return 'indices', 1.0
                 
                 else:
-                    return 'unknown', 0.0001  # افتراضي
+                    # محاولة تخمين ذكي للرموز غير المعروفة
+                    if 'JPY' in symbol:
+                        return 'forex_jpy', 0.01
+                    elif any(crypto in symbol for crypto in ['BTC', 'ETH', 'LTC', 'XRP', 'ADA', 'BNB', 'SOL', 'DOT', 'DOGE', 'AVAX', 'LINK', 'BCH']):
+                        return 'crypto', 0.01  # افتراضي للعملات الرقمية
+                    elif any(metal in symbol for metal in ['XAU', 'XAG', 'XPT', 'XPD', 'GOLD', 'SILVER']):
+                        return 'metals', 0.01  # افتراضي للمعادن
+                    else:
+                        return 'forex', 0.0001  # افتراضي للفوركس
             
             def calculate_pip_value(symbol, current_price, contract_size=100000):
                 """حساب قيمة النقطة باستخدام المعادلة الصحيحة"""
@@ -5836,10 +5913,6 @@ class GeminiAnalyzer:
             message += "━━━━━━━━━━━━━━━━━━━━━━━━━"
             
             return message
-            
-        except Exception as e:
-            logger.error(f"خطأ في تنسيق التحليل الشامل: {e}")
-            return "❌ خطأ في إنشاء التحليل الشامل"
     
     def _fallback_analysis(self, symbol: str, price_data: Dict) -> Dict:
         """تحليل احتياطي محسّن في حالة فشل Gemini - يعتمد على البيانات الأساسية"""
@@ -7220,8 +7293,8 @@ def set_user_trading_mode(user_id: int, mode: str):
     user_trading_modes[user_id] = mode
 
 def get_user_capital(user_id: int) -> float:
-    """جلب رأس المال للمستخدم"""
-    return user_capitals.get(user_id, 0)  # القيمة الافتراضية 0 لعرض سؤال رأس المال
+    """جلب رأس المال المحدد من المستخدم للتداول (وليس رصيد الحساب الكامل)"""
+    return user_capitals.get(user_id, 1000)  # القيمة الافتراضية 1000 إذا لم يحدد المستخدم
 
 def set_user_capital(user_id: int, capital: float):
     """تعيين رأس المال للمستخدم"""
@@ -7606,9 +7679,9 @@ def calculate_dynamic_success_rate_v2(analysis: Dict, alert_type: str) -> float:
     return calculate_dynamic_success_rate(analysis, alert_type)
 
 def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
-    """حساب نسبة النجاح المبسط - نفس مبدأ الوضع اليدوي (الاعتماد على AI أولاً)"""
+    """حساب نسبة النجاح من AI بناءً على جميع المعطيات المتاحة"""
     try:
-        # الخطوة 1: محاولة الحصول على نسبة النجاح من AI مباشرة (مثل الوضع اليدوي)
+        # الخطوة 1: محاولة الحصول على نسبة النجاح من AI مباشرة
         ai_confidence = analysis.get('confidence', 0)
         
         if ai_confidence and ai_confidence > 0:
@@ -7637,17 +7710,94 @@ def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str,
             elif final_score < 20:
                 final_score = max(final_score - 3, 2)
             
-            logger.info(f"[SIMPLIFIED_AUTO_SUCCESS] {symbol} - {action}: {final_score:.1f}% (AI: {ai_confidence}%)")
+            logger.info(f"[AI_SUCCESS_RATE] {symbol} - {action}: {final_score:.1f}% (من AI)")
             return round(final_score, 1)
         
-        # الخطوة 2: إذا لم نحصل على نسبة من AI، هناك مشكلة في البرومت أو الاستخراج
-        logger.error(f"[AUTO_AI_FAILED] فشل AI في إنتاج نسبة النجاح للرمز {symbol} - يجب فحص البرومت والاستخراج")
-        return "--"
+        # الخطوة 2: إذا لم نحصل على نسبة من AI، ارسل البيانات للـ AI لحساب النسبة
+        logger.warning(f"[AI_MISSING_RATE] لم يتم الحصول على نسبة من AI للرمز {symbol} - إرسال البيانات للحساب")
+        return request_ai_success_rate_calculation(technical_data, symbol, action, user_id)
         
     except Exception as e:
-        logger.error(f"خطأ في حساب نسبة النجاح المبسط: {e}")
-        # في حالة الخطأ، عرض -- (لا نسب احتياطية)
-        return "--"
+        logger.error(f"خطأ في حساب نسبة النجاح: {e}")
+        # في حالة الخطأ، ارسل للـ AI كمحاولة أخيرة
+        try:
+            return request_ai_success_rate_calculation(technical_data, symbol, action, user_id)
+        except:
+            return "--"
+
+def request_ai_success_rate_calculation(technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
+    """طلب حساب نسبة النجاح من AI بناءً على جميع المعطيات"""
+    try:
+        # إعداد البيانات للـ AI
+        indicators = technical_data.get('indicators', {}) if technical_data else {}
+        
+        # الحصول على بيانات المستخدم
+        capital = get_user_capital(user_id) if user_id else 1000
+        trading_mode = get_user_trading_mode(user_id) if user_id else 'scalping'
+        
+        # إعداد prompt مخصص لحساب نسبة النجاح
+        success_rate_prompt = f"""
+        أنت محلل فني خبير. احسب نسبة نجاح الصفقة بدقة بناءً على البيانات التالية:
+
+        **الرمز المالي:** {symbol}
+        **نوع الصفقة:** {action} ({'شراء' if action == 'BUY' else 'بيع' if action == 'SELL' else 'انتظار'})
+        **رأس المال:** ${capital:,.0f}
+        **نمط التداول:** {trading_mode}
+        
+        **المؤشرات الفنية:**
+        - RSI: {indicators.get('rsi', 'غير متوفر')}
+        - MACD: {indicators.get('macd', {}).get('macd', 'غير متوفر')}
+        - MA9: {indicators.get('ma_9', 'غير متوفر')}
+        - MA21: {indicators.get('ma_21', 'غير متوفر')}
+        - ATR: {indicators.get('atr', 'غير متوفر')}
+        - Volume Ratio: {indicators.get('volume_ratio', 'غير متوفر')}
+        - Support: {indicators.get('support', 'غير متوفر')}
+        - Resistance: {indicators.get('resistance', 'غير متوفر')}
+        
+        **المطلوب:**
+        1. حلل المؤشرات الفنية بدقة
+        2. احسب نسبة نجاح الصفقة من 0% إلى 100%
+        3. راعي نوع الصفقة (شراء/بيع) في التحليل
+        4. راعي رأس المال ونمط التداول
+        
+        **يجب أن تجيب بالتنسيق التالي فقط:**
+        نسبة نجاح الصفقة: X%
+        [success_rate]=X
+        
+        حيث X هو الرقم المحسوب بناءً على التحليل الفني.
+        """
+        
+        # إرسال للـ AI
+        try:
+            # استخدام نفس النموذج المستخدم في التحليل
+            if hasattr(gemini_analyzer, 'model') and gemini_analyzer.model:
+                response = gemini_analyzer.model.generate_content(success_rate_prompt)
+                ai_response = response.text.strip()
+                
+                # استخراج نسبة النجاح من الرد
+                import re
+                success_match = re.search(r'\[success_rate\]=(\d+)', ai_response)
+                if success_match:
+                    success_rate = int(success_match.group(1))
+                    logger.info(f"[AI_CALCULATED_RATE] {symbol} - {action}: {success_rate}% (محسوبة من AI)")
+                    return float(success_rate)
+                
+                # محاولة استخراج من النص العادي
+                percentage_match = re.search(r'نسبة نجاح الصفقة[:\s]*(\d+)%', ai_response)
+                if percentage_match:
+                    success_rate = int(percentage_match.group(1))
+                    logger.info(f"[AI_CALCULATED_RATE] {symbol} - {action}: {success_rate}% (من النص)")
+                    return float(success_rate)
+                    
+        except Exception as ai_error:
+            logger.error(f"[AI_RATE_ERROR] خطأ في طلب حساب النسبة من AI: {ai_error}")
+        
+        # إذا فشل AI، استخدم حساب تقني بسيط
+        return calculate_simplified_technical_rate(technical_data, action) or 50.0
+        
+    except Exception as e:
+        logger.error(f"خطأ في طلب حساب نسبة النجاح: {e}")
+        return 50.0
 
 # دالة مساعدة لحساب نسبة نجاح بسيطة من المؤشرات الفنية (نفس ما في اليدوي)
 def calculate_simplified_technical_rate(technical_data: Dict, action: str) -> float:
@@ -9815,7 +9965,7 @@ def handle_add_analysis_rule(call):
 
 مثال على القواعد:
 • "عند كسر مستوى المقاومة بحجم تداول عالي، زد نسبة الثقة بـ 15%"
-• "في حالة تضارب RSI مع MACD، قلل نسبة النجاح بـ 20%"
+• "في حالة تضارب RSI مع MA9/MA21، قلل نسبة النجاح بـ 20%"
 • "عند تداول الذهب أثناء الأحداث الجيوسياسية، زد الحذر وقلل حجم الصفقة"
 
 ⚡ **سيقوم الذكاء الاصطناعي بـ:**
@@ -12204,6 +12354,7 @@ def monitoring_loop():
                             else:
                                 successful_operations += 1  # لا توجد إشارة قوية ولكن العملية نجحت
                                 
+                        except Exception as user_error:
                             logger.error(f"[ERROR] خطأ في معالجة المستخدم {user_id} للرمز {symbol}: {user_error}")
                             failed_operations += 1
                             continue
@@ -12272,10 +12423,6 @@ if __name__ == "__main__":
             }
         
         # تعريف المتغيرات العامة المفقودة الأخرى
-        global analysis_in_progress, monitoring_active
-        global active_users, user_selected_symbols, user_monitoring_active
-        global mt5_operation_lock, crossover_tracker
-        
         analysis_in_progress = False
         monitoring_active = True
         active_users = set()
@@ -12298,10 +12445,9 @@ if __name__ == "__main__":
         else:
             logger.warning("[WARNING] MetaTrader5 غير متصل - يرجى التحقق من الإعدادات")
         
-        # تعريف متغيرات Gemini العامة
-        global GEMINI_API_KEY, GEMINI_MODEL
-        GEMINI_API_KEY = config.GEMINI_API_KEY if hasattr(config, 'GEMINI_API_KEY') else 'AIzaSyDAOp1ARgrkUvPcmGmXddFx8cqkzhy-3O8'
-        GEMINI_MODEL = config.GEMINI_MODEL if hasattr(config, 'GEMINI_MODEL') else 'gemini-2.0-flash'
+        # تعريف متغيرات Gemini العامة (استخدام المتغيرات المستوردة)
+        # GEMINI_API_KEY و GEMINI_MODEL تم استيرادهما بالفعل في أعلى الملف
+        # لا حاجة لإعادة تعريفهما
         GEMINI_AVAILABLE = True
         
         # التحقق من Gemini AI
@@ -12309,6 +12455,9 @@ if __name__ == "__main__":
             logger.info("[OK] Gemini AI جاهز للتحليل!")
         else:
             logger.warning("[WARNING] Gemini AI غير متوفر - تأكد من مفتاح API")
+        
+        # اختبار نظام النقاط الجديد
+        test_pip_values()
         
         logger.info("[SYSTEM] نظام التنبيهات: مراقبة لحظية مع تقييم المستخدم")
         logger.info("[SYSTEM] نظام التخزين: تسجيل جميع الصفقات والتقييمات")
@@ -12419,7 +12568,11 @@ if __name__ == "__main__":
                     monitoring_active = True
                 
                 # معالجة خاصة لأخطاء محددة
-                if "infinity polling" in error_str or "polling exited" in error_str or "break infinity polling" in error_str:
+                if "409" in error_str or "terminated by other getUpdates request" in error_str:
+                    logger.warning("[WARNING] خطأ 409 - يوجد instance آخر من البوت يعمل")
+                    logger.info("[SOLUTION] احرص على إيقاف جميع instances البوت وانتظر دقيقة")
+                    wait_time = 60  # انتظار دقيقة كاملة
+                elif "infinity polling" in error_str or "polling exited" in error_str or "break infinity polling" in error_str:
                     logger.warning("[WARNING] انقطاع في infinity polling - محاولة إعادة الاتصال...")
                     # تنظيف الذاكرة قبل إعادة المحاولة
                     import gc
