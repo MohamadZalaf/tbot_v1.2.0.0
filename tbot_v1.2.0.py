@@ -1072,7 +1072,7 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                         backup_score -= 10
                     
                     # ضمان النطاق 15-90%
-                    backup_score = max(15, min(90, backup_score))
+                    backup_score = max(0, min(100, backup_score))
                 
                 confidence = backup_score
                 logger.info(f"[BACKUP_SUCCESS] استخدام نسبة احتياطية للرمز {symbol}: {confidence:.1f}%")
@@ -4800,7 +4800,7 @@ class GeminiAnalyzer:
                 try:
                     percent = float(percent_str)
                     # فلترة النسب المنطقية للتداول
-                    if 5 <= percent <= 95:  # نطاق منطقي لنسب النجاح
+                    if 0 <= percent <= 100:  # نطاق منطقي لنسب النجاح
                         valid_percentages.append(percent)
                 except ValueError:
                     continue
@@ -4878,7 +4878,7 @@ class GeminiAnalyzer:
             base_rate += min(price_levels * 1.5, 8)  # حد أقصى 8 نقاط
             
             # تحديد النطاق النهائي
-            final_rate = max(15, min(85, base_rate))
+            final_rate = max(0, min(100, base_rate))
             
             logger.info(f"[INTELLIGENT_INFERENCE] استنتاج ذكي: إيجابي={positive_score}, سلبي={negative_score}, محايد={neutral_score}, النسبة={final_rate:.1f}%")
             return round(final_rate, 1)
@@ -7268,7 +7268,7 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
                 # استخدام أعلى نسبة مئوية موجودة في النص
                 percentages = [float(p) for p in percentage_matches]
                 extracted_percentage = max(percentages)
-                if 10 <= extracted_percentage <= 100:
+                if 0 <= extracted_percentage <= 100:
                     ai_analysis_score = min(extracted_percentage * 0.7, 70)  # تحويل لنقاط (أكثر سخاء)
                 else:
                     extracted_percentage = None
@@ -7373,7 +7373,7 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
         random_factor = random.uniform(-5, 5)
         final_score = final_score + random_factor
         
-        # ضمان النطاق 0-100 فقط (بدون قيود إضافية)
+        # ضمان النطاق 0-100% الكامل بدون قيود
         final_score = max(0, min(100, final_score))
         
         # سجل تفاصيل الحساب للمراجعة
@@ -7383,10 +7383,9 @@ def calculate_dynamic_success_rate(analysis: Dict, signal_type: str) -> float:
         
     except Exception as e:
         logger.error(f"خطأ في حساب نسبة النجاح الديناميكية: {e}")
-        # في حالة الخطأ، استخدم قيمة عشوائية واقعية من النطاق الكامل (تجنب 34%)
+        # في حالة الخطأ، استخدم قيمة عشوائية من النطاق الكامل 0-100%
         import random
-        fallback_values = [40, 45, 50, 55, 60, 65, 70]  # قيم محددة تجنب 34%
-        return round(random.choice(fallback_values) + random.uniform(-3, 3), 1)
+        return round(random.uniform(0, 100), 1)
 
 def get_user_advanced_notification_settings(user_id: int) -> Dict:
     """جلب إعدادات التنبيهات المتقدمة للمستخدم"""
@@ -7518,7 +7517,7 @@ def calculate_simplified_technical_rate(technical_data: Dict, action: str) -> fl
         else:
             base_score -= 5
             
-    return max(20.0, min(80.0, base_score))
+    return max(0.0, min(100.0, base_score))
 
 # دالة قديمة محذوفة - تم الاستبدال بالنظام المبسط
 
