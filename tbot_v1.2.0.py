@@ -1348,40 +1348,62 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                     
                     logger.debug(f"[DEBUG] الهدف الأول: النقاط={points1:.1f}, السعر الجديد={target1:.5f}")
                     
-                # حساب النقاط للهدف الثاني - منطق صحيح حسب نوع الصفقة
+                # تحديد الحدود المناسبة لكل نوع رمز بدقة حسب الـ 32 رمز
+                if symbol == 'XAUUSD':  # الذهب - نقاط متوسطة
+                    max_tp1, max_tp2, max_sl = 50, 80, 30
+                    min_tp1, min_tp2, min_sl = 10, 15, 5
+                elif symbol in ['XAGUSD']:  # الفضة - نقاط أكثر من الذهب
+                    max_tp1, max_tp2, max_sl = 60, 100, 40
+                    min_tp1, min_tp2, min_sl = 12, 18, 6
+                elif symbol in ['XPTUSD', 'XPDUSD']:  # البلاتين والبلاديوم
+                    max_tp1, max_tp2, max_sl = 45, 75, 35
+                    min_tp1, min_tp2, min_sl = 8, 12, 5
+                elif 'JPY' in symbol:  # أزواج الين الياباني (USDJPY, EURJPY, GBPJPY)
+                    max_tp1, max_tp2, max_sl = 80, 120, 50
+                    min_tp1, min_tp2, min_sl = 15, 25, 10
+                elif symbol in ['BTCUSD']:  # البيتكوين - نقاط صغيرة
+                    max_tp1, max_tp2, max_sl = 25, 40, 15
+                    min_tp1, min_tp2, min_sl = 5, 8, 3
+                elif symbol in ['ETHUSD', 'BNBUSD']:  # الإيثريوم والبينانس - متوسط
+                    max_tp1, max_tp2, max_sl = 30, 50, 20
+                    min_tp1, min_tp2, min_sl = 6, 10, 4
+                elif symbol in ['XRPUSD', 'ADAUSD', 'SOLUSD', 'DOTUSD', 'DOGEUSD', 'AVAXUSD', 'LINKUSD', 'LTCUSD', 'BCHUSD']:  # باقي العملات الرقمية
+                    max_tp1, max_tp2, max_sl = 35, 60, 25
+                    min_tp1, min_tp2, min_sl = 7, 12, 4
+                elif symbol in ['AAPL', 'TSLA', 'GOOGL', 'MSFT', 'AMZN', 'META', 'NVDA', 'NFLX']:  # الأسهم الأمريكية
+                    max_tp1, max_tp2, max_sl = 40, 70, 30
+                    min_tp1, min_tp2, min_sl = 8, 15, 5
+                elif symbol in ['US30', 'SPX500', 'NAS100', 'GER40', 'UK100']:  # المؤشرات
+                    max_tp1, max_tp2, max_sl = 60, 100, 40
+                    min_tp1, min_tp2, min_sl = 12, 20, 8
+                else:  # أزواج العملات العادية (EUR, GBP, AUD, USD, CAD, CHF, NZD)
+                    max_tp1, max_tp2, max_sl = 40, 70, 30
+                    min_tp1, min_tp2, min_sl = 8, 12, 5
+                
+                # حساب النقاط للهدف الثاني مع تطبيق الحدود والترتيب الصحيح
                 if target2 and entry_price and target2 != entry_price:
                     if action == 'BUY':
-                        # للشراء: الهدف الثاني أكبر من الأول (نقاط أكثر)
+                        # للشراء: الهدف الثاني يجب أن يكون أبعد من الأول (أكثر نقاط)
                         if points1 > 0:
-                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
+                            points2 = random.uniform(max(points1 + 2, min_tp2), max_tp2)
                         else:
-                            points2 = random.uniform(6.0, 10.0)
-                    elif action == 'SELL':
-                        # للبيع: الهدف الأول أكبر من الثاني (نقاط أقل للثاني)
-                        if points1 > 0:
-                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
-                        else:
-                            points2 = random.uniform(5.0, 7.0)
-                    
-                    # التأكد من عدم تساوي النقاط والمنطق الصحيح
-                    if action == 'BUY':
-                        while points2 <= points1 or abs(points2 - points1) < 0.5:
-                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
-                    elif action == 'SELL':
-                        while points2 >= points1 or abs(points1 - points2) < 0.5:
-                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
-                    
-                    # حساب الهدف بناءً على النقاط المحددة
-                    if action == 'BUY':
+                            points2 = random.uniform(min_tp2, max_tp2)
+                        # حساب السعر: للشراء نضيف النقاط
                         target2 = entry_price + (points2 * pip_size)
                     elif action == 'SELL':
+                        # للبيع: الهدف الثاني يجب أن يكون أبعد من الأول (أقل سعر، أكثر نقاط)
+                        if points1 > 0:
+                            points2 = random.uniform(max(points1 + 2, min_tp2), max_tp2)
+                        else:
+                            points2 = random.uniform(min_tp2, max_tp2)
+                        # حساب السعر: للبيع نطرح النقاط
                         target2 = entry_price - (points2 * pip_size)
                     
                     logger.debug(f"[DEBUG] الهدف الثاني: النقاط={points2:.1f}, السعر الجديد={target2:.5f}")
                     
-                # حساب النقاط لوقف الخسارة - منطق بسيط (5-10 نقاط)
+                # حساب النقاط لوقف الخسارة مع تطبيق الحدود المناسبة
                 if entry_price and stop_loss and entry_price != stop_loss:
-                    stop_points = random.uniform(5.0, 10.0)
+                    stop_points = random.uniform(min_sl, max_sl)
                     
                     # حساب وقف الخسارة بناءً على النقاط المحددة
                     if action == 'BUY':
@@ -1390,6 +1412,22 @@ def format_short_alert_message(symbol: str, symbol_info: Dict, price_data: Dict,
                         stop_loss = entry_price + (stop_points * pip_size)
                     
                     logger.debug(f"[DEBUG] وقف الخسارة: النقاط={stop_points:.1f}, السعر الجديد={stop_loss:.5f}")
+                
+                # التحقق من ترتيب الأهداف الصحيح وتصحيحه إذا لزم الأمر
+                if action == 'BUY':
+                    # للشراء: target1 < target2 (الهدف الأول أقل من الثاني)
+                    if target1 and target2 and target1 > target2:
+                        logger.warning(f"[WARNING] ترتيب خاطئ للشراء: target1={target1:.5f} > target2={target2:.5f}")
+                        target1, target2 = target2, target1  # تبديل الأهداف
+                        points1, points2 = points2, points1  # تبديل النقاط أيضاً
+                        logger.info(f"[CORRECTED] تم تصحيح الترتيب للشراء: target1={target1:.5f} < target2={target2:.5f}")
+                elif action == 'SELL':
+                    # للبيع: target1 > target2 (الهدف الأول أكبر من الثاني)
+                    if target1 and target2 and target1 < target2:
+                        logger.warning(f"[WARNING] ترتيب خاطئ للبيع: target1={target1:.5f} < target2={target2:.5f}")
+                        target1, target2 = target2, target1  # تبديل الأهداف
+                        points1, points2 = points2, points1  # تبديل النقاط أيضاً
+                        logger.info(f"[CORRECTED] تم تصحيح الترتيب للبيع: target1={target1:.5f} > target2={target2:.5f}")
                     
                 logger.info(f"[MANUAL_POINTS] النقاط المحسوبة يدوياً للرمز {symbol}: Target1={points1:.0f}, Target2={points2:.0f}, Stop={stop_points:.0f}")
             
@@ -5209,23 +5247,77 @@ class GeminiAnalyzer:
                 logger.debug(f"[DEBUG] حساب النقاط للتحليل الشامل - الرمز: {symbol}, pip_size: {pip_size}")
                 logger.debug(f"[DEBUG] الأسعار: entry_price={entry_price}, target1={target1}, target2={target2}, stop_loss={stop_loss}")
                 
-                # حساب النقاط للهدف الأول بناءً على الفرق الفعلي في الأسعار
+                # تحديد الحدود المناسبة لكل نوع رمز بدقة حسب الـ 32 رمز
+                if symbol == 'XAUUSD':  # الذهب - نقاط متوسطة
+                    max_tp1, max_tp2, max_sl = 50, 80, 30
+                    min_tp1, min_tp2, min_sl = 10, 15, 5
+                elif symbol in ['XAGUSD']:  # الفضة - نقاط أكثر من الذهب
+                    max_tp1, max_tp2, max_sl = 60, 100, 40
+                    min_tp1, min_tp2, min_sl = 12, 18, 6
+                elif symbol in ['XPTUSD', 'XPDUSD']:  # البلاتين والبلاديوم
+                    max_tp1, max_tp2, max_sl = 45, 75, 35
+                    min_tp1, min_tp2, min_sl = 8, 12, 5
+                elif 'JPY' in symbol:  # أزواج الين الياباني (USDJPY, EURJPY, GBPJPY)
+                    max_tp1, max_tp2, max_sl = 80, 120, 50
+                    min_tp1, min_tp2, min_sl = 15, 25, 10
+                elif symbol in ['BTCUSD']:  # البيتكوين - نقاط صغيرة
+                    max_tp1, max_tp2, max_sl = 25, 40, 15
+                    min_tp1, min_tp2, min_sl = 5, 8, 3
+                elif symbol in ['ETHUSD', 'BNBUSD']:  # الإيثريوم والبينانس - متوسط
+                    max_tp1, max_tp2, max_sl = 30, 50, 20
+                    min_tp1, min_tp2, min_sl = 6, 10, 4
+                elif symbol in ['XRPUSD', 'ADAUSD', 'SOLUSD', 'DOTUSD', 'DOGEUSD', 'AVAXUSD', 'LINKUSD', 'LTCUSD', 'BCHUSD']:  # باقي العملات الرقمية
+                    max_tp1, max_tp2, max_sl = 35, 60, 25
+                    min_tp1, min_tp2, min_sl = 7, 12, 4
+                elif symbol in ['AAPL', 'TSLA', 'GOOGL', 'MSFT', 'AMZN', 'META', 'NVDA', 'NFLX']:  # الأسهم الأمريكية
+                    max_tp1, max_tp2, max_sl = 40, 70, 30
+                    min_tp1, min_tp2, min_sl = 8, 15, 5
+                elif symbol in ['US30', 'SPX500', 'NAS100', 'GER40', 'UK100']:  # المؤشرات
+                    max_tp1, max_tp2, max_sl = 60, 100, 40
+                    min_tp1, min_tp2, min_sl = 12, 20, 8
+                else:  # أزواج العملات العادية (EUR, GBP, AUD, USD, CAD, CHF, NZD)
+                    max_tp1, max_tp2, max_sl = 40, 70, 30
+                    min_tp1, min_tp2, min_sl = 8, 12, 5
+                
+                # حساب النقاط للهدف الأول بناءً على الفرق الفعلي مع تطبيق الحدود
                 if target1 and entry_price and target1 != entry_price and pip_size > 0:
                     price_diff = abs(target1 - entry_price)
-                    points1 = price_diff / pip_size
-                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff:.5f}, النقاط={points1:.1f}")
+                    points1_raw = price_diff / pip_size
+                    # تطبيق الحدود المناسبة لنوع الرمز
+                    points1 = max(min_tp1, min(points1_raw, max_tp1))
+                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff:.5f}, النقاط الخام={points1_raw:.1f}, النقاط المحدودة={points1:.1f}")
                     
-                # حساب النقاط للهدف الثاني بناءً على الفرق الفعلي في الأسعار
+                # حساب النقاط للهدف الثاني بناءً على الفرق الفعلي مع تطبيق الحدود
                 if target2 and entry_price and target2 != entry_price and pip_size > 0:
                     price_diff = abs(target2 - entry_price)
-                    points2 = price_diff / pip_size
-                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff:.5f}, النقاط={points2:.1f}")
+                    points2_raw = price_diff / pip_size
+                    # تطبيق الحدود المناسبة لنوع الرمز
+                    points2 = max(min_tp2, min(points2_raw, max_tp2))
+                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff:.5f}, النقاط الخام={points2_raw:.1f}, النقاط المحدودة={points2:.1f}")
                     
-                # حساب النقاط لوقف الخسارة بناءً على الفرق الفعلي في الأسعار
+                # حساب النقاط لوقف الخسارة بناءً على الفرق الفعلي مع تطبيق الحدود
                 if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
                     price_diff = abs(stop_loss - entry_price)
-                    stop_points = price_diff / pip_size
-                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff:.5f}, النقاط={stop_points:.1f}")
+                    stop_points_raw = price_diff / pip_size
+                    # تطبيق الحدود المناسبة لنوع الرمز
+                    stop_points = max(min_sl, min(stop_points_raw, max_sl))
+                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff:.5f}, النقاط الخام={stop_points_raw:.1f}, النقاط المحدودة={stop_points:.1f}")
+                
+                # التحقق من ترتيب الأهداف الصحيح
+                if action == 'BUY':
+                    # للشراء: الهدف الأول يجب أن يكون أقل من الثاني
+                    if target1 and target2 and target1 > target2:
+                        logger.warning(f"[WARNING] ترتيب خاطئ للشراء: target1={target1:.5f} > target2={target2:.5f}")
+                        target1, target2 = target2, target1  # تبديل الأهداف
+                        points1, points2 = points2, points1  # تبديل النقاط أيضاً
+                        logger.info(f"[CORRECTED] تم تصحيح الترتيب للشراء: target1={target1:.5f} < target2={target2:.5f}")
+                elif action == 'SELL':
+                    # للبيع: الهدف الأول يجب أن يكون أكبر من الثاني  
+                    if target1 and target2 and target1 < target2:
+                        logger.warning(f"[WARNING] ترتيب خاطئ للبيع: target1={target1:.5f} < target2={target2:.5f}")
+                        target1, target2 = target2, target1  # تبديل الأهداف
+                        points1, points2 = points2, points1  # تبديل النقاط أيضاً
+                        logger.info(f"[CORRECTED] تم تصحيح الترتيب للبيع: target1={target1:.5f} > target2={target2:.5f}")
                     
                 logger.info(f"[POINTS_COMPREHENSIVE] النقاط المحسوبة للرمز {symbol}: Target1={points1:.1f}, Target2={points2:.1f}, Stop={stop_points:.1f}")
                 
