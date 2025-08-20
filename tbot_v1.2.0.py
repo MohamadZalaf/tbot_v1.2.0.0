@@ -3348,9 +3348,20 @@ class CrossoverTracker:
                 }
             }
             
-            # قراءة التاريخ الحالي
-            with open(self.crossover_history_file, 'r', encoding='utf-8') as f:
-                history = json.load(f)
+            # قراءة التاريخ الحالي مع معالجة الأخطاء
+            try:
+                with open(self.crossover_history_file, 'r', encoding='utf-8') as f:
+                    history = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError) as e:
+                logger.warning(f"[WARNING] ملف التقاطعات تالف أو غير موجود، سيتم إنشاء ملف جديد: {e}")
+                history = []
+                # إنشاء ملف جديد فارغ
+                try:
+                    with open(self.crossover_history_file, 'w', encoding='utf-8') as f:
+                        json.dump([], f, indent=2, ensure_ascii=False)
+                except Exception as create_e:
+                    logger.error(f"[ERROR] فشل في إنشاء ملف التقاطعات الجديد: {create_e}")
+                    return
             
             # إضافة الحدث الجديد
             history.append(crossover_event)
@@ -3424,8 +3435,18 @@ class CrossoverTracker:
     def get_recent_crossovers(self, symbol: str, hours: int = 24) -> list:
         """جلب التقاطعات الحديثة لرمز معين"""
         try:
-            with open(self.crossover_history_file, 'r', encoding='utf-8') as f:
-                history = json.load(f)
+            try:
+                with open(self.crossover_history_file, 'r', encoding='utf-8') as f:
+                    history = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError) as e:
+                logger.error(f"[ERROR] خطأ في جلب التقاطعات الحديثة: {e}")
+                # إنشاء ملف جديد فارغ
+                history = []
+                try:
+                    with open(self.crossover_history_file, 'w', encoding='utf-8') as f:
+                        json.dump([], f, indent=2, ensure_ascii=False)
+                except Exception:
+                    pass
             
             cutoff_time = datetime.now() - timedelta(hours=hours)
             recent_crossovers = []
@@ -5186,76 +5207,52 @@ class GeminiAnalyzer:
             
             try:
                 logger.debug(f"[DEBUG] حساب النقاط للتحليل الشامل - الرمز: {symbol}, pip_size: {pip_size}")
+                logger.debug(f"[DEBUG] الأسعار: entry_price={entry_price}, target1={target1}, target2={target2}, stop_loss={stop_loss}")
                 
-                # حساب النقاط للهدف الأول - منطق بسيط ومباشر (5-10 نقاط)
-                if target1 and entry_price and target1 != entry_price:
-                    import random
-                    points1 = random.uniform(5.0, 10.0)
+                # حساب النقاط للهدف الأول بناءً على الفرق الفعلي في الأسعار
+                if target1 and entry_price and target1 != entry_price and pip_size > 0:
+                    price_diff = abs(target1 - entry_price)
+                    points1 = price_diff / pip_size
+                    logger.debug(f"[DEBUG] الهدف الأول: فرق السعر={price_diff:.5f}, النقاط={points1:.1f}")
                     
-                    # حساب الهدف بناءً على النقاط المحددة
-                    if action == 'BUY':
-                        target1 = entry_price + (points1 * pip_size)
-                    elif action == 'SELL':
-                        target1 = entry_price - (points1 * pip_size)
+                # حساب النقاط للهدف الثاني بناءً على الفرق الفعلي في الأسعار
+                if target2 and entry_price and target2 != entry_price and pip_size > 0:
+                    price_diff = abs(target2 - entry_price)
+                    points2 = price_diff / pip_size
+                    logger.debug(f"[DEBUG] الهدف الثاني: فرق السعر={price_diff:.5f}, النقاط={points2:.1f}")
                     
-                    logger.debug(f"[DEBUG] الهدف الأول: النقاط={points1:.1f}, السعر={target1:.5f}")
-                    
-                # حساب النقاط للهدف الثاني - منطق صحيح حسب نوع الصفقة
-                if target2 and entry_price and target2 != entry_price:
-                    if action == 'BUY':
-                        # للشراء: الهدف الثاني أكبر من الأول (نقاط أكثر)
-                        if points1 > 0:
-                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
-                        else:
-                            points2 = random.uniform(6.0, 10.0)
-                    elif action == 'SELL':
-                        # للبيع: الهدف الأول أكبر من الثاني (نقاط أقل للثاني)
-                        if points1 > 0:
-                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
-                        else:
-                            points2 = random.uniform(5.0, 7.0)
-                    
-                    # التأكد من عدم تساوي النقاط والمنطق الصحيح
-                    if action == 'BUY':
-                        while points2 <= points1 or abs(points2 - points1) < 0.5:
-                            points2 = random.uniform(max(points1 + 1, 5.0), 10.0)
-                    elif action == 'SELL':
-                        while points2 >= points1 or abs(points1 - points2) < 0.5:
-                            points2 = random.uniform(5.0, min(points1 - 0.5, 9.0))
-                    
-                    # حساب الهدف بناءً على النقاط المحددة
-                    if action == 'BUY':
-                        target2 = entry_price + (points2 * pip_size)
-                    elif action == 'SELL':
-                        target2 = entry_price - (points2 * pip_size)
-                    
-                    logger.debug(f"[DEBUG] الهدف الثاني: النقاط={points2:.1f}, السعر={target2:.5f}")
-                    
-                # حساب النقاط لوقف الخسارة - منطق بسيط (5-10 نقاط)
-                if entry_price and stop_loss and entry_price != stop_loss:
-                    stop_points = random.uniform(5.0, 10.0)
-                    
-                    # حساب وقف الخسارة بناءً على النقاط المحددة
-                    if action == 'BUY':
-                        stop_loss = entry_price - (stop_points * pip_size)
-                    elif action == 'SELL':
-                        stop_loss = entry_price + (stop_points * pip_size)
-                    
-                    logger.debug(f"[DEBUG] وقف الخسارة: النقاط={stop_points:.1f}, السعر={stop_loss:.5f}")
+                # حساب النقاط لوقف الخسارة بناءً على الفرق الفعلي في الأسعار
+                if entry_price and stop_loss and entry_price != stop_loss and pip_size > 0:
+                    price_diff = abs(stop_loss - entry_price)
+                    stop_points = price_diff / pip_size
+                    logger.debug(f"[DEBUG] وقف الخسارة: فرق السعر={price_diff:.5f}, النقاط={stop_points:.1f}")
                     
                 logger.info(f"[POINTS_COMPREHENSIVE] النقاط المحسوبة للرمز {symbol}: Target1={points1:.1f}, Target2={points2:.1f}, Stop={stop_points:.1f}")
                 
             except Exception as e:
                 logger.warning(f"[WARNING] خطأ في حساب النقاط للرمز {symbol}: {e}")
-                # حساب نقاط افتراضية ضمن الحد الأقصى 10 نقاط
-                import random
-                points1 = random.uniform(5, 8) if target1 else 0
-                points2 = random.uniform(max(points1 + 1, 6), 10) if target2 else 0  
-                stop_points = random.uniform(5, 10) if stop_loss else 0
-                
-                # التأكد من عدم تساوي النقاط
-                while abs(points2 - points1) < 0.5 and points1 > 0 and points2 > 0:
-                    points2 = random.uniform(max(points1 + 1, 6), 10)
+                # في حالة الخطأ، حاول الحساب الافتراضي
+                try:
+                    import random
+                    if target1 and entry_price and pip_size > 0:
+                        points1 = abs(target1 - entry_price) / pip_size
+                    else:
+                        points1 = 0
+                        
+                    if target2 and entry_price and pip_size > 0:
+                        points2 = abs(target2 - entry_price) / pip_size
+                    else:
+                        points2 = 0
+                        
+                    if stop_loss and entry_price and pip_size > 0:
+                        stop_points = abs(stop_loss - entry_price) / pip_size
+                    else:
+                        stop_points = 0
+                        
+                    logger.info(f"[POINTS_FALLBACK] النقاط الاحتياطية للرمز {symbol}: Target1={points1:.1f}, Target2={points2:.1f}, Stop={stop_points:.1f}")
+                except Exception as fallback_e:
+                    logger.error(f"[ERROR] فشل في الحساب الاحتياطي للنقاط: {fallback_e}")
+                    points1 = points2 = stop_points = 0
             
             # حساب نسبة المخاطرة/المكافأة
             if not risk_reward_ratio:
@@ -6431,6 +6428,80 @@ class GeminiAnalyzer:
         
         with open(training_file, 'w', encoding='utf-8') as f:
             json.dump(all_training_data, f, ensure_ascii=False, indent=2, default=str)
+    
+    def _format_technical_indicators(self, technical_data: Dict, symbol: str) -> str:
+        """تنسيق المؤشرات الفنية للعرض في prompt الـ AI"""
+        try:
+            if not technical_data or not technical_data.get('indicators'):
+                return "❌ لا توجد مؤشرات فنية متاحة"
+            
+            indicators = technical_data['indicators']
+            
+            # تنسيق البيانات بشكل منظم
+            formatted_text = f"""
+🎯 المؤشرات الفنية اللحظية المتقدمة للرمز {symbol}:
+
+⏰ حالة البيانات اللحظية:
+- نوع البيانات: {indicators.get('data_freshness', 'غير محدد')}
+- آخر تحديث: {indicators.get('last_update', 'غير محدد')}
+- Bid: {indicators.get('tick_info', {}).get('bid', 'غير متوفر'):.5f}
+- Ask: {indicators.get('tick_info', {}).get('ask', 'غير متوفر'):.5f}
+- Spread: {indicators.get('tick_info', {}).get('spread', 'غير متوفر'):.5f}
+- Volume: {indicators.get('tick_info', {}).get('volume', 'غير متوفر')}
+
+📈 المتوسطات المتحركة والتقاطعات:
+- MA 9: {indicators.get('ma_9', 'غير متوفر'):.5f}
+- MA 10: {indicators.get('ma_10', 'غير متوفر'):.5f}
+- MA 20: {indicators.get('ma_20', 'غير متوفر'):.5f}
+- MA 21: {indicators.get('ma_21', 'غير متوفر'):.5f}
+- MA 50: {indicators.get('ma_50', 'غير متوفر'):.5f}
+- تقاطع MA9/MA21: {indicators.get('ma_9_21_crossover', 'لا يوجد')}
+- تقاطع MA10/MA20: {indicators.get('ma_10_20_crossover', 'لا يوجد')}
+- تقاطع السعر/MA: {indicators.get('price_ma_crossover', 'لا يوجد')}
+
+📊 مؤشرات الزخم:
+- RSI: {indicators.get('rsi', 'غير متوفر'):.2f} ({indicators.get('rsi_interpretation', 'غير محدد')})
+- MACD: {indicators.get('macd', {}).get('macd', 'غير متوفر'):.5f}
+- MACD Signal: {indicators.get('macd', {}).get('signal', 'غير متوفر'):.5f}
+- MACD Histogram: {indicators.get('macd', {}).get('histogram', 'غير متوفر'):.5f}
+- تفسير MACD: {indicators.get('macd_interpretation', 'غير محدد')}
+
+🎢 Stochastic Oscillator المتقدم:
+- %K: {indicators.get('stochastic', {}).get('k', 'غير متوفر'):.2f}
+- %D: {indicators.get('stochastic', {}).get('d', 'غير متوفر'):.2f}
+- تقاطع Stochastic: {indicators.get('stochastic', {}).get('crossover', 'لا يوجد')}
+- منطقة التداول: {indicators.get('stochastic', {}).get('zone', 'غير محدد')}
+- قوة الإشارة: {indicators.get('stochastic', {}).get('strength', 'غير محدد')}
+- اتجاه Stochastic: {indicators.get('stochastic', {}).get('trend', 'غير محدد')}
+- تفسير Stochastic: {indicators.get('stochastic_interpretation', 'غير محدد')}
+
+📊 تحليل حجم التداول المتقدم:
+- الحجم الحالي: {indicators.get('volume', 'غير متوفر')}
+- نسبة الحجم: {indicators.get('volume_ratio', 'غير متوفر'):.2f}
+- قوة الحجم: {indicators.get('volume_strength', 'غير محدد')}
+- تفسير الحجم: {indicators.get('volume_interpretation', 'غير محدد')}
+
+🎯 مستويات الدعم والمقاومة:
+- الدعم الأول: {indicators.get('support', 'غير متوفر'):.5f}
+- المقاومة الأولى: {indicators.get('resistance', 'غير متوفر'):.5f}
+- المسافة من الدعم: {indicators.get('distance_from_support', 'غير محدد')}
+- المسافة من المقاومة: {indicators.get('distance_from_resistance', 'غير محدد')}
+
+📈 التقلبات والاتجاه:
+- ATR (متوسط النطاق الحقيقي): {indicators.get('atr', 'غير متوفر'):.5f}
+- التقلبات: {indicators.get('volatility_level', 'غير محدد')}
+- الاتجاه العام: {indicators.get('overall_trend', 'غير محدد')}
+- قوة الاتجاه: {indicators.get('trend_strength', 'غير محدد')}
+
+📋 ملخص التقاطعات:
+{indicators.get('crossover_summary', 'لا توجد تقاطعات حديثة')}
+"""
+            
+            return formatted_text.strip()
+            
+        except Exception as e:
+            logger.error(f"[ERROR] خطأ في تنسيق المؤشرات الفنية: {e}")
+            return f"❌ خطأ في تنسيق المؤشرات الفنية للرمز {symbol}"
 
 # إنشاء مثيل محلل Gemini
 gemini_analyzer = GeminiAnalyzer()
@@ -8978,6 +9049,16 @@ def handle_single_symbol_analysis(call):
         symbol = call.data.replace("analyze_symbol_", "")
         
         logger.info(f"[START] بدء تحليل الرمز {symbol} للمستخدم {user_id}")
+        
+        # تفعيل المراقبة التلقائية للمستخدم إذا لم تكن مفعلة
+        if not user_monitoring_active.get(user_id, False):
+            user_monitoring_active[user_id] = True
+            # إضافة الرمز للمراقبة إذا لم يكن موجوداً
+            if user_id not in user_selected_symbols:
+                user_selected_symbols[user_id] = []
+            if symbol not in user_selected_symbols[user_id]:
+                user_selected_symbols[user_id].append(symbol)
+            logger.info(f"[AUTO_MONITOR] تم تفعيل المراقبة التلقائية للمستخدم {user_id} للرمز {symbol}")
         
         # تعطيل المراقبة مؤقتاً لتجنب التضارب مع MT5
         global analysis_in_progress
