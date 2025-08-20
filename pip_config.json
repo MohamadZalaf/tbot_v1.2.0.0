@@ -1,0 +1,381 @@
+{
+  "metadata": {
+    "version": "1.0.0",
+    "last_updated": "2025-01-19",
+    "description": "قيم النقاط الدقيقة لجميع الرموز المالية المدعومة في البوت",
+    "total_symbols": 32
+  },
+  "forex_pairs": {
+    "EURUSD": {
+      "name": "يورو/دولار",
+      "emoji": "💶",
+      "pip_size": 0.0001,
+      "type": "forex_major",
+      "description": "الزوج الأكثر تداولاً في العالم"
+    },
+    "USDJPY": {
+      "name": "دولار/ين",
+      "emoji": "💴",
+      "pip_size": 0.01,
+      "type": "forex_jpy",
+      "description": "أزواج الين لها قيم نقاط مختلفة"
+    },
+    "GBPUSD": {
+      "name": "جنيه/دولار",
+      "emoji": "💷",
+      "pip_size": 0.0001,
+      "type": "forex_major",
+      "description": "الجنيه الإسترليني مقابل الدولار"
+    },
+    "AUDUSD": {
+      "name": "دولار أسترالي/دولار",
+      "emoji": "🇦🇺",
+      "pip_size": 0.0001,
+      "type": "forex_major",
+      "description": "الدولار الأسترالي مقابل الأمريكي"
+    },
+    "USDCAD": {
+      "name": "دولار/دولار كندي",
+      "emoji": "🇨🇦",
+      "pip_size": 0.0001,
+      "type": "forex_major",
+      "description": "الدولار الأمريكي مقابل الكندي"
+    },
+    "USDCHF": {
+      "name": "دولار/فرنك سويسري",
+      "emoji": "🇨🇭",
+      "pip_size": 0.0001,
+      "type": "forex_major",
+      "description": "الدولار مقابل الفرنك السويسري"
+    },
+    "NZDUSD": {
+      "name": "دولار نيوزيلندي/دولار",
+      "emoji": "🇳🇿",
+      "pip_size": 0.0001,
+      "type": "forex_major",
+      "description": "الدولار النيوزيلندي مقابل الأمريكي"
+    },
+    "EURGBP": {
+      "name": "يورو/جنيه",
+      "emoji": "🇪🇺",
+      "pip_size": 0.0001,
+      "type": "forex_cross",
+      "description": "اليورو مقابل الجنيه الإسترليني"
+    },
+    "EURJPY": {
+      "name": "يورو/ين",
+      "emoji": "🇯🇵",
+      "pip_size": 0.01,
+      "type": "forex_jpy",
+      "description": "اليورو مقابل الين الياباني"
+    },
+    "GBPJPY": {
+      "name": "جنيه/ين",
+      "emoji": "💷",
+      "pip_size": 0.01,
+      "type": "forex_jpy",
+      "description": "الجنيه مقابل الين الياباني"
+    }
+  },
+  "precious_metals": {
+    "XAUUSD": {
+      "name": "ذهب",
+      "emoji": "🥇",
+      "pip_size": 0.01,
+      "type": "metals",
+      "description": "الذهب مقابل الدولار الأمريكي"
+    },
+    "XAGUSD": {
+      "name": "فضة",
+      "emoji": "🥈",
+      "pip_size": 0.01,
+      "type": "metals",
+      "description": "الفضة مقابل الدولار الأمريكي"
+    },
+    "XPTUSD": {
+      "name": "بلاتين",
+      "emoji": "💎",
+      "pip_size": 0.01,
+      "type": "metals",
+      "description": "البلاتين مقابل الدولار الأمريكي"
+    },
+    "XPDUSD": {
+      "name": "بلاديوم",
+      "emoji": "⚡",
+      "pip_size": 0.01,
+      "type": "metals",
+      "description": "البلاديوم مقابل الدولار الأمريكي"
+    }
+  },
+  "cryptocurrencies": {
+    "BTCUSD": {
+      "name": "بيتكوين",
+      "emoji": "₿",
+      "pip_size": 1.00,
+      "type": "crypto_btc",
+      "description": "كل تغير بمقدار 1 دولار = نقطة واحدة"
+    },
+    "ETHUSD": {
+      "name": "إيثريوم",
+      "emoji": "⟠",
+      "pip_size": 0.10,
+      "type": "crypto_eth",
+      "description": "كل تغير بمقدار 0.10 دولار = نقطة واحدة"
+    },
+    "BNBUSD": {
+      "name": "بينانس كوين",
+      "emoji": "🔸",
+      "pip_size": 0.01,
+      "type": "crypto_alt",
+      "description": "حسب المنصة، غالباً 0.01"
+    },
+    "XRPUSD": {
+      "name": "ريبل",
+      "emoji": "💧",
+      "pip_size": 0.0001,
+      "type": "crypto_low",
+      "description": "عملة منخفضة السعر، تُحسب بدقة عالية"
+    },
+    "ADAUSD": {
+      "name": "كاردانو",
+      "emoji": "🔷",
+      "pip_size": 0.0001,
+      "type": "crypto_low",
+      "description": "عملة منخفضة السعر"
+    },
+    "SOLUSD": {
+      "name": "سولانا",
+      "emoji": "☀️",
+      "pip_size": 0.01,
+      "type": "crypto_alt",
+      "description": "سولانا مقابل الدولار"
+    },
+    "DOTUSD": {
+      "name": "بولكادوت",
+      "emoji": "⚫",
+      "pip_size": 0.01,
+      "type": "crypto_alt",
+      "description": "بولكادوت مقابل الدولار"
+    },
+    "DOGEUSD": {
+      "name": "دوجكوين",
+      "emoji": "🐕",
+      "pip_size": 0.0001,
+      "type": "crypto_low",
+      "description": "عملة مذهبة منخفضة السعر"
+    },
+    "AVAXUSD": {
+      "name": "أفالانش",
+      "emoji": "🏔️",
+      "pip_size": 0.01,
+      "type": "crypto_alt",
+      "description": "أفالانش مقابل الدولار"
+    },
+    "LINKUSD": {
+      "name": "تشين لينك",
+      "emoji": "🔗",
+      "pip_size": 0.01,
+      "type": "crypto_alt",
+      "description": "تشين لينك مقابل الدولار"
+    },
+    "LTCUSD": {
+      "name": "لايتكوين",
+      "emoji": "🌙",
+      "pip_size": 0.10,
+      "type": "crypto_mid",
+      "description": "لايتكوين مقابل الدولار"
+    },
+    "BCHUSD": {
+      "name": "بيتكوين كاش",
+      "emoji": "💚",
+      "pip_size": 0.10,
+      "type": "crypto_mid",
+      "description": "بيتكوين كاش مقابل الدولار"
+    }
+  },
+  "us_stocks": {
+    "AAPL": {
+      "name": "أبل",
+      "emoji": "🍎",
+      "pip_size": 1.0,
+      "type": "stocks",
+      "description": "أسهم شركة أبل"
+    },
+    "TSLA": {
+      "name": "تسلا",
+      "emoji": "⚡",
+      "pip_size": 1.0,
+      "type": "stocks",
+      "description": "أسهم شركة تسلا"
+    },
+    "GOOGL": {
+      "name": "جوجل",
+      "emoji": "🔍",
+      "pip_size": 1.0,
+      "type": "stocks",
+      "description": "أسهم شركة جوجل"
+    },
+    "MSFT": {
+      "name": "مايكروسوفت",
+      "emoji": "💻",
+      "pip_size": 1.0,
+      "type": "stocks",
+      "description": "أسهم شركة مايكروسوفت"
+    },
+    "AMZN": {
+      "name": "أمازون",
+      "emoji": "📦",
+      "pip_size": 1.0,
+      "type": "stocks",
+      "description": "أسهم شركة أمازون"
+    },
+    "META": {
+      "name": "ميتا",
+      "emoji": "👥",
+      "pip_size": 1.0,
+      "type": "stocks",
+      "description": "أسهم شركة ميتا (فيسبوك سابقاً)"
+    },
+    "NVDA": {
+      "name": "إنفيديا",
+      "emoji": "🎮",
+      "pip_size": 1.0,
+      "type": "stocks",
+      "description": "أسهم شركة إنفيديا"
+    },
+    "NFLX": {
+      "name": "نتفليكس",
+      "emoji": "🎬",
+      "pip_size": 1.0,
+      "type": "stocks",
+      "description": "أسهم شركة نتفليكس"
+    }
+  },
+  "indices": {
+    "US30": {
+      "name": "داو جونز",
+      "emoji": "🏛️",
+      "pip_size": 1.0,
+      "type": "indices",
+      "description": "مؤشر داو جونز الصناعي"
+    },
+    "SPX500": {
+      "name": "ستاندرد آند بورز 500",
+      "emoji": "📊",
+      "pip_size": 1.0,
+      "type": "indices",
+      "description": "مؤشر ستاندرد آند بورز 500"
+    },
+    "NAS100": {
+      "name": "ناسداك 100",
+      "emoji": "💻",
+      "pip_size": 1.0,
+      "type": "indices",
+      "description": "مؤشر ناسداك 100"
+    },
+    "GER40": {
+      "name": "DAX الألماني",
+      "emoji": "🇩🇪",
+      "pip_size": 1.0,
+      "type": "indices",
+      "description": "مؤشر DAX الألماني"
+    },
+    "UK100": {
+      "name": "FTSE 100 البريطاني",
+      "emoji": "🇬🇧",
+      "pip_size": 1.0,
+      "type": "indices",
+      "description": "مؤشر FTSE 100 البريطاني"
+    }
+  },
+  "pip_limits_by_symbol": {
+    "XAUUSD": {
+      "target1": {"min": 10, "max": 50},
+      "target2": {"min": 15, "max": 80},
+      "stop_loss": {"min": 5, "max": 30}
+    },
+    "XAGUSD": {
+      "target1": {"min": 12, "max": 60},
+      "target2": {"min": 18, "max": 100},
+      "stop_loss": {"min": 6, "max": 40}
+    },
+    "XPTUSD": {
+      "target1": {"min": 8, "max": 45},
+      "target2": {"min": 12, "max": 75},
+      "stop_loss": {"min": 5, "max": 35}
+    },
+    "XPDUSD": {
+      "target1": {"min": 8, "max": 45},
+      "target2": {"min": 12, "max": 75},
+      "stop_loss": {"min": 5, "max": 35}
+    },
+    "USDJPY": {
+      "target1": {"min": 15, "max": 80},
+      "target2": {"min": 25, "max": 120},
+      "stop_loss": {"min": 10, "max": 50}
+    },
+    "EURJPY": {
+      "target1": {"min": 15, "max": 80},
+      "target2": {"min": 25, "max": 120},
+      "stop_loss": {"min": 10, "max": 50}
+    },
+    "GBPJPY": {
+      "target1": {"min": 15, "max": 80},
+      "target2": {"min": 25, "max": 120},
+      "stop_loss": {"min": 10, "max": 50}
+    },
+    "BTCUSD": {
+      "target1": {"min": 5, "max": 25},
+      "target2": {"min": 8, "max": 40},
+      "stop_loss": {"min": 3, "max": 15}
+    },
+    "ETHUSD": {
+      "target1": {"min": 6, "max": 30},
+      "target2": {"min": 10, "max": 50},
+      "stop_loss": {"min": 4, "max": 20}
+    },
+    "BNBUSD": {
+      "target1": {"min": 6, "max": 30},
+      "target2": {"min": 10, "max": 50},
+      "stop_loss": {"min": 4, "max": 20}
+    },
+    "default_crypto_alt": {
+      "target1": {"min": 7, "max": 35},
+      "target2": {"min": 12, "max": 60},
+      "stop_loss": {"min": 4, "max": 25}
+    },
+    "default_stocks": {
+      "target1": {"min": 8, "max": 40},
+      "target2": {"min": 15, "max": 70},
+      "stop_loss": {"min": 5, "max": 30}
+    },
+    "default_indices": {
+      "target1": {"min": 12, "max": 60},
+      "target2": {"min": 20, "max": 100},
+      "stop_loss": {"min": 8, "max": 40}
+    },
+    "default_forex": {
+      "target1": {"min": 8, "max": 40},
+      "target2": {"min": 12, "max": 70},
+      "stop_loss": {"min": 5, "max": 30}
+    }
+  },
+  "trading_rules": {
+    "buy_orders": {
+      "target_order": "target1 < target2",
+      "description": "في أوامر الشراء، الهدف الأول يجب أن يكون أقل من الثاني"
+    },
+    "sell_orders": {
+      "target_order": "target1 > target2",
+      "description": "في أوامر البيع، الهدف الأول يجب أن يكون أكبر من الثاني"
+    },
+    "auto_correction": true,
+    "log_corrections": true
+  },
+  "update_info": {
+    "manual_updates": true,
+    "auto_sync": false,
+    "last_market_sync": null,
+    "sync_source": "manual_configuration"
+  }
+}
