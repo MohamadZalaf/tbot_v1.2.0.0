@@ -842,18 +842,7 @@ def handle_renew_api_context_command(message):
         logger.error(f"[RENEW_API_CONTEXT] خطأ في معالجة أمر تجديد السياق: {e}")
         bot.reply_to(message, f"❌ خطأ في معالجة الأمر: {str(e)}")
 
-# دوال حساب النقاط المحسنة - منسوخة من التحليل الآلي الصحيح
-def load_pip_config():
-    """تحميل إعدادات النقاط من ملف JSON"""
-    try:
-        config_file = os.path.join(os.path.dirname(__file__), 'pip_config.json')
-        if os.path.exists(config_file):
-            with open(config_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    except Exception as e:
-        logger.warning(f"[WARNING] فشل في تحميل ملف pip_config.json: {e}")
-    return None
-
+# دوال حساب النقاط المحسنة - قيم النقاط مدمجة في الكود
 def get_asset_type_and_pip_size(symbol):
     """تحديد نوع الأصل وحجم النقطة بدقة حسب معايير التداول الصحيحة"""
     symbol = symbol.upper()
