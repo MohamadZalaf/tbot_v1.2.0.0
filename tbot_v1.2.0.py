@@ -4347,10 +4347,16 @@ class GeminiAnalyzer:
             
             1. الجملة العادية: "نسبة نجاح الصفقة: X%" 
             2. الكود المطلوب: "[success_rate]=X"
+            3. التوصية الواضحة: "التوصية: BUY" أو "التوصية: SELL" أو "التوصية: HOLD"
             
             حيث X هو الرقم الذي حسبته بناءً على المؤشرات الفنية المتاحة.
             
-            ⚠️ **مهم جداً:** اعط رقماً محدداً دقيقاً (مثل 67% أو 45%) وليس نطاقاً (مثل 20-34%).
+            ⚠️ **قواعد مهمة جداً:**
+            - اعط رقماً محدداً دقيقاً (مثل 67% أو 45%) وليس نطاقاً (مثل 20-34%)
+            - لا تعط HOLD إلا إذا كانت الإشارات متضاربة فعلاً
+            - إذا كان RSI < 30 مع MACD إيجابي = BUY مع نسبة عالية (70-90%)
+            - إذا كان RSI > 70 مع MACD سلبي = SELL مع نسبة عالية (70-90%)
+            - حلل البيانات الفعلية ولا تعط قيماً ثابتة
             
             **مثال على الصيغة الصحيحة:**
             "بناءً على التحليل أعلاه، نسبة نجاح الصفقة: 73%
@@ -5023,11 +5029,13 @@ class GeminiAnalyzer:
             action = analysis.get('action')
             confidence = analysis.get('confidence')
             
-            # التحقق من وجود بيانات صحيحة من AI
+            # التحقق من وجود بيانات صحيحة من AI - إذا فشل AI، استخدم تحليل MT5 مباشرة
             if not action or not confidence:
+                logger.warning(f"[AI_FALLBACK] فشل AI للرمز {symbol} - استخدام تحليل MT5 المباشر")
+                mt5_analysis = analyze_mt5_data_directly(symbol, technical_data)
+                action = mt5_analysis.get('action', 'HOLD')
+                confidence = mt5_analysis.get('confidence', 50)
                 has_warning = True
-                action = action or 'HOLD'
-                confidence = confidence or 50
             
             # جلب المؤشرات الفنية الحقيقية قبل حساب نسبة النجاح
             technical_data = None
@@ -7432,6 +7440,107 @@ def calculate_dynamic_success_rate_v2(analysis: Dict, alert_type: str) -> float:
     
     # استدعاء الدالة الرئيسية المحسنة
     return calculate_dynamic_success_rate(analysis, alert_type)
+
+def analyze_mt5_data_directly(symbol: str, technical_data: Dict) -> Dict:
+    """تحليل بيانات MT5 مباشرة عند فشل AI"""
+    try:
+        logger.info(f"[MT5_DIRECT_ANALYSIS] بدء التحليل المباشر للرمز {symbol}")
+        
+        if not technical_data or not technical_data.get('indicators'):
+            logger.warning(f"[MT5_DIRECT_ANALYSIS] لا توجد مؤشرات فنية للرمز {symbol}")
+            return {'action': 'HOLD', 'confidence': 40}
+        
+        indicators = technical_data['indicators']
+        
+        # نقاط التحليل
+        buy_signals = 0
+        sell_signals = 0
+        total_signals = 0
+        
+        # تحليل RSI
+        rsi = indicators.get('rsi', 50)
+        if rsi < 30:  # ذروة بيع قوية
+            buy_signals += 3
+            total_signals += 3
+        elif rsi < 40:  # منطقة بيع
+            buy_signals += 2
+            total_signals += 2
+        elif rsi > 70:  # ذروة شراء قوية
+            sell_signals += 3
+            total_signals += 3
+        elif rsi > 60:  # منطقة شراء
+            sell_signals += 2
+            total_signals += 2
+        else:  # منطقة محايدة
+            total_signals += 1
+        
+        # تحليل MACD
+        macd_data = indicators.get('macd', {})
+        if macd_data:
+            macd_value = macd_data.get('macd', 0)
+            signal_value = macd_data.get('signal', 0)
+            histogram = macd_data.get('histogram', 0)
+            
+            if macd_value > signal_value and histogram > 0:  # إشارة شراء قوية
+                buy_signals += 2
+                total_signals += 2
+            elif macd_value < signal_value and histogram < 0:  # إشارة بيع قوية
+                sell_signals += 2
+                total_signals += 2
+            else:
+                total_signals += 1
+        
+        # تحليل المتوسطات المتحركة
+        sma_20 = indicators.get('sma_20', 0)
+        sma_50 = indicators.get('sma_50', 0)
+        current_price = indicators.get('current_price', 0)
+        
+        if sma_20 > 0 and sma_50 > 0 and current_price > 0:
+            if current_price > sma_20 > sma_50:  # اتجاه صاعد
+                buy_signals += 1
+                total_signals += 1
+            elif current_price < sma_20 < sma_50:  # اتجاه هابط
+                sell_signals += 1
+                total_signals += 1
+            else:
+                total_signals += 1
+        
+        # تحليل حجم التداول
+        volume_ratio = indicators.get('volume_ratio', 1.0)
+        volume_factor = 1.0
+        if volume_ratio > 1.5:  # حجم عالي يؤكد الإشارة
+            volume_factor = 1.3
+        elif volume_ratio < 0.7:  # حجم ضعيف يضعف الإشارة
+            volume_factor = 0.8
+        
+        # حساب النتيجة النهائية
+        if buy_signals > sell_signals:
+            action = 'BUY'
+            signal_strength = (buy_signals / total_signals) * 100 * volume_factor
+        elif sell_signals > buy_signals:
+            action = 'SELL'
+            signal_strength = (sell_signals / total_signals) * 100 * volume_factor
+        else:
+            action = 'HOLD'
+            signal_strength = 45  # إشارة ضعيفة للانتظار
+        
+        # تطبيق النطاق 0-100%
+        confidence = max(0, min(100, signal_strength))
+        
+        logger.info(f"[MT5_DIRECT_ANALYSIS] {symbol}: {action} بثقة {confidence:.1f}% (شراء={buy_signals}, بيع={sell_signals}, إجمالي={total_signals})")
+        
+        return {
+            'action': action,
+            'confidence': round(confidence, 1),
+            'source': 'MT5 Direct Analysis',
+            'buy_signals': buy_signals,
+            'sell_signals': sell_signals,
+            'total_signals': total_signals
+        }
+        
+    except Exception as e:
+        logger.error(f"[MT5_DIRECT_ANALYSIS] خطأ في التحليل المباشر للرمز {symbol}: {e}")
+        return {'action': 'HOLD', 'confidence': 30}
 
 def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
     """حساب نسبة النجاح المبسط - نفس مبدأ الوضع اليدوي (الاعتماد على AI أولاً)"""
