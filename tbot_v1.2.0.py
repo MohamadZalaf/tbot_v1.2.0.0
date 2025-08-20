@@ -7543,59 +7543,142 @@ def analyze_mt5_data_directly(symbol: str, technical_data: Dict) -> Dict:
         return {'action': 'HOLD', 'confidence': 30}
 
 def calculate_ai_success_rate(analysis: Dict, technical_data: Dict, symbol: str, action: str, user_id: int = None) -> float:
-    """حساب نسبة النجاح المبسط - نفس مبدأ الوضع اليدوي (الاعتماد على AI أولاً)"""
+    """حساب نسبة النجاح الديناميكية - بناءً على قوة الإشارات الفنية الفعلية"""
     try:
-        # الخطوة 1: محاولة الحصول على نسبة النجاح من AI مباشرة (مثل الوضع اليدوي)
-        ai_confidence = analysis.get('confidence', 0)
+        # الخطوة 1: حساب نسبة النجاح بناءً على المؤشرات الفنية الحقيقية
+        base_success_rate = 50.0  # نقطة البداية
         
-        if ai_confidence and ai_confidence > 0:
-            # تطبيق تحسينات machine learning من تقييمات المستخدمين
-            if user_id:
-                ml_adjustment = get_ml_adjustment_for_user(user_id, symbol, action)
-                ai_confidence += ml_adjustment
+        # جلب المؤشرات الفنية
+        indicators = technical_data.get('indicators', {}) if technical_data else {}
+        
+        if indicators:
+            # تحليل RSI - مؤشر قوي لتحديد نسبة النجاح
+            rsi = indicators.get('rsi', 50)
+            if rsi:
+                if action == 'BUY':
+                    if rsi <= 30:  # ذروة بيع - فرصة شراء ممتازة
+                        base_success_rate += 25
+                    elif 30 < rsi <= 40:  # منطقة شراء جيدة
+                        base_success_rate += 15
+                    elif 40 < rsi <= 50:  # منطقة محايدة للشراء
+                        base_success_rate += 5
+                    elif 50 < rsi <= 70:  # منطقة حذر
+                        base_success_rate -= 5
+                    elif rsi > 70:  # ذروة شراء - خطر عالي
+                        base_success_rate -= 20
+                        
+                elif action == 'SELL':
+                    if rsi >= 70:  # ذروة شراء - فرصة بيع ممتازة
+                        base_success_rate += 25
+                    elif 60 <= rsi < 70:  # منطقة بيع جيدة
+                        base_success_rate += 15
+                    elif 50 <= rsi < 60:  # منطقة محايدة للبيع
+                        base_success_rate += 5
+                    elif 30 <= rsi < 50:  # منطقة حذر
+                        base_success_rate -= 5
+                    elif rsi < 30:  # ذروة بيع - خطر عالي
+                        base_success_rate -= 20
+            
+            # تحليل MACD - تأكيد الاتجاه
+            macd_data = indicators.get('macd', {})
+            if macd_data and macd_data.get('macd') is not None:
+                macd_value = macd_data.get('macd', 0)
+                macd_signal = macd_data.get('signal', 0)
                 
-                # تحسينات إضافية بناءً على رأس المال
-                capital = get_user_capital(user_id)
-                if capital >= 10000:
-                    ai_confidence += 2
-                elif capital >= 5000:
-                    ai_confidence += 1
-                elif capital < 1000:
-                    ai_confidence -= 1
+                if action == 'BUY':
+                    if macd_value > macd_signal and macd_value > 0:  # إشارة شراء قوية
+                        base_success_rate += 15
+                    elif macd_value > macd_signal and macd_value <= 0:  # إشارة شراء متوسطة
+                        base_success_rate += 8
+                    elif macd_value <= macd_signal:  # إشارة ضد الشراء
+                        base_success_rate -= 10
+                        
+                elif action == 'SELL':
+                    if macd_value < macd_signal and macd_value < 0:  # إشارة بيع قوية
+                        base_success_rate += 15
+                    elif macd_value < macd_signal and macd_value >= 0:  # إشارة بيع متوسطة
+                        base_success_rate += 8
+                    elif macd_value >= macd_signal:  # إشارة ضد البيع
+                        base_success_rate -= 10
             
-            # تطبيق النطاق الكامل 0-100%
-            final_score = max(0, min(100, ai_confidence))
+            # تحليل Moving Averages - اتجاه السوق
+            ma_20 = indicators.get('ma_20')
+            ma_50 = indicators.get('ma_50')
+            current_price = technical_data.get('current_price', 0)
             
-            # تطبيق عوامل تصحيحية بسيطة
-            if action == 'HOLD':
-                final_score = max(final_score - 15, 5)
-            elif final_score > 85:
-                final_score = min(final_score + 3, 98)
-            elif final_score < 20:
-                final_score = max(final_score - 3, 2)
+            if ma_20 and ma_50 and current_price:
+                if action == 'BUY':
+                    if current_price > ma_20 > ma_50:  # اتجاه صاعد قوي
+                        base_success_rate += 12
+                    elif current_price > ma_20 and ma_20 < ma_50:  # تصحيح في اتجاه صاعد
+                        base_success_rate += 5
+                    elif current_price < ma_20 < ma_50:  # اتجاه هابط
+                        base_success_rate -= 12
+                        
+                elif action == 'SELL':
+                    if current_price < ma_20 < ma_50:  # اتجاه هابط قوي
+                        base_success_rate += 12
+                    elif current_price < ma_20 and ma_20 > ma_50:  # تصحيح في اتجاه هابط
+                        base_success_rate += 5
+                    elif current_price > ma_20 > ma_50:  # اتجاه صاعد
+                        base_success_rate -= 12
             
-            logger.info(f"[SIMPLIFIED_AUTO_SUCCESS] {symbol} - {action}: {final_score:.1f}% (AI: {ai_confidence}%)")
-            return round(final_score, 1)
+            # تحليل Volume - قوة الحركة
+            volume_ratio = indicators.get('volume_ratio', 1.0)
+            if volume_ratio:
+                if volume_ratio > 1.5:  # حجم تداول عالي - يدعم الإشارة
+                    base_success_rate += 8
+                elif volume_ratio < 0.7:  # حجم تداول منخفض - ضعف في الإشارة
+                    base_success_rate -= 5
+            
+            # تحليل Bollinger Bands - التقلبات
+            bb_position = indicators.get('bb_position')
+            if bb_position:
+                if action == 'BUY' and bb_position == 'lower':  # السعر قرب الحد السفلي
+                    base_success_rate += 10
+                elif action == 'SELL' and bb_position == 'upper':  # السعر قرب الحد العلوي
+                    base_success_rate += 10
+                elif bb_position == 'middle':  # السعر في المنتصف - حذر
+                    base_success_rate -= 3
         
-        # الخطوة 2: إذا لم نحصل على نسبة من AI، استخدم التحليل الفني كاحتياط (مثل الوضع اليدوي)
-        logger.warning(f"[AUTO_FALLBACK] لا توجد نسبة من AI للرمز {symbol} - استخدام التحليل الفني الاحتياطي")
-        if technical_data and technical_data.get('indicators'):
-            fallback_rate = calculate_basic_technical_success_rate(technical_data, action)
-            logger.info(f"[AUTO_FALLBACK_SUCCESS] {symbol} - {action}: {fallback_rate:.1f}% (تحليل فني احتياطي)")
-            return fallback_rate
+        # تطبيق تعديلات إضافية من AI إذا كانت متوفرة
+        ai_confidence = analysis.get('confidence', 0)
+        if ai_confidence and ai_confidence > 0:
+            # دمج تحليل AI مع التحليل الفني (وزن 70% فني، 30% AI)
+            combined_rate = (base_success_rate * 0.7) + (ai_confidence * 0.3)
+            base_success_rate = combined_rate
         
-        # الخطوة 3: فشل كامل - لا نسبة ثابتة (مثل الوضع اليدوي)
-        logger.error(f"[AUTO_ANALYSIS_FAILED] فشل كامل في تحليل الرمز {symbol} - لا توجد بيانات كافية")
-        return None
+        # تطبيق تحسينات machine learning من تقييمات المستخدمين
+        if user_id:
+            ml_adjustment = get_ml_adjustment_for_user(user_id, symbol, action)
+            base_success_rate += ml_adjustment
+            
+            # تحسينات إضافية بناءً على رأس المال
+            capital = get_user_capital(user_id)
+            if capital >= 10000:
+                base_success_rate += 2
+            elif capital >= 5000:
+                base_success_rate += 1
+            elif capital < 1000:
+                base_success_rate -= 1
+        
+        # ضمان النطاق 5-95%
+        final_score = max(5, min(95, base_success_rate))
+        
+        # تطبيق عوامل تصحيحية بناءً على نوع الإجراء
+        if action == 'HOLD':
+            final_score = max(final_score - 20, 5)  # تقليل نسبة الانتظار
+        
+        logger.info(f"[DYNAMIC_SUCCESS] {symbol} - {action}: {final_score:.1f}% (Base: {base_success_rate:.1f}%)")
+        return round(final_score, 1)
         
     except Exception as e:
-        logger.error(f"خطأ في حساب نسبة النجاح المبسط: {e}")
-        # في حالة الخطأ، استخدم تحليل AI إذا كان متوفراً
-        if analysis and analysis.get('confidence', 0) > 0:
-            return min(max(analysis.get('confidence', 50), 10), 90)
+        logger.error(f"خطأ في حساب نسبة النجاح الديناميكية: {e}")
+        # في حالة الخطأ، استخدم حساب بسيط
+        if technical_data and technical_data.get('indicators'):
+            return calculate_basic_technical_success_rate(technical_data, action)
         else:
-            # كحل أخير، استخدم تحليل فني بسيط
-            return calculate_basic_technical_success_rate(technical_data, action) if technical_data else None
+            return 45.0  # نسبة افتراضية متوسطة
 
 # دالة مساعدة لحساب نسبة نجاح بسيطة من المؤشرات الفنية (نفس ما في اليدوي)
 def calculate_simplified_technical_rate(technical_data: Dict, action: str) -> float:
